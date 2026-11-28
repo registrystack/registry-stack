@@ -9,7 +9,19 @@ use std::fmt;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use zeroize::Zeroizing;
 
+mod additions;
+mod asks;
+pub use asks::{
+    BRegProposalAnswerRequest, BRegProposalAsk, BRegProposalAskAnswer, BRegProposalAskState,
+    BRegProposalAskWant,
+};
+mod review_asks;
 mod review_document;
+pub use additions::{BRegProposalAddition, BRegProposalAdditionSlot};
+pub use review_asks::{
+    BRegProposalReviewAnswer, BRegProposalReviewAnswerDocument, BRegProposalReviewAnswerDownload,
+    BRegProposalReviewAsk,
+};
 
 // Mirrors MAX_PROPOSAL_SNAPSHOT_BYTES in registry-breg::proposal_store.
 // The client does not depend on the runtime.
@@ -39,6 +51,13 @@ pub enum BRegAvailabilityReason {
     DependencyOutage,
     InvalidInput,
     AlreadyApplied,
+    LimitReached,
+    ApplicationPending,
+    AttachmentRequired,
+    AttachmentPending,
+    AskAnswered,
+    AskClosed,
+    AskDuePassed,
 }
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,6 +90,27 @@ pub enum BRegProposalTurn {
     Party,
     Official,
     Nobody,
+}
+
+/// The server's current display status, paired with its turn rule.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum BRegProposalStatus {
+    Draft,
+    AwaitingParty,
+    InReview,
+    Approved,
+    Processing,
+    Applied,
+    Rejected,
+    Cancelled,
+}
+
+fn present_proposal_status<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<BRegProposalStatus>, D::Error> {
+    BRegProposalStatus::deserialize(deserializer).map(Some)
 }
 
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -167,6 +207,7 @@ pub enum BRegProposalApplicationReason {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum BRegApplicationRecoveryHint {
+    Revise,
     Retry,
     Rebase,
     CorrectInput,
@@ -365,6 +406,8 @@ pub struct BRegProposalReviewContext {
     pub contract: Option<BRegProposalReviewContextContract>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fields: Option<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub asks: Vec<BRegProposalReviewAsk>,
 }
 /// Exact local interface exported by the governed producer, independent of a review policy pin.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -571,12 +614,22 @@ pub struct BRegProposal {
     links: BTreeMap<String, BRegProposalLink>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     attachments: BTreeMap<String, BRegProposalAttachment>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    additions: BTreeMap<String, BRegProposalAdditionSlot>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    asks: Vec<BRegProposalAsk>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     application: Option<BRegProposalApplication>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     application_status: Option<BRegProposalApplicationStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     turn: Option<BRegProposalTurn>,
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_proposal_status"
+    )]
+    status: Option<BRegProposalStatus>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     decision: Option<BRegProposalDecision>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -642,6 +695,32 @@ impl BRegProposal {
                 .is_some_and(|decision| !valid_decision(decision))
         {
             return Err(refusal());
+        }
+        if let Some(status) = self.status {
+            use BRegProposalStatus as Status;
+            let valid_state = match status {
+                Status::Draft => self.state == BRegProposalState::Draft,
+                Status::Applied => self.state == BRegProposalState::Applied,
+                Status::Rejected => self.state == BRegProposalState::Rejected,
+                Status::Cancelled => self.state == BRegProposalState::Cancelled,
+                Status::AwaitingParty
+                | Status::InReview
+                | Status::Approved
+                | Status::Processing => self.state == BRegProposalState::Submitted,
+            };
+            let valid_turn = self.turn.is_none_or(|turn| match status {
+                Status::Draft | Status::AwaitingParty => turn == BRegProposalTurn::Party,
+                Status::InReview => turn == BRegProposalTurn::Official,
+                Status::Approved | Status::Processing => {
+                    matches!(turn, BRegProposalTurn::Official | BRegProposalTurn::Nobody)
+                }
+                Status::Applied | Status::Rejected | Status::Cancelled => {
+                    turn == BRegProposalTurn::Nobody
+                }
+            });
+            if !valid_state || !valid_turn {
+                return Err(refusal());
+            }
         }
         if self.application_status.as_ref().is_some_and(|status| {
             self.effect_digest.is_none()
@@ -802,6 +881,8 @@ impl BRegProposal {
                 return Err(refusal());
             }
         }
+        self.validate_additions()?;
+        self.validate_asks()?;
         Ok(())
     }
     fn discloses_application_actor(&self) -> bool {
@@ -840,12 +921,18 @@ impl BRegProposal {
     pub const fn turn(&self) -> Option<BRegProposalTurn> {
         self.turn
     }
-    /// The current submission's review decision, served on reads only.
+    pub const fn status(&self) -> Option<BRegProposalStatus> {
+        self.status
+    }
+    /// The current submission's review decision. Reads serve it, and a
+    /// command response does when the caller's profile holds Get on the
+    /// Proposal.
     pub fn decision(&self) -> Option<&BRegProposalDecision> {
         self.decision.as_ref()
     }
     /// The review authority's allowlisted reason for refusing the current
-    /// submission, served on reads only.
+    /// submission, served on reads while the Proposal is submitted. No command
+    /// leaves a refused hand-off submitted, so command responses carry none.
     pub fn handoff_refusal(&self) -> Option<BRegProposalHandoffRefusal> {
         self.handoff_refusal.map(|member| member.code)
     }
@@ -863,6 +950,9 @@ impl BRegProposal {
     }
     pub fn link(&self, operation: &str) -> Option<&BRegProposalLink> {
         self.links.get(operation)
+    }
+    pub fn asks(&self) -> &[BRegProposalAsk] {
+        &self.asks
     }
     pub fn attachment(&self, id: &str) -> Option<&BRegProposalAttachment> {
         self.attachments.get(id)
@@ -884,6 +974,8 @@ impl BRegProposal {
                     .values()
                     .flat_map(|slot| slot.links.values()),
             )
+            .chain(self.addition_links())
+            .chain(self.asks.iter().flat_map(|ask| ask.links.values()))
             .any(|link| link.access_profile != profile)
         {
             return Err(refusal());
@@ -1250,6 +1342,7 @@ impl BaseRegistryClient {
             || document.proposal.authority.is_none()
             || fields.as_ref() != Some(&requested)
             || !valid_review_document(&document.proposal, true, false)
+            || !document.proposal.context.asks.is_empty()
         {
             return Err(refusal());
         }
@@ -1266,6 +1359,30 @@ impl BaseRegistryClient {
         binding: &BRegProposalReviewBinding,
         id: &str,
     ) -> Result<BRegComplete<BRegProposalReviewDocument>, BaseRegistryClientError> {
+        self.read_proposal_review_by_id_with_answers(
+            binding,
+            id,
+            binding.operation == "get-review-context",
+        )
+        .await
+    }
+
+    /// Read governed context for admission without requesting live applicant answers.
+    pub async fn read_proposal_review_by_id_without_answers(
+        &self,
+        binding: &BRegProposalReviewBinding,
+        id: &str,
+    ) -> Result<BRegComplete<BRegProposalReviewDocument>, BaseRegistryClientError> {
+        self.read_proposal_review_by_id_with_answers(binding, id, false)
+            .await
+    }
+
+    async fn read_proposal_review_by_id_with_answers(
+        &self,
+        binding: &BRegProposalReviewBinding,
+        id: &str,
+        include_answers: bool,
+    ) -> Result<BRegComplete<BRegProposalReviewDocument>, BaseRegistryClientError> {
         if binding.source != self.source_binding() || !canonical_proposal_id(id) {
             return Err(refusal());
         }
@@ -1277,15 +1394,21 @@ impl BaseRegistryClient {
             if_match: None,
             availability: None,
         };
-        let response = self.proposal_exchange(&link, None, None).await?;
+        let response = if include_answers {
+            self.proposal_review_answers_exchange(&link).await?
+        } else {
+            self.proposal_exchange(&link, None, None).await?
+        };
         let value =
             crate::strict_json::from_slice(response.value.as_bytes()).map_err(|_| refusal())?;
         let document: BRegProposalReviewDocument =
             serde_json::from_value(value).map_err(|_| refusal())?;
         let is_context = binding.operation == "get-review-context";
         if document.id != id
+            || (!include_answers && !document.context.asks.is_empty())
             || document.action_id != binding.action
             || !valid_review_document(&document, is_context, false)
+            || !review_asks::profiles(&document, &binding.profile)
         {
             return Err(refusal());
         }
@@ -1350,7 +1473,8 @@ impl BaseRegistryClient {
                     if id == *expected
                         && context.id == id
                         && context.action_id == binding.action
-                        && valid_review_document(&context, true, false) =>
+                        && valid_review_document(&context, true, false)
+                        && review_asks::profiles(&context, &binding.profile) =>
                 {
                     values.push(Some(*context))
                 }
@@ -1433,6 +1557,8 @@ impl BaseRegistryClient {
                 return Err(refusal());
             }
             self.proposal_review_progress_exchange(link).await?
+        } else if operation == "reviewContext" {
+            self.proposal_review_answers_exchange(link).await?
         } else {
             self.proposal_exchange(link, None, None).await?
         };
@@ -1450,6 +1576,7 @@ impl BaseRegistryClient {
                 .as_deref()
                 .is_some_and(|digest| digest != document.effect_digest)
             || !valid_review_document(&document, operation == "reviewContext", include_progress)
+            || !review_asks::profiles(&document, &link.access_profile)
         {
             return Err(refusal());
         }
@@ -1704,6 +1831,7 @@ impl BaseRegistryClient {
                         .values()
                         .flat_map(|slot| slot.links.values()),
                 )
+                .chain(item.addition_links())
                 .any(|link| link.access_profile != collection.profile)
             {
                 return Err(refusal());
@@ -2034,6 +2162,7 @@ fn valid_review_document(
             .as_ref()
             .is_none_or(|policy| policy.check().is_ok())
         && valid_review_projection(document, is_context, include_progress)
+        && review_asks::valid(document)
 }
 
 fn valid_review_projection(
@@ -2050,6 +2179,7 @@ fn valid_review_projection(
             && document.progress_code.is_none()
     } else {
         document.context.fields.is_none()
+            && document.context.asks.is_empty()
             && document
                 .request_id
                 .as_deref()
@@ -2104,12 +2234,17 @@ fn valid_application_shape(
         Applied, Applying, AwaitingReview, Blocked, Cancelled, Pending, Rejected,
     };
     let open = matches!(state, AwaitingReview | Pending | Applying | Blocked);
-    let paired = recovery
-        == reason.map(|reason| match reason {
-            DependencyOutage | LeaseExpired => BRegApplicationRecoveryHint::Retry,
-            PackageChanged => BRegApplicationRecoveryHint::Rebase,
-            _ => BRegApplicationRecoveryHint::CorrectInput,
-        });
+    let paired = (reason == Some(BRegProposalApplicationReason::ApplicationRefused)
+        && matches!(
+            recovery,
+            Some(BRegApplicationRecoveryHint::Rebase | BRegApplicationRecoveryHint::Revise)
+        ))
+        || recovery
+            == reason.map(|reason| match reason {
+                DependencyOutage | LeaseExpired => BRegApplicationRecoveryHint::Retry,
+                PackageChanged => BRegApplicationRecoveryHint::Rebase,
+                _ => BRegApplicationRecoveryHint::CorrectInput,
+            });
     let reason = reason.is_some();
     paired
         && (state != Blocked || reason)
@@ -2239,28 +2374,51 @@ fn valid_availability(
             (true, reason, recovery) => reason.is_none() && recovery.is_none(),
             (false, Some(reason), Some(recovery)) => matches!(
                 (reason, recovery),
-                (Reason::PendingReview, Recovery::Refresh)
-                    | (
-                        Reason::ReviewRejected,
-                        Recovery::ReceiptOnly | Recovery::Revise
-                    )
-                    | (
-                        Reason::ReviewChangesRequested | Reason::ReviewEnded,
-                        Recovery::Revise
-                    )
-                    | (
-                        Reason::StaleRevision | Reason::AlreadyApplied,
-                        Recovery::ReceiptOnly
-                    )
-                    | (Reason::PackageChanged, Recovery::Rebase)
+                (
+                    Reason::PendingReview | Reason::ApplicationPending,
+                    Recovery::Refresh
+                ) | (
+                    Reason::ReviewRejected,
+                    Recovery::ReceiptOnly | Recovery::Revise
+                ) | (
+                    Reason::ReviewChangesRequested | Reason::ReviewEnded,
+                    Recovery::Revise
+                ) | (
+                    Reason::StaleRevision | Reason::AlreadyApplied,
+                    Recovery::ReceiptOnly
+                ) | (
+                    Reason::LimitReached
+                        | Reason::AskAnswered
+                        | Reason::AskClosed
+                        | Reason::AskDuePassed,
+                    Recovery::ReceiptOnly
+                ) | (Reason::PackageChanged, Recovery::Rebase)
                     | (Reason::DependencyOutage, Recovery::Retry)
-                    | (Reason::InvalidInput, Recovery::CorrectInput)
+                    | (Reason::StaleRevision, Recovery::Rebase)
+                    | (
+                        Reason::InvalidInput,
+                        Recovery::Revise | Recovery::CorrectInput
+                    )
+                    | (Reason::AttachmentRequired, Recovery::CorrectInput)
+                    | (Reason::AttachmentPending, Recovery::Refresh)
             ),
             (false, _, _) => false,
         }
         && (availability.available
             || match (availability.reason, availability.recovery) {
                 (Some(Reason::AlreadyApplied), _) => state == State::Applied,
+                (
+                    Some(
+                        Reason::ApplicationPending
+                        | Reason::AskAnswered
+                        | Reason::AskClosed
+                        | Reason::AskDuePassed,
+                    ),
+                    _,
+                ) => state == State::Submitted,
+                (Some(Reason::AttachmentRequired | Reason::AttachmentPending), _) => {
+                    state == State::Draft
+                }
                 (Some(Reason::ReviewRejected), Some(Recovery::ReceiptOnly)) => {
                     state == State::Rejected
                 }
@@ -2413,8 +2571,25 @@ fn unavailable(availability: &BRegAvailability) -> BaseRegistryClientError {
         (Some(Reason::DependencyOutage), Some(Recovery::Retry)) => {
             named!("dependency-outage", "retry")
         }
+        (Some(Reason::StaleRevision), Some(Recovery::Rebase)) => named!("stale-revision", "rebase"),
+        (Some(Reason::InvalidInput), Some(Recovery::Revise)) => named!("invalid-input", "revise"),
         (Some(Reason::InvalidInput), Some(Recovery::CorrectInput)) => {
             named!("invalid-input", "correct-input")
+        }
+        (Some(Reason::AttachmentRequired), Some(Recovery::CorrectInput)) => {
+            named!("attachment-required", "correct-input")
+        }
+        (Some(Reason::AskAnswered), Some(Recovery::ReceiptOnly)) => {
+            named!("ask-answered", "receipt-only")
+        }
+        (Some(Reason::AskClosed), Some(Recovery::ReceiptOnly)) => {
+            named!("ask-closed", "receipt-only")
+        }
+        (Some(Reason::AskDuePassed), Some(Recovery::ReceiptOnly)) => {
+            named!("ask-due-passed", "receipt-only")
+        }
+        (Some(Reason::AttachmentPending), Some(Recovery::Refresh)) => {
+            named!("attachment-pending", "refresh")
         }
         _ => return refusal(),
     })
@@ -4073,6 +4248,23 @@ mod tests {
             origin.parse().unwrap(),
         ))
         .unwrap()
+    }
+    #[test]
+    fn asks_are_known_proposal_members_and_terminal_reasons_are_closed() {
+        let mut value = document();
+        value["asks"] = json!([{"id":"00000000-0000-4000-8000-000000000007","text":"Why?","wants":[{"kind":"answer"}],"askedAt":"2026-11-27T00:00:00Z","state":"open","links":{}}]);
+        assert!(BRegProposal::from_slice(&serde_json::to_vec(&value).unwrap()).is_ok());
+        for reason in ["ask-answered", "ask-closed", "ask-due-passed"] {
+            let available: Result<BRegAvailability, _> = serde_json::from_value(
+                json!({"available":false,"observedRevision":2,"reason":reason,"recovery":"receipt-only"}),
+            );
+            assert!(available.is_ok(), "known ask reason {reason}");
+            assert!(valid_availability(
+                &available.unwrap(),
+                2,
+                BRegProposalState::Submitted
+            ));
+        }
     }
     fn document() -> Value {
         json!({"id":ID,"actionId":"correct-address","actionRevision":REVISION,

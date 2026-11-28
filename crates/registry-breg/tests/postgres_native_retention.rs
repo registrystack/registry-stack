@@ -80,7 +80,7 @@ fn registry_source(automatic: bool) -> Value {
                 "actions":[{"action":"correct-name","operations":["start"],"targets":[{"recordType":"target",
                     "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}],
                 "proposals":[{"action":"correct-name","operations":["get","list","edit","submit","revise","rebase","retry","cancel","apply"],
-                    "ownership":"caller","readableAttachments":["support"],"writableAttachments":["support"],"targets":[{"recordType":"target",
+                    "ownership":"caller","readableInputs":["target","value"],"readableAttachments":["support"],"writableAttachments":["support"],"targets":[{"recordType":"target",
                     "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}]}}}});
     source
 }

@@ -6,6 +6,8 @@
 //! A claimed job is committed before I/O and every response is written through
 //! an exact proposal and submission-digest comparison.
 
+pub(crate) mod asks;
+
 use chrono::{DateTime, Utc};
 use registry_platform_authcommon::FailedCheck;
 use registry_platform_crypto::delivery_signature::{
@@ -565,7 +567,7 @@ impl ReviewAuthorityRegistry {
         self.authorities.contains_key(authority)
     }
 
-    fn contains_binding(&self, authority: &str, producer_id: &str) -> bool {
+    pub(crate) fn contains_binding(&self, authority: &str, producer_id: &str) -> bool {
         self.authorities
             .get(authority)
             .is_some_and(|configured| configured.producer_id == producer_id)
@@ -577,7 +579,7 @@ impl ReviewAuthorityRegistry {
             .map(|configured| (configured.producer_id.as_str(), configured.recovery_days))
     }
 
-    fn recovery_days(&self, authority: &str) -> Option<u32> {
+    pub(crate) fn recovery_days(&self, authority: &str) -> Option<u32> {
         self.authorities
             .get(authority)
             .map(|configured| configured.recovery_days)
@@ -684,12 +686,44 @@ impl ReviewAuthorityRegistry {
         client: &mut tokio_postgres::Client,
         mutations: &crate::postgres::PostgresRecordMutationService,
     ) -> Result<bool, MutationError> {
-        let erased_completions = erase_expired_review_completions(client).await?;
-        if erased_completions > 0 {
-            tracing::debug!(
-                erased = erased_completions,
-                "BReg review completion retention pass erased expired rows"
-            );
+        // Both feeds get a turn even when ordinary work completed or failed.
+        let review = self.run_one_review(client, mutations).await;
+        let mut changed = review.as_ref().copied().unwrap_or(false);
+        let mut unavailable = review.is_err();
+        for authority in self.authorities.values() {
+            let key = format!("asks:{}", authority.authority);
+            if self.feed_due(&key) {
+                let outcome = asks::consume_feed(client, authority, mutations).await;
+                self.record_feed_outcome(&key, outcome.is_ok());
+                match outcome {
+                    Ok(work) => changed |= work,
+                    Err(_) => {
+                        crate::startup::OperationalEvent::ReviewResultLookupsUnavailable.emit();
+                        unavailable = true;
+                    }
+                }
+            }
+            match asks::deliver_one(client, authority).await {
+                Ok(work) => changed |= work,
+                Err(_) => unavailable = true,
+            }
+        }
+        if changed {
+            Ok(true)
+        } else if unavailable {
+            Err(MutationError::Unavailable)
+        } else {
+            Ok(false)
+        }
+    }
+
+    async fn run_one_review(
+        &self,
+        client: &mut tokio_postgres::Client,
+        mutations: &crate::postgres::PostgresRecordMutationService,
+    ) -> Result<bool, MutationError> {
+        let cleanup = maintain_review_receipts(client).await?;
+        if cleanup.worked() {
             return Ok(true);
         }
         let correlated_completions = correlate_stored_review_completions(client).await?;
@@ -998,17 +1032,54 @@ fn terminal_submission_problem_status(status: u16) -> bool {
     (400..=499).contains(&status) && status != 429
 }
 
-async fn erase_expired_review_completions(
+struct ReviewReceiptCleanup {
+    completions_pruned: u64,
+    ask_feed_events_pruned: u64,
+}
+
+impl ReviewReceiptCleanup {
+    fn worked(&self) -> bool {
+        self.completions_pruned > 0 || self.ask_feed_events_pruned > 0
+    }
+}
+
+async fn maintain_review_receipts(
     client: &impl GenericClient,
-) -> Result<u64, MutationError> {
-    client
+) -> Result<ReviewReceiptCleanup, MutationError> {
+    let completions_pruned = client
         .execute(
             "DELETE FROM registry_internal.registry_proposal_review_completions
               WHERE expires_at <= transaction_timestamp()",
             &[],
         )
         .await
-        .map_err(|_| MutationError::Unavailable)
+        .map_err(|_| MutationError::Unavailable)?;
+    let ask_feed_events_pruned=client.execute(
+        "WITH expired AS (
+            SELECT authority,event_id FROM registry_internal.registry_proposal_review_ask_feed_events
+            WHERE observed_at <= transaction_timestamp()-interval '1 day'
+              AND observed_at + (recovery_days*interval '1 day') <= transaction_timestamp()
+            ORDER BY observed_at,authority,event_id LIMIT 1000
+        ) DELETE FROM registry_internal.registry_proposal_review_ask_feed_events e USING expired x
+          WHERE e.authority=x.authority AND e.event_id=x.event_id",
+        &[]).await.map_err(|_|MutationError::Unavailable)?;
+    let cleanup = ReviewReceiptCleanup {
+        completions_pruned,
+        ask_feed_events_pruned,
+    };
+    if completions_pruned > 0 {
+        tracing::debug!(
+            erased = completions_pruned,
+            "BReg review completion retention pass erased expired rows"
+        );
+    }
+    if ask_feed_events_pruned > 0 {
+        tracing::debug!(
+            ask_feed_events_pruned,
+            "BReg review receipt maintenance pruned expired rows"
+        );
+    }
+    Ok(cleanup)
 }
 
 async fn correlate_stored_review_completions(
@@ -1215,14 +1286,13 @@ impl ReviewWorker {
             let mut failed = false;
             let worked = match self.pool.get().await {
                 Ok(mut client) => {
-                    let housekeeping_worked =
-                        match erase_expired_review_completions(&**client).await {
-                            Ok(erased) => erased > 0,
-                            Err(_) => {
-                                failed = true;
-                                false
-                            }
-                        };
+                    let housekeeping_worked = match maintain_review_receipts(&**client).await {
+                        Ok(cleanup) => cleanup.worked(),
+                        Err(_) => {
+                            failed = true;
+                            false
+                        }
+                    };
                     // Authority recovery keeps a fair turn on every iteration:
                     // a sustained application backlog must not starve
                     // submissions, cancellations, result feeds, and polls.
@@ -1583,6 +1653,27 @@ pub(crate) async fn load_accepted_binding(
 
 pub(crate) const REVIEW_TABLES: &[(&str, &[&str])] = &[
     (
+        "registry_proposal_review_ask_announcements",
+        &["INSERT", "SELECT", "DELETE"],
+    ),
+    (
+        "registry_proposal_review_asks",
+        &["INSERT", "SELECT", "UPDATE"],
+    ),
+    (
+        "registry_proposal_review_ask_answers",
+        &["INSERT", "SELECT", "UPDATE"],
+    ),
+    ("registry_proposal_review_ask_files", &["INSERT", "SELECT"]),
+    (
+        "registry_proposal_review_ask_feed_events",
+        &["INSERT", "SELECT", "DELETE"],
+    ),
+    (
+        "registry_proposal_review_ask_feed_checkpoints",
+        &["INSERT", "SELECT", "UPDATE"],
+    ),
+    (
         "registry_proposal_review_submissions",
         &["INSERT", "SELECT", "UPDATE"],
     ),
@@ -1758,6 +1849,7 @@ pub(crate) async fn install(
         )
         .await
         .map_err(|_| MutationError::Unavailable)?;
+    asks::install(client).await?;
     let revoke_grantees = crate::postgres::RuntimeRevoke::detect(client, runtime_role)
         .await
         .map_err(|_| MutationError::Unavailable)?
@@ -2048,6 +2140,7 @@ pub(crate) async fn schedule_cancellation(
     proposal_id: Uuid,
     submission_version: i64,
 ) -> Result<(), MutationError> {
+    asks::close_submission(transaction, action_id, proposal_id, submission_version).await?;
     transaction
         .execute(
             &format!(
@@ -2100,6 +2193,9 @@ pub(crate) async fn withdraw_incompatible_proposals(
         )
         .await
         .map_err(|_| MutationError::Unavailable)?;
+    for row in transaction.query("SELECT proposal_id,submission_version FROM registry_internal.registry_proposal_state WHERE action_id=$1 AND proposal_id=ANY($2::uuid[])",&[&action_id,&proposal_ids]).await.map_err(|_|MutationError::Unavailable)? {
+        asks::close_submission(transaction,action_id,row.get(0),row.get(1)).await?;
+    }
     Ok(())
 }
 
@@ -2779,7 +2875,7 @@ pub async fn reconcile_result(
     }
     if !withdrawn && current {
         mutations
-            .record_review_result(
+            .record_review_change(
                 transaction,
                 authority,
                 &entity_id,

@@ -120,6 +120,11 @@ accessProfiles:
         operations:
         - get
         - submit
+        - list
+        - add
+        - answer
+        readableAttachments: [supporting]
+        writableAttachments: [supporting]
         ownership: caller
         readableInputs:
         - record
@@ -225,6 +230,16 @@ actions:
     execution:
       mode: proposal
       proposal:
+        additions:
+          id: supporting
+          maximumBytes: 4096
+          maximumCount: 1
+          contentTypes: [text/plain]
+          classification: internal
+        hooks:
+        - id: asked-observer
+          transitions: [asked]
+          handler: {type: url, destinationId: ask-observer}
         review:
           type: required
           authority: casework

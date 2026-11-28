@@ -1,6 +1,7 @@
 # Registry Scheduling changelog
 
 ## Unreleased
+- Fix an application/database clock mismatch in `insert_outbox` that could delay immediately due confirmation, change, and cancellation intents when the host clock ran ahead.
 - `scheduling` refuses repeated `--posture` flags, including flags on both sides of `serve`.
 - Production rejects verified bearer tokens marked as development with a 401, `platform.task-grant.development-assertion`, and a Bearer challenge.
 

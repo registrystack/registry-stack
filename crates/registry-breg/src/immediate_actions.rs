@@ -3059,6 +3059,22 @@ fn compile_execution(
         errors,
     );
     let attachments = crate::compiler::attachments::compile_slots(&proposal.attachments);
+    if let Some(slot) = &proposal.additions {
+        if matches!(proposal.review, ProposalReviewSource::None {}) {
+            errors.push(Diagnostic::error(
+                "breg.addition.review-required",
+                format!("actions[id={}].execution.proposal.additions", action.id),
+                "an additions slot requires review.type: required; configure required review or remove additions",
+            ));
+        }
+        crate::compiler::attachments::validate_additions(
+            slot,
+            &proposal.attachments,
+            &attachment_field_names,
+            &format!("actions[id={}].execution.proposal.additions", action.id),
+            errors,
+        );
+    }
     let review = match &proposal.review {
         ProposalReviewSource::None {} => CompiledProposalReview::None,
         ProposalReviewSource::Required {
@@ -3298,15 +3314,49 @@ fn compile_execution(
                     "input disclosure grants must name declared Action inputs and require Get",
                 ));
             }
+            let writes_inputs = grant.operations.iter().any(|operation| {
+                matches!(
+                    operation,
+                    ProposalOperation::Edit | ProposalOperation::Revise | ProposalOperation::Rebase
+                )
+            });
+            // A standing agent cannot hold Get, so it drafts blind and replaces the whole input
+            // as authored. The rule below protects clients that merge into what they read.
+            let standing_agent =
+                profile.actor_kind == Some(ActorKindSource::Agent) && profile.task_grant.is_none();
+            if writes_inputs && !standing_agent {
+                // Edit, Revise, and Rebase replace the stored input wholesale. A client
+                // merges its change into what it read, so an input it may write but not
+                // read would be cleared, or would fail when required.
+                let written = grant
+                    .writable_inputs
+                    .as_ref()
+                    .map_or(&input_ids, |writable| writable.as_set());
+                let unreadable = written
+                    .iter()
+                    .filter(|id| input_ids.contains(*id) && !grant.readable_inputs.contains(*id))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                if !unreadable.is_empty() {
+                    // Narrowing writableInputs cannot help: the fixed-input rule below
+                    // requires every input outside it to be readable too.
+                    errors.push(Diagnostic::error(
+                        "breg.proposal.input-write-unreadable",
+                        format!(
+                            "accessProfiles[id={}].permissions.proposals[action={}].readableInputs",
+                            profile.id, action.id
+                        ),
+                        &format!(
+                            "access profile `{}` may write input(s) {} of Action `{}` through edit, revise, or rebase but cannot read them, so a client would clear or lose them. Next: add {} to readableInputs (with get)",
+                            profile.id,
+                            unreadable.join(", "),
+                            action.id,
+                            unreadable.join(", "),
+                        ),
+                    ));
+                }
+            }
             if let Some(writable) = &grant.writable_inputs {
-                let writes_inputs = grant.operations.iter().any(|operation| {
-                    matches!(
-                        operation,
-                        ProposalOperation::Edit
-                            | ProposalOperation::Revise
-                            | ProposalOperation::Rebase
-                    )
-                });
                 let starts = profile.permissions.actions.iter().any(|permission| {
                     permission.action == action.id
                         && permission.operations.contains(&Operation::Start)
@@ -3330,18 +3380,32 @@ fn compile_execution(
                     ));
                 }
             }
-            let attachment_ids = attachments.keys().cloned().collect::<BTreeSet<_>>();
+            let attachment_ids = attachments
+                .keys()
+                .cloned()
+                .chain(proposal.additions.iter().map(|slot| slot.id.clone()))
+                .collect::<BTreeSet<_>>();
             if !grant.readable_attachments.is_subset(&attachment_ids)
                 || !grant.writable_attachments.is_subset(&attachment_ids)
                 || (!grant.readable_attachments.is_empty()
                     && !grant.operations.contains(&ProposalOperation::Get))
-                || (!grant.writable_attachments.is_empty()
-                    && !grant.operations.contains(&ProposalOperation::Edit))
+                || grant.writable_attachments.iter().any(|id| {
+                    let operation = if proposal
+                        .additions
+                        .as_ref()
+                        .is_some_and(|slot| &slot.id == id)
+                    {
+                        ProposalOperation::Add
+                    } else {
+                        ProposalOperation::Edit
+                    };
+                    !grant.operations.contains(&operation)
+                })
             {
                 errors.push(Diagnostic::error(
                     "breg.proposal.attachment-grant-invalid",
                     "accessProfiles[].permissions.proposals",
-                    "attachment grants must name declared slots and require Get for reads or Edit for writes",
+                    "attachment grants must name declared slots and require Get for reads, Edit for attachment writes, or Add for additions",
                 ));
             }
             permissions.push(CompiledProposalPermission {
@@ -3394,6 +3458,10 @@ fn compile_execution(
             use crate::contract::ProposalContextValueSource;
             let valid = match value {
                 ProposalContextValueSource::Document { slot } => attachments.contains_key(slot),
+                ProposalContextValueSource::Additions { slot } => proposal
+                    .additions
+                    .as_ref()
+                    .is_some_and(|declared| &declared.id == slot),
                 ProposalContextValueSource::Input { input } => {
                     action.inputs.iter().any(|field| &field.id == input)
                 }
@@ -3448,6 +3516,7 @@ fn compile_execution(
             },
             review_context: proposal.review_context.clone(),
             attachments,
+            additions: proposal.additions.clone(),
             promotions: Vec::new(),
             permissions,
         },
@@ -3761,6 +3830,9 @@ pub(crate) fn definition_revision(
         }
         crate::model::CompiledActionExecution::Proposal { proposal } => {
             let mut policy = json!({"mode":"proposal","review":proposal.review,"application":proposal.application,"retention":proposal.retention,"reviewContext":proposal.review_context,"attachments":proposal.attachments});
+            if let Some(slot) = &proposal.additions {
+                policy["additions"] = json!(slot);
+            }
             // Promotions change what an approved Proposal writes, so they are
             // part of the Action's identity. Omitting an empty list keeps the
             // revision of every Action without promotions unchanged.

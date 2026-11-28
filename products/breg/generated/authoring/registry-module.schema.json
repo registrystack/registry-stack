@@ -804,6 +804,44 @@
       ],
       "type": "string"
     },
+    "AdditionSlotSource": {
+      "additionalProperties": false,
+      "description": "Supporting files added to the current submission while its review is open.",
+      "properties": {
+        "classification": {
+          "$ref": "#/$defs/Classification"
+        },
+        "contentTypes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "$ref": "#/$defs/LocalId"
+        },
+        "maximumBytes": {
+          "format": "uint32",
+          "maximum": 16777216,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "maximumCount": {
+          "format": "uint32",
+          "maximum": 32,
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "maximumBytes",
+        "maximumCount",
+        "contentTypes",
+        "classification"
+      ],
+      "type": "object"
+    },
     "AttachmentSlotSource": {
       "additionalProperties": false,
       "properties": {
@@ -3074,6 +3112,23 @@
               "$ref": "#/$defs/LocalId"
             },
             "type": {
+              "const": "additions",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "slot"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "slot": {
+              "$ref": "#/$defs/LocalId"
+            },
+            "type": {
               "const": "document",
               "type": "string"
             }
@@ -3150,6 +3205,9 @@
     },
     "ProposalEventTransition": {
       "enum": [
+        "asked",
+        "answered",
+        "added",
         "started",
         "edited",
         "submitted",
@@ -3194,6 +3252,9 @@
     "ProposalPolicySource": {
       "additionalProperties": false,
       "properties": {
+        "additions": {
+          "$ref": "#/$defs/AdditionSlotSource"
+        },
         "application": {
           "$ref": "#/$defs/ProposalApplicationSource",
           "default": {

@@ -13,6 +13,7 @@ import {
   BRegRecoveredAction,
   BRegRecoveredCreate,
   BRegProposal,
+  BRegProposalDocument,
   BRegProposalGetBinding,
   BRegProposalCollection,
   BRegPreparedProposal,
@@ -32,6 +33,18 @@ import {
 } from '..'
 
 declare const client: BaseRegistryClient
+declare const additionProposal: BRegProposal
+declare const additionDocument: BRegProposalDocument
+const proposalStatus: import('..').BRegProposalStatus | undefined = additionDocument.status
+void proposalStatus
+// @ts-expect-error The served status vocabulary is closed.
+const invalidProposalStatus: import('..').BRegProposalStatus = 'queued'
+void invalidProposalStatus
+client.addProposalAddition(additionProposal, 'other', 'text/plain', Buffer.from('support'), 'addition-one')
+client.downloadProposalAddition(additionProposal, '00000000-0000-4000-8000-000000000002')
+additionDocument.additions?.other?.items[0]?.addedAt.toUpperCase()
+// @ts-expect-error Added file bytes use Buffer rather than a JSON string.
+client.addProposalAddition(additionProposal, 'other', 'text/plain', 'support', 'addition-one')
 new BaseRegistryClient({
   baseUrl: 'https://registry.example.test/',
   maximumResponseBytes: 8 * 1024 * 1024,

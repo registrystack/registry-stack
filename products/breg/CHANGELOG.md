@@ -51,6 +51,85 @@
   refused. To migrate, write the store's or verifier's own IPv4 or native
   IPv6 address, or a name that answers one.
 
+- Proposal applicants can answer mirrored review asks with text and cited additions.
+  The independent `answer` grant and promoted link bind the command to the current
+  submission and ETag. Open asks derive `awaiting-party` status. Answer delivery
+  sends only subject and stored time under the producer credential, with its own
+  recovery deadline. Human reviewers read answers and cited verified files live
+  from `context.asks`, even without an authored additions context field.
+  Agents, standing or task-granted, delegated reads and services receive no
+  answers and cannot download cited files, and the batch review-context read
+  carries no asks. Applicant pages must explain that disclosure before answering.
+- BREAKING: strict Proposal clients must accept `asks` and the availability reasons
+  `ask-answered`, `ask-closed` and `ask-due-passed` (all `receipt-only`). Hooks without
+  a transition filter also receive `proposal.asked` and `proposal.answered`.
+  Per-version erasure plans count questions, answers and citation references.
+
+- BREAKING: Proposal slot uploads now answer `413 attachment.too-large` and
+  `415 attachment.content-type`, matching supporting-document additions.
+  They previously used generic request and media-type codes.
+- Submit and its link share the stored-file check before planning or identifier
+  reservation. Pending verification answers `409 attachment.verification-pending`
+  with `attachment-pending` / `refresh`; a rejected optional file answers
+  `422 attachment.verification-rejected` with `invalid-input` / `correct-input`.
+  A rejected required file counts as empty. Problems disclose only the slot
+  location, including to a caller who cannot read the file metadata.
+
+- Proposal routes declare problem bodies in generated OpenAPI. Submit with an
+  empty required attachment slot answers `422 attachment.required`, naming the
+  slot in `fieldPath`. Its link is unavailable with `attachment-required` and
+  recovery `correct-input`, including for write-only slots. An uploaded file
+  enables Submit once it passes any configured verification. Update BReg clients
+  for the added codes and availability reasons.
+
+- BREAKING: Proposal documents serve the closed display `status` from the same rule as
+  `turn`. Revise and Rebase preserve approved and processing submissions:
+  their unavailable links name `application-pending` with recovery `refresh`,
+  and the commands answer 412. Draft Rebase and party recovery remain available.
+  `bregctl explain lifecycle` advances to `v1alpha9`, listing status conditions
+  alongside turns. Update BReg clients to accept the additional Proposal member
+  and availability reason. Proposal link checks propagate unexpected failures.
+
+- Proposal hooks without a `transitions` filter also receive `added`, `asked`
+  and `answered` (`proposal.added`, `proposal.asked` and `proposal.answered`).
+  Existing receivers must accept those events or configure an explicit transition filter.
+- Declaring or changing an `additions` slot changes the Action revision.
+  Previously submitted Proposals must Rebase and Submit again for fresh review.
+  Additions require required review. Each accepted file consumes a count place
+  for its submission, and this release has no addition removal operation.
+  BReg trusts the declared media type as for other attachments and serves
+  downloads as attachments with `nosniff`.
+
+- Proposal Actions can declare one bounded `additions` slot for supporting files
+  during an open review. The independent `add` grant uses `writableAttachments`.
+  Get uses `readableAttachments`. Each addition changes the Proposal ETag while
+  keeping the submission version and frozen effects unchanged. Review context
+  can project an `additions` field, and hooks can observe `proposal.added`.
+
+- BREAKING: the compiler refuses a Proposal grant that holds `edit`, `revise`
+  or `rebase` unless its `readableInputs` cover every input it may write
+  (`writableInputs`, or every declared input when absent), with
+  `breg.proposal.input-write-unreadable`. With the existing rule for inputs
+  outside `writableInputs`, such a grant reads every declared input. Add the
+  named inputs to `readableInputs`, and `get` if the grant lacks it, because
+  `readableInputs` requires Get. An agent profile without a task grant is
+  exempt.
+
+- Every Proposal command response, attachment uploads and removals included,
+  carries `decision` and `input` as a Get by the same caller would serve them
+  right after the command, so a client need not read the Proposal again. A
+  profile without Get on the Proposal gets neither. Attachment metadata on a
+  command response follows the same Get check. A replay returns the stored
+  response and records the `proposal-review-public-reason` audit marker when
+  that response holds a public reason. A command receipt stored before this
+  release replays without the two members. The idempotency binding covers the
+  grant's `readableInputs` when it names any, so after a package narrows them
+  an earlier key conflicts instead of replaying a withheld input.
+
+- The Proposal attachment download declares its 200 response as `*/*`, the
+  stored file's own media type, instead of `application/octet-stream`.
+  Generated clients that switch on the declared response type regenerate.
+
 - BREAKING: BReg signs every URL hook delivery with Standard Webhooks. The
   POST carries `webhook-id`, `webhook-timestamp` and `webhook-signature`, an
   HMAC-SHA-256 over the id, the timestamp and the exact body. It no longer

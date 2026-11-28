@@ -198,6 +198,8 @@ struct ReviewStagePolicyWire {
     outcomes: Option<Vec<String>>,
     #[serde(default)]
     negative_decisions: registry_casework_core::ReviewNegativeDecisionMode,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    asks: Option<registry_casework_core::ReviewStageAsksPolicy>,
     #[serde(default)]
     exclude_initiator: bool,
     #[serde(default)]
@@ -226,6 +228,8 @@ struct ReviewOutcomePolicyWire {
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ReviewPolicyWire {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    resubmission: Option<registry_casework_core::ReviewResubmissionPolicy>,
     id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     label: Option<String>,
@@ -659,7 +663,58 @@ response_wire!(ReviewTaskWire => registry_casework_core::ReviewTask {
     #[serde(default)] staffing_diagnostic: Option<registry_casework_core::StaffingDiagnostic>,
     #[serde(default)] decided_by_caller: Option<bool>,
     #[serde(default)] decision_receipt: Option<ReviewDecisionReceiptWire>,
+    #[serde(default)] marker: Option<registry_casework_core::ReviewTaskMarker>,
 });
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewAskWire {
+    ask_id: uuid::Uuid,
+    request_id: uuid::Uuid,
+    subject: SubjectBindingWire,
+    text: String,
+    wants: Vec<registry_casework_core::ReviewAskWant>,
+    asked_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    due_at: Option<chrono::DateTime<chrono::Utc>>,
+    state: registry_casework_core::ReviewAskState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    answered_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    closed_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct ReviewTaskAskedWire {
+    task: ReviewTaskWire,
+    ask: ReviewAskWire,
+}
+
+impl ClientResponse for registry_casework_core::ReviewTaskAsked {
+    type Wire = Validated<Self, ReviewTaskAskedWire>;
+
+    fn from_wire(wire: Self::Wire) -> Self {
+        wire.into_inner()
+    }
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ReviewContextAskWire {
+    ask_id: uuid::Uuid,
+    task_id: uuid::Uuid,
+    text: String,
+    wants: Vec<registry_casework_core::ReviewAskWant>,
+    asked_at: chrono::DateTime<chrono::Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    due_at: Option<chrono::DateTime<chrono::Utc>>,
+    state: registry_casework_core::ReviewAskState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    answered_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    answer: Option<registry_casework_core::ReviewContextAnswer>,
+}
 
 #[derive(Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -940,6 +995,8 @@ pub(crate) struct ReviewTaskContextWire {
     #[serde(default)]
     result_constraints: Option<Value>,
     context: ReviewTaskContextDataWire,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    asks: Vec<ReviewContextAskWire>,
 }
 
 impl ClientResponse for registry_casework_core::ReviewTaskContext {
@@ -947,5 +1004,40 @@ impl ClientResponse for registry_casework_core::ReviewTaskContext {
 
     fn from_wire(wire: Self::Wire) -> Self {
         wire.into_inner()
+    }
+}
+
+#[cfg(test)]
+mod fix_round_tests {
+    use super::*;
+
+    #[test]
+    fn absent_resubmission_stays_absent_on_the_client_wire() {
+        let policy: ReviewPolicyWire = serde_json::from_value(serde_json::json!({
+            "id":"review", "version":"1", "purpose":"approval", "context":{"mode":"submitted"},
+            "stages":[], "retention":{"terminalRetentionDays":1,"accountabilityRetentionDays":1}, "displaySchema":{}
+        })).unwrap();
+        assert!(serde_json::to_value(policy)
+            .unwrap()
+            .get("resubmission")
+            .is_none());
+    }
+
+    #[test]
+    fn reviewer_ask_due_at_survives_client_decoding() {
+        let value = serde_json::json!({"askId":uuid::Uuid::new_v4(), "taskId":uuid::Uuid::new_v4(), "text":"Why?", "wants":[{"kind":"answer"}], "askedAt":"2026-11-27T00:00:00Z", "dueAt":"2026-11-27T01:00:00Z", "state":"open"});
+        let wire: ReviewContextAskWire = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(serde_json::to_value(wire).unwrap()["dueAt"], value["dueAt"]);
+    }
+
+    #[test]
+    fn reviewer_ask_answer_survives_client_decoding() {
+        let value = serde_json::json!({"askId":uuid::Uuid::new_v4(), "taskId":uuid::Uuid::new_v4(), "text":"Why?", "wants":[{"kind":"answer"}], "askedAt":"2026-11-27T00:00:00Z", "state":"answered",
+            "answeredAt":"2026-11-27T01:00:00Z", "answer":{"text":"Synthetic answer","documents":[],"answeredAt":"2026-11-27T01:00:00Z"}});
+        let wire: ReviewContextAskWire = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(wire).unwrap()["answer"],
+            value["answer"]
+        );
     }
 }

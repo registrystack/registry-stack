@@ -69,13 +69,13 @@ fn source(membership: bool) -> Value {
                 {"recordType":"target","operations":["create","get"],"readableFields":["name","jurisdiction","organization"],
                     "writableFields":["name","jurisdiction","organization"],"rowBoundaries":boundary}],
                 "actions":[{"action":"correct-name","operations":["start"],"targets":targets}],
-                "proposals":[{"action":"correct-name","operations":["get","edit","submit","cancel"],"ownership":"caller","targets":targets}]}},
+                "proposals":[{"action":"correct-name","operations":["get","edit","submit","cancel"],"ownership":"caller","readableInputs":["target","value"],"targets":targets}]}},
             "task-reviewer": {"principalClaim":"registry_principal","actorKind":"agent","requesterClients":["agent-client"],
                 "requiredScopes":["proposal:manage"],"requiredPurposes":["registry-administration"],
                 "taskGrant":{"sourceIssuer":"https://casework.example"},"permissions":{"records":[reader],
                     "actions":[{"action":"correct-name","operations":["start"],"targets":targets}],
                     "proposals":[{"action":"correct-name","operations":["get","edit","submit","get-review-context"],
-                        "ownership":"caller","readableContextFields":["currentName","proposedName"],"targets":targets}]}}}});
+                        "ownership":"caller","readableInputs":["target","value"],"readableContextFields":["currentName","proposedName"],"targets":targets}]}}}});
     source
 }
 
@@ -537,6 +537,10 @@ async fn review_context_requires_record_grant_and_current_membership() {
     source["accessProfiles"]["task-reviewer"]["permissions"]["proposals"][0]["operations"] =
         json!(["get-review-context"]);
     source["accessProfiles"]["task-reviewer"]["permissions"]["proposals"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("readableInputs");
+    source["accessProfiles"]["task-reviewer"]["permissions"]["proposals"][0]
         ["readableContextFields"]
         .as_array_mut()
         .unwrap()
@@ -945,6 +949,10 @@ async fn saved_review_document_requires_current_subject_consent() {
     project["accessProfiles"]["task-reviewer"]["permissions"]["proposals"][0]["operations"] =
         json!(["get-review-context"]);
     project["accessProfiles"]["task-reviewer"]["permissions"]["proposals"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("readableInputs");
+    project["accessProfiles"]["task-reviewer"]["permissions"]["proposals"][0]
         ["readableContextFields"] = json!(["currentName", "proposedName", "document"]);
     let status = Arc::new(Status {
         active: AtomicBool::new(true),
@@ -1092,6 +1100,10 @@ async fn explicit_service_assessment_preserves_scope_actor_target_and_record_dis
         .unwrap()
         .remove("actions");
     service["permissions"]["proposals"][0]["operations"] = json!(["get-review-context"]);
+    service["permissions"]["proposals"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("readableInputs");
     service["permissions"]["proposals"][0]
         .as_object_mut()
         .unwrap()

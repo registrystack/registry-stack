@@ -303,6 +303,8 @@ for (const [method, jsonIndexes, requiredIndexes] of [
   ['patchRecord', [3], [3]], ['batchRecords', [1], [1]], ['tombstoneRecord'],
   ['startProposal', [1], [1]], ['readProposal'], ['readProposalSubmission'], ['getProposal'], ['listProposals', [1], [1]], ['executeProposal'], ['listProposalsJson'],
   ['downloadProposalAttachment'], ['uploadProposalAttachment'], ['deleteProposalAttachment'],
+  ['answerProposalAsk'],
+  ['addProposalAddition'], ['downloadProposalAddition'],
   ['downloadRecordAttachment'],
   ['readProposalReviewStatus'], ['readProposalReviewStatusWithProgress'], ['readProposalReviewContext'],
   ['readProposalReviewContextBatch', [1], [1]],

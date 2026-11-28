@@ -305,7 +305,7 @@ pub(crate) fn generate_artifacts(
         schemas: &schemas,
         statistical_datasets,
         external_views,
-    });
+    })?;
     insert_json_value(&mut artifacts, "generated/openapi.json", &openapi)?;
     if let Some(projection) = manifest_projection {
         let projected = project_manifest_artifacts(registry_id, projection, entities)?;
@@ -1089,8 +1089,8 @@ pub(crate) fn openapi_action_response_schema(
     action: &CompiledAction,
     selected_result_effects: Option<&BTreeSet<String>>,
 ) -> Value {
-    if action.execution.is_proposal() {
-        return proposal_schema();
+    if let crate::model::CompiledActionExecution::Proposal { proposal } = &action.execution {
+        return proposal_schema_with_additions(proposal.additions.is_some());
     }
     let result_shapes = action_response_result_shapes(action, selected_result_effects);
     let results_schema = match result_shapes.as_slice() {
@@ -1518,12 +1518,14 @@ pub fn proposal_schema() -> Value {
         "createdAt":{"type":"string","format":"date-time"},
         "submissionVersion":{"type":"integer","minimum":0},"revision":{"type":"integer","minimum":1},
         "state":{"enum":["draft","submitted","applied","cancelled","rejected"]},
+        "status":{"enum":crate::lifecycle::ProposalStatus::ALL.map(crate::lifecycle::ProposalStatus::as_str)},
         "title":{"type":"string","maxLength":1024},
         "input":{"type":"object"},
         "application":proposal_application_schema(),
         "applicationStatus":proposal_application_status_schema(),
         "turn":{"enum":["party","official","nobody"]},
         "decision":proposal_decision_schema(),
+        "asks":proposal_asks_schema(false),
         "handoffRefusal":proposal_handoff_refusal_schema(),
         "blockedReason":{"enum":["package-changed"]},"effectDigest":{"type":"string"},
         "attachments":{"type":"object","maxProperties":8,"additionalProperties":proposal_attachment_schema()},
@@ -1535,6 +1537,75 @@ pub fn proposal_schema() -> Value {
                 "ifMatch":{"type":"string"},"availability":availability_schema()}
         }}
     }})
+}
+
+/// Questions are intrinsic context and never authored context fields.
+pub(crate) fn proposal_asks_schema(review: bool) -> Value {
+    let uuid = json!({"type":"string","format":"uuid"});
+    let instant = json!({"type":"string","format":"date-time"});
+    let text = json!({"type":"string","minLength":1,"maxLength":2000});
+    let wants = json!({"type":"array","maxItems":8,"uniqueItems":true,"items":{
+        "type":"object","additionalProperties":false,"required":["kind"],
+        "properties":{"kind":{"enum":["answer","document"]}}}});
+    let mut answer = json!({"type":"object","additionalProperties":false,
+        "required":["answeredAt"],"properties":{"text":text,"answeredAt":instant}});
+    let mut properties = json!({"id":uuid,"text":text,"wants":wants,
+        "askedAt":instant,"dueAt":instant,"state":{"enum":["open","answered","expired","closed"]}});
+    let mut required = vec!["id", "text", "wants", "askedAt", "state"];
+    if review {
+        answer["required"] = json!(["documents", "answeredAt"]);
+        answer["properties"]["documents"] = json!({"type":"array","maxItems":32,"items":{
+            "type":"object","additionalProperties":false,
+            "required":["id","sha256","contentType","byteSize","verificationStatus"],
+            "properties":{"id":uuid,"sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},
+                "contentType":{"type":"string","maxLength":255},"byteSize":{"type":"integer","minimum":1,"maximum":crate::contract::MAX_ATTACHMENT_BYTES},
+                "verificationStatus":{"enum":["notRequired","pending","approved","rejected"]},
+                "download":{"type":"object","additionalProperties":false,"required":["method","operation","accessProfile","path"],
+                    "properties":{"method":{"const":"GET"},"operation":{"const":"get-review-context"},"accessProfile":{"type":"string"},"path":{"type":"string"}}}}}});
+    } else {
+        answer["required"] = json!(["additions", "answeredAt"]);
+        answer["properties"]["additions"] =
+            json!({"type":"array","maxItems":32,"uniqueItems":true,"items":uuid});
+        required.push("links");
+        properties["links"] = json!({"type":"object","additionalProperties":false,"properties":{"answer":{
+            "type":"object","additionalProperties":false,"required":["method","path","accessProfile","operation","ifMatch","availability"],
+            "properties":{"method":{"const":"POST"},"operation":{"const":"answer"},"path":{"type":"string"},"accessProfile":{"type":"string"},"ifMatch":{"type":"string"},"availability":availability_schema()}}}});
+    }
+    properties["answer"] = answer;
+    json!({"type":"array","maxItems":crate::contract::MAX_MIRRORED_REVIEW_ASKS,"items":{"type":"object","additionalProperties":false,"required":required,"properties":properties}})
+}
+
+pub(crate) fn proposal_schema_with_additions(enabled: bool) -> Value {
+    let mut schema = proposal_schema();
+    if enabled {
+        append_proposal_additions_schema(&mut schema);
+    }
+    schema
+}
+
+pub(crate) fn append_proposal_additions_schema(schema: &mut Value) {
+    let availability = availability_schema();
+    let link = |method: &str, operation: &str| {
+        json!({"type":"object","additionalProperties":false,
+        "required":["method","path","accessProfile","operation"],"properties":{
+            "method":{"const":method},"operation":{"const":operation},"path":{"type":"string"},
+            "accessProfile":{"type":"string"},"ifMatch":{"type":"string"},"availability":availability}})
+    };
+    let item = json!({"type":"object","additionalProperties":false,
+        "required":["id","submissionVersion","sha256","byteSize","contentType","addedAt","verificationStatus","links"],
+        "properties":{"id":{"type":"string","format":"uuid"},"submissionVersion":{"type":"integer","minimum":1,"maximum":u32::MAX},
+            "sha256":{"type":"string","pattern":"^[a-f0-9]{64}$"},"byteSize":{"type":"integer","minimum":1,"maximum":crate::contract::MAX_ATTACHMENT_BYTES},
+            "contentType":{"type":"string"},"addedAt":{"type":"string","format":"date-time"},
+            "verificationStatus":{"enum":["notRequired","pending","approved","rejected"]},
+            "links":{"type":"object","additionalProperties":false,"properties":{"download":link("GET","download")}}}});
+    schema["properties"]["additions"] = json!({"type":"object","maxProperties":1,"additionalProperties":{
+        "type":"object","additionalProperties":false,
+        "required":["id","maximumBytes","maximumCount","contentTypes","classification","items","links"],
+        "properties":{"id":{"type":"string"},"maximumBytes":{"type":"integer","minimum":1,"maximum":crate::contract::MAX_ATTACHMENT_BYTES},
+            "maximumCount":{"type":"integer","minimum":1,"maximum":32},
+            "contentTypes":{"type":"array","minItems":1,"maxItems":16,"uniqueItems":true,"items":{"type":"string"}},
+            "classification":{"enum":["public","internal","restricted"]},"items":{"type":"array","maxItems":32,"items":item},
+            "links":{"type":"object","additionalProperties":false,"properties":{"add":link("POST","add")}}}}});
 }
 
 /// Why the review authority refused a submission's hand-off for good. Only
@@ -1564,7 +1635,7 @@ fn proposal_application_status_schema() -> Value {
         "state":{"enum":["awaiting-review","pending","applying","blocked","applied","cancelled","rejected"]},
         "mode":{"enum":["automatic","manual"]},
         "reason":{"enum":["package-changed","dependency-outage","lease-expired","application-refused","attempts-exhausted"]},
-        "recovery":{"enum":["retry","rebase","correct-input"]},
+        "recovery":{"enum":["retry","rebase","revise","correct-input"]},
         "automaticRetry":{"type":"object","additionalProperties":false,
             "required":["scheduled","attempts","maximumAttempts"],"properties":{
                 "scheduled":{"type":"boolean"},"attempts":{"type":"integer","minimum":0,"maximum":1000},
@@ -1607,8 +1678,8 @@ fn proposal_attachment_schema() -> Value {
 pub fn availability_schema() -> Value {
     json!({"type":"object","additionalProperties":false,"required":["available","observedRevision"],
         "properties":{"available":{"type":"boolean"},"observedRevision":{"type":"integer","minimum":1},
-            "reason":{"enum":["pending-review","review-rejected","review-changes-requested","review-ended","stale-revision","package-changed","dependency-outage","invalid-input","already-applied"]},
-            "recovery":{"enum":["refresh","revise","retry","rebase","correct-input","receipt-only"]}},
+            "reason":{"enum":crate::lifecycle::ProposalAvailabilityReason::ALL.iter().map(|reason| reason.as_str()).collect::<Vec<_>>()},
+            "recovery":{"enum":crate::lifecycle::ProposalLinkRecovery::ALL.iter().map(|recovery| recovery.as_str()).collect::<Vec<_>>()}},
         "if":{"properties":{"available":{"const":false}}},"then":{"required":["reason","recovery"]}})
 }
 
@@ -1886,6 +1957,12 @@ fn action_operation_responses(
         ("200", success)
     };
     let mut responses = Map::from_iter([(success_status.to_owned(), success)]);
+    if route.operation == Operation::Start {
+        let mut document = json!({"operationId":route.id,"responses":responses});
+        proposal_artifacts::append_operation_problems(&mut document, "post");
+        return document["responses"].take();
+    }
+
     for (status, problems) in action_problem_responses(route.kind, action, may_refuse_write) {
         let mut examples = problems
             .iter()
@@ -2270,7 +2347,7 @@ struct OpenApiDocumentInput<'a> {
     external_views: &'a crate::external_views::CompiledExternalViews,
 }
 
-fn openapi_document(input: OpenApiDocumentInput<'_>) -> Value {
+fn openapi_document(input: OpenApiDocumentInput<'_>) -> Result<Value, Diagnostic> {
     let OpenApiDocumentInput {
         registry_id,
         version,
@@ -2415,7 +2492,7 @@ fn openapi_document(input: OpenApiDocumentInput<'_>) -> Value {
             openapi_action_operation(route, action, entities, OpenApiAccessProfiles::All),
         );
     }
-    append_proposal_openapi(&mut paths, actions, entities, None);
+    append_proposal_openapi(&mut paths, actions, entities, None)?;
     crate::external_view_artifacts::append(
         &mut paths,
         external_views,
@@ -2445,12 +2522,12 @@ fn openapi_document(input: OpenApiDocumentInput<'_>) -> Value {
         statistical_datasets,
         false,
     );
-    json!({
+    Ok(json!({
         "openapi": "3.1.0",
         "info": {"title": registry_id, "version": version},
         "paths": paths,
         "components": openapi_components(component_schemas, has_immediate_actions)
-    })
+    }))
 }
 
 pub(crate) const ACCESS_LOG_RESPONSE_SCHEMA_ID: &str = "SubjectAccessLogPage";
@@ -4532,6 +4609,21 @@ fn problem_schema() -> Value {
         },
         "allOf": [
             {
+                "if": {"properties": {"code": {"enum": ["attachment.required","attachment.verification-pending","attachment.verification-rejected"]}}},
+                "then": {
+                    "required": ["fieldPath"],
+                    "propertyNames": {"enum":["type","title","status","detail","code","traceId","fieldPath"]},
+                    "properties": {
+                        "fieldPath": {"type":"string","pattern":"^/attachments/[a-z][a-z0-9_-]{0,63}$"}
+                    },
+                    "allOf":[{
+                        "if":{"properties":{"code":{"const":"attachment.verification-pending"}}},
+                        "then":{"properties":{"status":{"const":409}}},
+                        "else":{"properties":{"status":{"const":422}}}
+                    }]
+                }
+            },
+            {
                 "if": {"properties": {"code": {"const": write_outside_boundary.code()}}},
                 "then": {
                     "propertyNames": {"enum": [
@@ -5009,6 +5101,44 @@ fn canonicalization_error() -> Diagnostic {
 #[cfg(test)]
 mod problem_contract_tests {
     use super::*;
+
+    #[test]
+    fn required_attachment_problem_contract_names_a_slot() {
+        let schema = problem_schema();
+        let validator = jsonschema::JSONSchema::options()
+            .with_draft(jsonschema::Draft::Draft202012)
+            .compile(&schema)
+            .unwrap();
+        for code in [
+            crate::problem::ProblemCode::AttachmentRequired,
+            crate::problem::ProblemCode::AttachmentVerificationPending,
+            crate::problem::ProblemCode::AttachmentVerificationRejected,
+        ] {
+            let mut body =
+                problem_example(&code.status().to_string(), code.code(), code.description());
+            assert!(
+                !validator.is_valid(&body),
+                "a required slot refusal must identify the slot"
+            );
+            body["fieldPath"] = json!("/attachments/support");
+            assert!(validator.is_valid(&body));
+            for invalid in [
+                "/input/support",
+                "/attachments",
+                "/attachments/support/bytes",
+                "/attachments/UPPER",
+            ] {
+                body["fieldPath"] = json!(invalid);
+                assert!(!validator.is_valid(&body), "{invalid}");
+            }
+            body["fieldPath"] = json!("/attachments/support");
+            body["recordType"] = json!("private-record");
+            assert!(
+                !validator.is_valid(&body),
+                "a slot problem permits no record metadata"
+            );
+        }
+    }
 
     #[test]
     fn application_reason_contract_is_optional_bounded_and_closed() {

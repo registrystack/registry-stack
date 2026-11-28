@@ -117,6 +117,7 @@ fn history_source() -> Value {
          "plan": {"type": "fixed", "effects": [
             {"id": "correct", "target": {"fromInput": "person"}, "operation": "patch",
              "set": {"family-name": {"fromInput": "name"}}}]}}});
+    super::fixture::grant_readable_inputs(&mut source);
     source
 }
 

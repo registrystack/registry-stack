@@ -590,6 +590,24 @@ the Proposal Get authority: its frozen `effectDigest`, its `review` result, its 
 progress. Once its result window has lapsed and no application receipt remains, it answers
 `410 proposal.submission_expired`; the Proposal stays readable.
 
+### Proposal asks
+
+`POST /v1/proposals/{proposal_id}/asks/{ask_id}/answer` requires the selected profile's `answer` authority, `If-Match`, `Idempotency-Key` and an `application/json` body with optional `text` and `additions` members.
+The ask's wants determine which members are required. Unknown members are refused.
+A 200 response carries the updated caller-filtered Proposal and ETag.
+Get authority controls the optional `asks` member on Proposal reads and command responses.
+Follow each ask's `links.answer`, including its typed availability and recovery.
+See [Answer a reviewer's ask](../../configure/breg-proposals/#answer-a-reviewers-ask) for limits, delivery and disclosure.
+
+Human review-context responses carry intrinsic answers in `context.asks`, outside the authored field schema.
+A cited-file download selects `reviewAskId` instead of `reviewContextField`, with the existing `submissionVersion`, `effectDigest` and `contextSchemaDigest` query members.
+The selector admits only a cited file in the current accepted review binding and preserves every existing download verification and authority check.
+Institutional task-grant context does not carry asks or answers.
+
+{/* Evidence: crates/registry-breg/src/proposal_artifacts.rs;
+    crates/registry-breg/tests/proposal_asks.rs;
+    crates/registry-breg/tests/support/proposal_review_asks.rs. */}
+
 ### Proposal attachments
 
 `GET`, `PATCH`, and `DELETE /v1/proposals/{proposal_id}/attachments/{slot_id}` read, upload, and
@@ -603,6 +621,51 @@ exact content digest; changed content needs a new submission and fresh review.
     crates/registry-breg/src/proposal_store.rs; crates/registry-breg/src/proposal_artifacts.rs;
     crates/registry-breg-client/src/proposal.rs;
     products/breg/examples/facility/registry.yaml. */}
+
+Before Submit, follow the Proposal's attachment upload links to fill its required slots.
+An empty required slot makes Submit unavailable with `attachment-required` and recovery `correct-input`.
+A direct Submit answers `422 attachment.required`, with `fieldPath` naming `/attachments/<slotId>`.
+After an upload, the updated Submit link reflects the stored file even if your profile cannot read the slot's value.
+A required file rejected by verification counts as empty.
+Pending verification makes Submit unavailable with `attachment-pending` and recovery `refresh`.
+A direct Submit answers `409 attachment.verification-pending`.
+A rejected optional file gives `invalid-input` with recovery `correct-input`, and `422 attachment.verification-rejected` on Submit.
+Each problem names only the slot location, including for a caller who cannot read file metadata.
+Filling and submitting can use different profiles: Submit does not require permission to write the slot.
+Slot uploads answer `413 attachment.too-large` and `415 attachment.content-type` for size and media-type refusals.
+
+The generated OpenAPI declares `application/problem+json` bodies for every documented error response on Proposal routes.
+These include lifecycle commands, submission reads, review and task-grant context, and file routes.
+The shared problem schema includes the problem code and optional field location.
+
+{/* Evidence: crates/registry-breg/tests/proposal_status_contract.rs every_proposal_error_response_declares_its_problem_body;
+    crates/registry-breg/tests/support/proposal_required_attachment.rs;
+    crates/registry-breg/src/proposal_artifacts.rs append_problem_codes;
+    crates/registry-breg/src/problem.rs AttachmentRequired, AttachmentVerificationPending, AttachmentVerificationRejected. */}
+
+### Proposal additions
+
+Follow the Add link at `additions.<slotId>.links.add` to upload a supporting file during an open review.
+`POST /v1/proposals/{proposal_id}/additions/{slot_id}` takes the raw bytes with their `Content-Type`.
+You must send `Idempotency-Key` and `If-Match`.
+BReg returns 200 with the full Proposal and its changed ETag.
+The submission version and frozen effect digest stay unchanged.
+
+The slot descriptor carries its byte limit and accepted media types.
+It also carries `maximumCount` and the current submission's `items`.
+Each readable item has a download link when verification permits content release.
+`GET /v1/proposals/{proposal_id}/additions/{addition_id}` uses the link's submission-version query and the caller's current authority.
+
+BReg answers an unsupported media type with `415 attachment.content-type`.
+An oversized file gets `413 attachment.too-large`.
+An empty body gets `400 request.invalid`.
+A full slot gets `409 attachment.limit-reached`.
+The [Proposal configuration](../../configure/breg-proposals/#accept-supporting-files-during-review) explains the slot grants and reviewer field.
+
+{/* Evidence: crates/registry-breg/src/api/attachments.rs;
+    crates/registry-breg/src/proposal_artifacts.rs;
+    crates/registry-breg/src/problem.rs;
+    crates/registry-breg/tests/support/proposal_additions.rs. */}
 
 ## Immediate actions
 

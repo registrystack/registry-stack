@@ -133,6 +133,53 @@ fn commit_evidence_binds_typed_selectors_predicates_and_final_revision() {
         json!(1);
     assert!(compile(source, Some(reviewed)).is_err());
 }
+
+#[test]
+fn proposal_apply_declares_commit_evidence_failure_but_submit_does_not() {
+    let mut source = configured();
+    let action = &mut source["actions"]["register-person"];
+    action.as_object_mut().unwrap().remove("evidence");
+    action["execution"] = json!({"mode":"proposal","proposal":{
+        "review":{"type":"none"},"application":{"mode":"manual"},"retention":{"mode":"operator-erase"}
+    }});
+    action["inputs"][0]["minimumLength"] = json!(1);
+    action["commitGuards"] = json!({
+        "targets":[{"input":"person","revision":"unchanged"}],
+        "evidence":[{
+            "id":"commit-status","provider":"provider","requirement":"urn:example:client:requirement:status:v1",
+            "subjects":{"subject":{"profile":"record-lookup-v1","selectors":{"record_reference":{"type":"input","input":"given-name"}}}},
+            "requires":[{"output":"status-holds","equals":true}],"maximumObservationAgeSeconds":60
+        }]
+    });
+    source["functions"]["register-plan"]["capabilities"] = json!([]);
+    let permissions = &mut source["accessProfiles"]["registrar"]["permissions"];
+    permissions["actions"][0]["operations"] = json!(["start"]);
+    permissions["actions"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("results");
+    permissions["proposals"] = json!([{"action":"register-person","operations":["get","submit","apply"],
+        "ownership":"caller","readableInputs":["given-name","family-name","person"],
+        "targets":[{"recordType":"person","rowBoundaries":"unrestricted"}]}]);
+    let mut contract = contracts();
+    contract["definitions"][0]["subjects"][0]["selector"]["fields"] =
+        json!([{"type":"string","name":"record_reference","minimumBytes":1,"maximumBytes":200}]);
+    let registry = compile(source, Some(contract)).unwrap();
+    let api: Value =
+        serde_json::from_slice(&registry.artifacts().entries()["generated/openapi.json"].bytes)
+            .unwrap();
+    assert_eq!(
+        api["paths"]["/v1/proposals/{proposal_id}/apply"]["post"]["responses"]["503"]["content"]
+            ["application/problem+json"]["examples"]["action.evidence_failed"]["value"]["code"],
+        "action.evidence_failed"
+    );
+    assert!(
+        api["paths"]["/v1/proposals/{proposal_id}/submit"]["post"]["responses"]["503"]["content"]
+            ["application/problem+json"]["examples"]
+            .get("action.evidence_failed")
+            .is_none()
+    );
+}
 #[test]
 fn refuses_origin_profile_output_ambiguity_and_budget_widening() {
     for change in [

@@ -1136,6 +1136,8 @@ fn timer_writer_explanations(
                             matches!(
                                 operation,
                                 crate::contract::ProposalOperation::Edit
+                                    | crate::contract::ProposalOperation::Add
+                                    | crate::contract::ProposalOperation::Answer
                                     | crate::contract::ProposalOperation::Submit
                                     | crate::contract::ProposalOperation::Revise
                                     | crate::contract::ProposalOperation::Apply

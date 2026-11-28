@@ -69,7 +69,8 @@ fn reversed(action: &CompiledAction) -> CompiledAction {
 
 #[test]
 fn reordering_grants_keeps_the_migration_review_revision() {
-    let action = compile_action(&project(json!(["edit"]), json!(["get"])));
+    // Submit, not Edit: an Edit grant must hold Get, which would overlap the other default's Get.
+    let action = compile_action(&project(json!(["submit"]), json!(["get"])));
     let CompiledActionExecution::Proposal { proposal } = &action.execution else {
         panic!("Proposal")
     };
@@ -87,7 +88,7 @@ fn reordering_grants_keeps_the_migration_review_revision() {
 
 #[test]
 fn reordering_start_grants_keeps_the_migration_review_revision() {
-    let mut value = project(json!(["edit"]), json!(["get"]));
+    let mut value = project(json!(["submit"]), json!(["get"]));
     value["accessProfiles"]["second"]["default"] = json!(false);
     value["accessProfiles"]["second"]["permissions"]["actions"] = json!([
         {"action":"correct-case","operations":["start"],"targets":[{"recordType":"case","rowBoundaries":"unrestricted"}]}]);
@@ -101,7 +102,7 @@ fn reordering_start_grants_keeps_the_migration_review_revision() {
 
 #[test]
 fn a_changed_default_flag_or_operation_still_changes_the_revision() {
-    let base = project(json!(["edit"]), json!(["get"]));
+    let base = project(json!(["submit"]), json!(["get"]));
     let before = migration_review_revision(&compile_action(&base));
 
     let mut no_default = base.clone();

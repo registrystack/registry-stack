@@ -51,6 +51,7 @@ impl ReviewContextProvider for Source {
             _ => {}
         }
         Ok(HumanDisplayObservation {
+            answers: Default::default(),
             identity: request.identity.clone(),
             reviewable: true,
             display_reference: None,

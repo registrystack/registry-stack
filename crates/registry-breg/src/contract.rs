@@ -623,6 +623,8 @@ pub struct ProposalPolicySource {
     pub retention: ProposalRetentionSource,
     #[serde(default)]
     pub attachments: Vec<AttachmentSlotSource>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additions: Option<AdditionSlotSource>,
     #[serde(default)]
     pub review_context: Option<ProposalReviewContextSource>,
     /// Post-commit observers of the fixed, value-free Proposal lifecycle event.
@@ -660,6 +662,9 @@ impl registry_platform_yaml::Identified for ProposalHookSource {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProposalEventTransition {
+    Asked,
+    Answered,
+    Added,
     Started,
     Edited,
     Submitted,
@@ -675,6 +680,9 @@ pub enum ProposalEventTransition {
 impl ProposalEventTransition {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Asked => "asked",
+            Self::Answered => "answered",
+            Self::Added => "added",
             Self::Started => "started",
             Self::Edited => "edited",
             Self::Submitted => "submitted",
@@ -785,6 +793,11 @@ pub struct ProposalReviewContextSource {
 )]
 #[cfg_attr(feature = "schema", schemars(!remote, tag = "type"))]
 pub enum ProposalContextValueSource {
+    Additions {
+        #[serde(deserialize_with = "local_id")]
+        #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
+        slot: String,
+    },
     Document {
         #[serde(deserialize_with = "local_id")]
         #[cfg_attr(feature = "schema", schemars(with = "LocalId"))]
@@ -817,9 +830,11 @@ serialize_tagged_union!(ProposalContextValueSource, tag = "type");
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProposalOperation {
+    Answer,
     Get,
     List,
     Edit,
+    Add,
     Submit,
     Revise,
     Cancel,
@@ -834,9 +849,11 @@ pub enum ProposalOperation {
 impl ProposalOperation {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Answer => "answer",
             Self::Get => "get",
             Self::List => "list",
             Self::Edit => "edit",
+            Self::Add => "add",
             Self::Submit => "submit",
             Self::Revise => "revise",
             Self::Cancel => "cancel",
@@ -2499,6 +2516,8 @@ pub enum ConsentIssuerSource {
 
 /// A request may declare at most eight independently governed binary slots.
 pub const MAX_ATTACHMENT_SLOTS: usize = 8;
+/// Maximum intrinsic review questions retained for one frozen submission.
+pub const MAX_MIRRORED_REVIEW_ASKS: usize = 50;
 /// Bounds both database content and optional external storage operations.
 pub const MAX_ATTACHMENT_BYTES: u32 = 16 * 1024 * 1024;
 pub const MAX_ATTACHMENT_CONTENT_TYPES: usize = 16;
@@ -2517,6 +2536,25 @@ pub struct AttachmentSlotSource {
         schemars(with = "BoundedU32<1, MAX_ATTACHMENT_BYTES>")
     )]
     pub maximum_bytes: u32,
+    pub content_types: Vec<String>,
+    pub classification: Classification,
+}
+
+/// Supporting files added to the current submission while its review is open.
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct AdditionSlotSource {
+    #[serde(deserialize_with = "local_id")]
+    #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
+    pub id: String,
+    #[cfg_attr(
+        feature = "schema",
+        schemars(with = "BoundedU32<1, MAX_ATTACHMENT_BYTES>")
+    )]
+    pub maximum_bytes: u32,
+    #[cfg_attr(feature = "schema", schemars(with = "BoundedU32<1, 32>"))]
+    pub maximum_count: u32,
     pub content_types: Vec<String>,
     pub classification: Classification,
 }

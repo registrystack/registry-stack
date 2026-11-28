@@ -1182,17 +1182,17 @@ formats:
     audience: generated
     stability: unpromised
     current:
-      apiVersion: id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha8
+      apiVersion: id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha9
       kind: BRegLifecycleExplanation
       checkedBy:
         file: crates/registry-bregctl/src/lib.rs
         symbol: LIFECYCLE_EXPLANATION
     target:
-      apiVersion: id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha8
+      apiVersion: id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha9
       kind: BRegLifecycleExplanation
     schema:
       path: products/breg/contracts/explain/LifecycleExplanation.schema.json
-      id: https://id.registrystack.org/schemas/breg/lifecycle-explanation/lifecycle-explanation.v1alpha8.schema.json
+      id: https://id.registrystack.org/schemas/breg/lifecycle-explanation/lifecycle-explanation.v1alpha9.schema.json
       origin: hand-written
       differentialTest: crates/registry-bregctl/tests/explain_contract.rs
     reader: none

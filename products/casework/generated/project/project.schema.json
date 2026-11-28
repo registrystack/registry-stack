@@ -247,6 +247,12 @@
       ],
       "type": "object"
     },
+    "ReviewAskOnDue": {
+      "enum": [
+        "return-to-reviewer"
+      ],
+      "type": "string"
+    },
     "ReviewCompletionDestinationPolicy": {
       "additionalProperties": false,
       "properties": {
@@ -379,6 +385,13 @@
       ],
       "type": "string"
     },
+    "ReviewResubmissionPolicy": {
+      "enum": [
+        "first-stage",
+        "resume-at-returning-stage"
+      ],
+      "type": "string"
+    },
     "ReviewRetentionPolicy": {
       "additionalProperties": false,
       "properties": {
@@ -401,9 +414,48 @@
       ],
       "type": "object"
     },
+    "ReviewStageAsksPolicy": {
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "pauseClocks": {
+                "const": true
+              }
+            },
+            "required": [
+              "pauseClocks"
+            ]
+          },
+          "then": {
+            "required": [
+              "answerWithin"
+            ]
+          }
+        }
+      ],
+      "description": "`asks: {}` offers an ask without a deadline or clock pause.",
+      "properties": {
+        "answerWithin": {
+          "$ref": "#/$defs/ElapsedDuration"
+        },
+        "onDue": {
+          "$ref": "#/$defs/ReviewAskOnDue"
+        },
+        "pauseClocks": {
+          "type": "boolean"
+        }
+      },
+      "type": "object"
+    },
     "ReviewStagePolicy": {
       "additionalProperties": false,
       "properties": {
+        "asks": {
+          "$ref": "#/$defs/ReviewStageAsksPolicy",
+          "description": "Lets the reviewer who holds a task at this stage ask the subject's\nowner for more. Omission offers no ask and keeps the policy bytes\nunchanged. Only an approval policy may declare it."
+        },
         "decidingProfiles": {
           "items": {
             "type": "string"
@@ -1070,6 +1122,9 @@
           "purpose": {
             "$ref": "#/$defs/ReviewPurpose"
           },
+          "resubmission": {
+            "$ref": "#/$defs/ReviewResubmissionPolicy"
+          },
           "resultSchema": {
             "x-registry-foreign": "json-schema-2020-12"
           },
@@ -1318,6 +1373,11 @@
           },
           "profile": {
             "type": "string"
+          },
+          "readsAsks": {
+            "default": false,
+            "description": "Whether this producer reads reviewer asks through the ask feed and\nanswers them. A review policy whose stage declares `asks` needs it\non every producer that submits to the policy.",
+            "type": "boolean"
           },
           "retention": {
             "$ref": "#/$defs/ProducerRetention"

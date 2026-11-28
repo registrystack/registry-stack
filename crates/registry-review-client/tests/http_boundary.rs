@@ -9,11 +9,12 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, Request, Response, 
 use axum::routing::{get, post};
 use axum::Router;
 use registry_review_client::{
-    BearerToken, ContentDigest, ReviewAuth, ReviewCancelRequest, ReviewClient, ReviewClientConfig,
+    BearerToken, ContentDigest, ReviewAskAnswer, ReviewAskAnswerResponse, ReviewAskResponse,
+    ReviewAskState, ReviewAuth, ReviewCancelRequest, ReviewClient, ReviewClientConfig,
     ReviewClientError, ReviewContext, ReviewCreateRequest, ReviewMutationErrorClass,
     ReviewProgressCode, ReviewProtocolFailure, ReviewRequestAccepted, ReviewResultLookup,
     ReviewResultResponse, ReviewResultsQuery, ReviewValidationReason, SourceContextBinding,
-    SubjectBinding, Uuid,
+    SubjectBinding, Uuid, REVIEW_ASK_NOT_OPEN_PROBLEM,
 };
 use serde_json::json;
 use url::Url;
@@ -1676,4 +1677,867 @@ async fn same_producer_metadata_still_requires_the_exact_original_digest() {
         }
         server.abort();
     }
+}
+
+fn ask_json(request_id: Uuid, ask_id: Uuid) -> serde_json::Value {
+    json!({
+        "askId": ask_id,
+        "requestId": request_id,
+        "subject": serde_json::to_value(subject()).expect("subject fixture"),
+        "text": "Please send the signed form.",
+        "wants": [{"kind": "answer"}, {"kind": "document"}],
+        "askedAt": "2026-11-27T01:00:00Z",
+        "dueAt": "2026-12-01T00:00:00Z",
+        "state": "open"
+    })
+}
+
+fn answered_ask_json(request_id: Uuid, ask_id: Uuid) -> serde_json::Value {
+    let mut ask = ask_json(request_id, ask_id);
+    ask["state"] = json!("answered");
+    ask["answeredAt"] = json!("2026-11-27T02:00:00Z");
+    ask
+}
+
+fn ask_answer() -> ReviewAskAnswer {
+    serde_json::from_value(json!({
+        "subject": serde_json::to_value(subject()).expect("subject fixture"),
+        "answeredAt": "2026-11-27T02:00:00Z"
+    }))
+    .expect("answer fixture")
+}
+
+fn problem_with(status: StatusCode, code: &str) -> Response<Body> {
+    let value = json!({
+        "type": format!("https://id.registrystack.org/problems/registry-casework/{code}"),
+        "title": "Refused",
+        "status": status.as_u16(),
+        "detail": "The ask call was refused.",
+        "code": code,
+        "traceId": "0123456789abcdef0123456789abcdef"
+    });
+    Response::builder()
+        .status(status)
+        .header("content-type", "application/problem+json")
+        .header("traceparent", TRACEPARENT)
+        .body(Body::from(value.to_string()))
+        .expect("fixture response")
+}
+
+fn raw_response(status: StatusCode, content_type: Option<&str>, body: &str) -> Response<Body> {
+    let mut builder = Response::builder()
+        .status(status)
+        .header("traceparent", TRACEPARENT);
+    if let Some(content_type) = content_type {
+        builder = builder.header("content-type", content_type);
+    }
+    builder
+        .body(Body::from(body.to_owned()))
+        .expect("fixture response")
+}
+
+/// A problem document with a chosen `status` member and trace id.
+fn problem_document(status: StatusCode, code: &str, member: u16, trace_id: &str) -> Response<Body> {
+    let value = json!({
+        "type": format!("https://id.registrystack.org/problems/registry-casework/{code}"),
+        "title": "Refused",
+        "status": member,
+        "detail": "The ask call was refused.",
+        "code": code,
+        "traceId": trace_id
+    });
+    raw_response(status, Some("application/problem+json"), &value.to_string())
+}
+
+async fn capture_ask_feed(
+    State(observations): State<Observations>,
+    request: Request<Body>,
+) -> Response<Body> {
+    capture(&observations, &request);
+    let mut page = json!({
+        "items": [{
+            "eventId": Uuid::from_u128(8),
+            "requestId": Uuid::from_u128(7),
+            "askId": Uuid::from_u128(5),
+            "changedAt": "2026-11-27T01:00:00Z",
+            "futureEntryMember": true
+        }],
+        "nextCursor": Uuid::from_u128(8),
+        "futurePageMember": {"safeToIgnore": true}
+    });
+    page["items"][0]["futureEntryMember"] = json!(true);
+    json_response(StatusCode::OK, page)
+}
+
+async fn capture_ask(
+    State(observations): State<Observations>,
+    Path((request_id, ask_id)): Path<(Uuid, Uuid)>,
+    request: Request<Body>,
+) -> Response<Body> {
+    capture(&observations, &request);
+    let mut ask = ask_json(request_id, ask_id);
+    ask["futureAskMember"] = json!({"safeToIgnore": true});
+    ask["subject"]["futureSubjectMember"] = json!(true);
+    json_response(StatusCode::OK, ask)
+}
+
+async fn capture_answer(
+    State(observations): State<Observations>,
+    Path((request_id, ask_id)): Path<(Uuid, Uuid)>,
+    request: Request<Body>,
+) -> Response<Body> {
+    capture(&observations, &request);
+    json_response(StatusCode::OK, answered_ask_json(request_id, ask_id))
+}
+
+#[tokio::test]
+async fn ask_calls_use_the_review_routes_with_the_producer_credential() {
+    let observations = Arc::new(Mutex::new(Vec::new()));
+    let app = Router::new()
+        .route("/v1/review-asks", get(capture_ask_feed))
+        .route("/v1/review-requests/{id}/asks/{ask}", get(capture_ask))
+        .route(
+            "/v1/review-requests/{id}/asks/{ask}/answer",
+            post(capture_answer),
+        )
+        .with_state(observations.clone());
+    let (client, server) = serve(app).await;
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let (request_id, ask_id) = (Uuid::from_u128(7), Uuid::from_u128(5));
+
+    let page = client
+        .ask_feed(
+            ReviewAuth::new(&token, "producer"),
+            Some(Uuid::from_u128(4)),
+            Some(25),
+        )
+        .await
+        .expect("ask feed");
+    assert_eq!(page.value.items[0].ask_id, ask_id);
+    assert_eq!(page.value.next_cursor, Some(Uuid::from_u128(8)));
+
+    let ReviewAskResponse::Available(ask) = client
+        .ask(
+            ReviewAuth::new(&token, "producer"),
+            &expected_binding(request_id),
+            ask_id,
+        )
+        .await
+        .expect("ask read")
+    else {
+        panic!("the ask is available");
+    };
+    assert_eq!(ask.value.state, ReviewAskState::Open);
+
+    let ReviewAskAnswerResponse::Answered(answered) = client
+        .answer_ask(
+            ReviewAuth::new(&token, "producer"),
+            "answer-5",
+            &expected_binding(request_id),
+            ask_id,
+            &ask_answer(),
+        )
+        .await
+        .expect("answer")
+    else {
+        panic!("the ask is answered");
+    };
+    assert_eq!(answered.value.state, ReviewAskState::Answered);
+
+    let observations = observations.lock().expect("observations");
+    assert_eq!(observations.len(), 3);
+    for (_, _, headers) in observations.iter() {
+        assert_eq!(headers["registry-review-profile"], "producer");
+        assert_eq!(headers["authorization"], "Bearer one-call-secret");
+    }
+    assert_eq!(observations[0].0, Method::GET);
+    assert_eq!(
+        observations[0].1,
+        "/v1/review-asks?cursor=00000000-0000-0000-0000-000000000004&limit=25"
+    );
+    assert_eq!(observations[1].0, Method::GET);
+    assert_eq!(
+        observations[1].1,
+        format!("/v1/review-requests/{request_id}/asks/{ask_id}")
+    );
+    assert_eq!(observations[2].0, Method::POST);
+    assert_eq!(
+        observations[2].1,
+        format!("/v1/review-requests/{request_id}/asks/{ask_id}/answer")
+    );
+    assert_eq!(observations[2].2["idempotency-key"], "answer-5");
+    server.abort();
+}
+
+#[tokio::test]
+async fn answer_posts_exactly_the_subject_and_answer_time() {
+    let bodies = Arc::new(Mutex::new(Vec::<String>::new()));
+    let app = Router::new()
+        .route(
+            "/v1/review-requests/{id}/asks/{ask}/answer",
+            post(
+                |State(bodies): State<Arc<Mutex<Vec<String>>>>,
+                 Path((request_id, ask_id)): Path<(Uuid, Uuid)>,
+                 body: String| async move {
+                    bodies.lock().expect("bodies").push(body);
+                    json_response(StatusCode::OK, answered_ask_json(request_id, ask_id))
+                },
+            ),
+        )
+        .with_state(bodies.clone());
+    let (client, server) = serve(app).await;
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    client
+        .answer_ask(
+            ReviewAuth::new(&token, "producer"),
+            "answer-5",
+            &expected_binding(Uuid::from_u128(7)),
+            Uuid::from_u128(5),
+            &ask_answer(),
+        )
+        .await
+        .expect("answer");
+    let bodies = bodies.lock().expect("bodies");
+    let body: serde_json::Value = serde_json::from_str(&bodies[0]).expect("JSON body");
+    let mut members: Vec<_> = body.as_object().expect("object").keys().cloned().collect();
+    members.sort();
+    assert_eq!(members, ["answeredAt", "subject"]);
+    server.abort();
+}
+
+#[tokio::test]
+async fn ask_calls_refuse_invalid_input_before_http() {
+    let observations = Arc::new(Mutex::new(Vec::new()));
+    let app = Router::new()
+        .fallback(
+            |State(observations): State<Observations>, request: Request<Body>| async move {
+                capture(&observations, &request);
+                empty_response(StatusCode::NO_CONTENT)
+            },
+        )
+        .with_state(observations.clone());
+    let (client, server) = serve(app).await;
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let auth = || ReviewAuth::new(&token, "producer");
+    let (request_id, ask_id) = (Uuid::from_u128(7), Uuid::from_u128(5));
+
+    for limit in [0, 101] {
+        assert!(matches!(
+            client.ask_feed(auth(), None, Some(limit)).await,
+            Err(ReviewClientError::InvalidRequest { .. })
+        ));
+    }
+    let mut nil_request = expected_binding(request_id);
+    nil_request.request_id = Uuid::nil();
+    for (expected, ask) in [
+        (expected_binding(request_id), Uuid::nil()),
+        (nil_request, ask_id),
+    ] {
+        assert!(matches!(
+            client.ask(auth(), &expected, ask).await,
+            Err(ReviewClientError::InvalidRequest { .. })
+        ));
+        assert!(matches!(
+            client
+                .answer_ask(auth(), "key", &expected, ask, &ask_answer())
+                .await,
+            Err(ReviewClientError::InvalidRequest { .. })
+        ));
+    }
+    for key in ["", "has space"] {
+        assert!(matches!(
+            client
+                .answer_ask(
+                    auth(),
+                    key,
+                    &expected_binding(request_id),
+                    ask_id,
+                    &ask_answer()
+                )
+                .await,
+            Err(ReviewClientError::InvalidRequest { .. })
+        ));
+    }
+    let mut bad_binding = expected_binding(request_id);
+    bad_binding.subject.id = String::new();
+    assert!(matches!(
+        client.ask(auth(), &bad_binding, ask_id).await,
+        Err(ReviewClientError::InvalidRequest { .. })
+    ));
+    let mut bad_answer = ask_answer();
+    bad_answer.subject.id = String::new();
+    assert!(matches!(
+        client
+            .answer_ask(
+                auth(),
+                "key",
+                &expected_binding(request_id),
+                ask_id,
+                &bad_answer
+            )
+            .await,
+        Err(ReviewClientError::InvalidRequest { .. })
+    ));
+    // An answer for another subject than the accepted request's never leaves.
+    let mut other_answer = ask_answer();
+    other_answer.subject.digest = ContentDigest::parse(OTHER_DIGEST).expect("digest fixture");
+    assert!(matches!(
+        client
+            .answer_ask(
+                auth(),
+                "key",
+                &expected_binding(request_id),
+                ask_id,
+                &other_answer
+            )
+            .await,
+        Err(ReviewClientError::InvalidRequest { .. })
+    ));
+    assert!(observations.lock().expect("observations").is_empty());
+    server.abort();
+}
+
+#[tokio::test]
+async fn ask_feed_refuses_nil_identifiers_a_misplaced_cursor_and_too_many_entries() {
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let entry = |event: u128, request: u128, ask: u128| {
+        json!({
+            "eventId": Uuid::from_u128(event),
+            "requestId": Uuid::from_u128(request),
+            "askId": Uuid::from_u128(ask),
+            "changedAt": "2026-11-27T01:00:00Z"
+        })
+    };
+    let pages = [
+        json!({"items": [entry(0, 7, 5)]}),
+        json!({"items": [entry(8, 0, 5)]}),
+        json!({"items": [entry(8, 7, 0)]}),
+        json!({"items": [entry(8, 7, 5)], "nextCursor": Uuid::from_u128(9)}),
+        json!({"items": [], "nextCursor": Uuid::from_u128(9)}),
+        json!({"items": (1..=101).map(|n| entry(n, 7, 5)).collect::<Vec<_>>()}),
+    ];
+    for page in pages {
+        let app = Router::new().route(
+            "/v1/review-asks",
+            get(move || {
+                let page = page.clone();
+                async move { json_response(StatusCode::OK, page) }
+            }),
+        );
+        let (client, server) = serve(app).await;
+        assert!(matches!(
+            client
+                .ask_feed(ReviewAuth::new(&token, "producer"), None, None)
+                .await,
+            Err(ReviewClientError::Protocol {
+                failure: ReviewProtocolFailure::Body,
+                ..
+            })
+        ));
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn ask_feed_past_retention_is_a_gone_problem_the_caller_restarts_from() {
+    let app = Router::new().route(
+        "/v1/review-asks",
+        get(|| async { problem_with(StatusCode::GONE, "cursor.expired") }),
+    );
+    let (client, server) = serve(app).await;
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let error = client
+        .ask_feed(
+            ReviewAuth::new(&token, "producer"),
+            Some(Uuid::from_u128(4)),
+            None,
+        )
+        .await
+        .expect_err("410 is not a page");
+    assert!(matches!(
+        error,
+        ReviewClientError::Problem { status: 410, .. }
+    ));
+    server.abort();
+}
+
+#[tokio::test]
+async fn ask_read_refuses_every_mismatched_binding_and_invalid_ask() {
+    let (request_id, ask_id) = (Uuid::from_u128(7), Uuid::from_u128(5));
+    let mut other_binding = expected_binding(request_id);
+    other_binding.subject.digest = ContentDigest::parse(OTHER_DIGEST).expect("digest fixture");
+    let mut cases = Vec::new();
+    let mut wrong_request = ask_json(request_id, ask_id);
+    wrong_request["requestId"] = json!(Uuid::from_u128(8));
+    cases.push(wrong_request);
+    let mut wrong_ask = ask_json(request_id, ask_id);
+    wrong_ask["askId"] = json!(Uuid::from_u128(6));
+    cases.push(wrong_ask);
+    let mut wrong_digest = ask_json(request_id, ask_id);
+    wrong_digest["subject"]["digest"] = json!(OTHER_DIGEST);
+    cases.push(wrong_digest);
+    let mut wrong_version = ask_json(request_id, ask_id);
+    wrong_version["subject"]["version"] = json!("4");
+    cases.push(wrong_version);
+    // An answered ask with no answer time breaks the ask's own rules.
+    let mut invalid = ask_json(request_id, ask_id);
+    invalid["state"] = json!("answered");
+    cases.push(invalid);
+    let mut unknown_state = ask_json(request_id, ask_id);
+    unknown_state["state"] = json!("reopened");
+    cases.push(unknown_state);
+
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    for body in cases {
+        let app = Router::new().route(
+            "/v1/review-requests/{id}/asks/{ask}",
+            get(move || {
+                let body = body.clone();
+                async move { json_response(StatusCode::OK, body) }
+            }),
+        );
+        let (client, server) = serve(app).await;
+        let outcome = client
+            .ask(
+                ReviewAuth::new(&token, "producer"),
+                &expected_binding(request_id),
+                ask_id,
+            )
+            .await;
+        assert!(
+            matches!(
+                outcome,
+                Err(ReviewClientError::Protocol {
+                    failure: ReviewProtocolFailure::Body,
+                    ..
+                })
+            ),
+            "{outcome:?}"
+        );
+        server.abort();
+    }
+    // The subject the caller expects is what is compared, not the request's.
+    let app = Router::new().route(
+        "/v1/review-requests/{id}/asks/{ask}",
+        get(|| async {
+            json_response(
+                StatusCode::OK,
+                ask_json(Uuid::from_u128(7), Uuid::from_u128(5)),
+            )
+        }),
+    );
+    let (client, server) = serve(app).await;
+    assert!(matches!(
+        client
+            .ask(ReviewAuth::new(&token, "producer"), &other_binding, ask_id)
+            .await,
+        Err(ReviewClientError::Protocol {
+            failure: ReviewProtocolFailure::Body,
+            ..
+        })
+    ));
+    server.abort();
+}
+
+/// Every response the ask read and the answer call must refuse for a defined
+/// refusal status instead of mapping it to a typed outcome.
+fn refusals_that_are_not_typed_outcomes(status: StatusCode) -> Vec<(&'static str, Response<Body>)> {
+    const TRACE: &str = "0123456789abcdef0123456789abcdef";
+    vec![
+        (
+            "a body without a content type",
+            raw_response(status, None, "not empty"),
+        ),
+        (
+            "an empty body with a content type",
+            raw_response(status, Some("application/json"), ""),
+        ),
+        (
+            "a proxy page",
+            raw_response(status, Some("text/html"), "<html>bad gateway</html>"),
+        ),
+        (
+            "a problem whose status member differs",
+            problem_document(status, "request.not-found", 500, TRACE),
+        ),
+        (
+            "a problem whose trace id differs from traceparent",
+            problem_document(
+                status,
+                "request.not-found",
+                status.as_u16(),
+                "ffffffffffffffffffffffffffffffff",
+            ),
+        ),
+        (
+            "a route miss problem",
+            problem_document(status, "request.not-found", status.as_u16(), TRACE),
+        ),
+        (
+            "another named problem",
+            problem_document(status, "idempotency.key-reused", status.as_u16(), TRACE),
+        ),
+    ]
+}
+
+#[tokio::test]
+async fn ask_read_maps_only_an_empty_404_to_concealed_or_unknown() {
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let (request_id, ask_id) = (Uuid::from_u128(7), Uuid::from_u128(5));
+    let route = "/v1/review-requests/{id}/asks/{ask}";
+    let app = Router::new().route(
+        route,
+        get(|| async { empty_response(StatusCode::NOT_FOUND) }),
+    );
+    let (client, server) = serve(app).await;
+    let outcome = client
+        .ask(
+            ReviewAuth::new(&token, "producer"),
+            &expected_binding(request_id),
+            ask_id,
+        )
+        .await
+        .expect("an empty 404 is a defined outcome");
+    assert!(matches!(
+        outcome,
+        ReviewAskResponse::ConcealedOrUnknown { .. }
+    ));
+    server.abort();
+
+    for (name, response) in refusals_that_are_not_typed_outcomes(StatusCode::NOT_FOUND) {
+        let response = Arc::new(Mutex::new(Some(response)));
+        let app = Router::new().route(
+            route,
+            get(
+                move || async move { response.lock().expect("response").take().expect("one call") },
+            ),
+        );
+        let (client, server) = serve(app).await;
+        let outcome = client
+            .ask(
+                ReviewAuth::new(&token, "producer"),
+                &expected_binding(request_id),
+                ask_id,
+            )
+            .await;
+        assert!(
+            outcome.is_err(),
+            "{name} must not be an outcome: {outcome:?}"
+        );
+        server.abort();
+    }
+    // A named problem 404 is the provider's refusal, surfaced as such.
+    let app = Router::new().route(
+        route,
+        get(|| async { problem_with(StatusCode::NOT_FOUND, "request.not-found") }),
+    );
+    let (client, server) = serve(app).await;
+    assert!(matches!(
+        client
+            .ask(
+                ReviewAuth::new(&token, "producer"),
+                &expected_binding(request_id),
+                ask_id
+            )
+            .await,
+        Err(ReviewClientError::Problem { status: 404, .. })
+    ));
+    server.abort();
+
+    let app = Router::new().route(
+        route,
+        get(|| async { problem_with(StatusCode::SERVICE_UNAVAILABLE, "runtime.failure") }),
+    );
+    let (client, server) = serve(app).await;
+    assert!(matches!(
+        client
+            .ask(
+                ReviewAuth::new(&token, "producer"),
+                &expected_binding(request_id),
+                ask_id
+            )
+            .await,
+        Err(ReviewClientError::Problem { status: 503, .. })
+    ));
+    server.abort();
+}
+
+#[tokio::test]
+async fn answer_maps_an_empty_404_and_only_the_not_open_409_to_typed_outcomes() {
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let (request_id, ask_id) = (Uuid::from_u128(7), Uuid::from_u128(5));
+    let route = "/v1/review-requests/{id}/asks/{ask}/answer";
+    let answer = |client: ReviewClient| {
+        let token = &token;
+        async move {
+            client
+                .answer_ask(
+                    ReviewAuth::new(token, "producer"),
+                    "answer-5",
+                    &expected_binding(request_id),
+                    ask_id,
+                    &ask_answer(),
+                )
+                .await
+        }
+    };
+
+    let app = Router::new().route(
+        route,
+        post(|| async { empty_response(StatusCode::NOT_FOUND) }),
+    );
+    let (client, server) = serve(app).await;
+    assert!(matches!(
+        answer(client).await.expect("an empty 404 is an outcome"),
+        ReviewAskAnswerResponse::ConcealedOrUnknown { trace_id }
+            if trace_id == "0123456789abcdef0123456789abcdef"
+    ));
+    server.abort();
+
+    let app = Router::new().route(
+        route,
+        post(|| async { problem_with(StatusCode::CONFLICT, REVIEW_ASK_NOT_OPEN_PROBLEM) }),
+    );
+    let (client, server) = serve(app).await;
+    assert!(matches!(
+        answer(client).await.expect("the not-open 409 is an outcome"),
+        ReviewAskAnswerResponse::NotOpen { trace_id }
+            if trace_id == "0123456789abcdef0123456789abcdef"
+    ));
+    server.abort();
+
+    for status in [StatusCode::NOT_FOUND, StatusCode::CONFLICT] {
+        for (name, response) in refusals_that_are_not_typed_outcomes(status) {
+            let response = Arc::new(Mutex::new(Some(response)));
+            let app = Router::new().route(
+                route,
+                post(move || async move {
+                    response.lock().expect("response").take().expect("one call")
+                }),
+            );
+            let (client, server) = serve(app).await;
+            let outcome = answer(client).await;
+            assert!(
+                outcome.is_err(),
+                "{status} with {name} must not be an outcome: {outcome:?}"
+            );
+            server.abort();
+        }
+    }
+    // An empty 409 is not what a provider sends for a closed ask.
+    let app = Router::new().route(
+        route,
+        post(|| async { empty_response(StatusCode::CONFLICT) }),
+    );
+    let (client, server) = serve(app).await;
+    assert!(answer(client).await.is_err());
+    server.abort();
+
+    // A reused idempotency key stays a visible, deterministic problem.
+    let app = Router::new().route(
+        route,
+        post(|| async { problem_with(StatusCode::CONFLICT, "idempotency.key-reused") }),
+    );
+    let (client, server) = serve(app).await;
+    let error = answer(client)
+        .await
+        .expect_err("a different 409 is an error");
+    assert!(matches!(
+        &error,
+        ReviewClientError::Problem { status: 409, problem }
+            if problem.code.as_str() == "idempotency.key-reused"
+    ));
+    assert_eq!(
+        error.mutation_class(),
+        ReviewMutationErrorClass::Deterministic
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn answer_refuses_a_returned_ask_that_is_not_the_answered_one() {
+    let (request_id, ask_id) = (Uuid::from_u128(7), Uuid::from_u128(5));
+    let mut still_open = ask_json(request_id, ask_id);
+    still_open["state"] = json!("open");
+    let mut closed = ask_json(request_id, ask_id);
+    closed["state"] = json!("closed");
+    closed["closedAt"] = json!("2026-11-27T03:00:00Z");
+    let mut wrong_request = answered_ask_json(request_id, ask_id);
+    wrong_request["requestId"] = json!(Uuid::from_u128(8));
+    let mut wrong_ask = answered_ask_json(request_id, ask_id);
+    wrong_ask["askId"] = json!(Uuid::from_u128(6));
+    let mut wrong_subject = answered_ask_json(request_id, ask_id);
+    wrong_subject["subject"]["digest"] = json!(OTHER_DIGEST);
+
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    for body in [still_open, closed, wrong_request, wrong_ask, wrong_subject] {
+        let app = Router::new().route(
+            "/v1/review-requests/{id}/asks/{ask}/answer",
+            post(move || {
+                let body = body.clone();
+                async move { json_response(StatusCode::OK, body) }
+            }),
+        );
+        let (client, server) = serve(app).await;
+        let outcome = client
+            .answer_ask(
+                ReviewAuth::new(&token, "producer"),
+                "answer-5",
+                &expected_binding(request_id),
+                ask_id,
+                &ask_answer(),
+            )
+            .await;
+        assert!(
+            matches!(
+                outcome,
+                Err(ReviewClientError::Protocol {
+                    failure: ReviewProtocolFailure::Body,
+                    ..
+                })
+            ),
+            "{outcome:?}"
+        );
+        server.abort();
+    }
+}
+
+#[tokio::test]
+async fn answer_refuses_a_success_recorded_at_another_answer_time() {
+    let (request_id, ask_id) = (Uuid::from_u128(7), Uuid::from_u128(5));
+    let mut other_time = answered_ask_json(request_id, ask_id);
+    other_time["answeredAt"] = json!("2026-11-27T02:00:00.000001Z");
+    let app = Router::new().route(
+        "/v1/review-requests/{id}/asks/{ask}/answer",
+        post(move || {
+            let body = other_time.clone();
+            async move { json_response(StatusCode::OK, body) }
+        }),
+    );
+    let (client, server) = serve(app).await;
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let outcome = client
+        .answer_ask(
+            ReviewAuth::new(&token, "producer"),
+            "answer-5",
+            &expected_binding(request_id),
+            ask_id,
+            &ask_answer(),
+        )
+        .await;
+    assert!(
+        matches!(
+            outcome,
+            Err(ReviewClientError::Protocol {
+                failure: ReviewProtocolFailure::Body,
+                ..
+            })
+        ),
+        "{outcome:?}"
+    );
+    server.abort();
+}
+
+#[tokio::test]
+async fn answer_refuses_a_sub_microsecond_answer_time_before_http() {
+    let app = Router::new().fallback(|| async { empty_response(StatusCode::NO_CONTENT) });
+    let (client, server) = serve(app).await;
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let mut answer = ask_answer();
+    answer.answered_at += chrono::Duration::nanoseconds(1);
+    assert!(matches!(
+        client
+            .answer_ask(
+                ReviewAuth::new(&token, "producer"),
+                "answer-5",
+                &expected_binding(Uuid::from_u128(7)),
+                Uuid::from_u128(5),
+                &answer
+            )
+            .await,
+        Err(ReviewClientError::InvalidRequest { .. })
+    ));
+    server.abort();
+}
+
+#[tokio::test]
+async fn ask_calls_do_not_retry_and_classify_failures_for_the_caller() {
+    let attempts = Arc::new(Mutex::new(0usize));
+    let app = Router::new()
+        .route(
+            "/v1/review-requests/{id}/asks/{ask}/answer",
+            post(|State(attempts): State<Arc<Mutex<usize>>>| async move {
+                *attempts.lock().expect("attempts") += 1;
+                problem_with(StatusCode::SERVICE_UNAVAILABLE, "runtime.failure")
+            }),
+        )
+        .with_state(attempts.clone());
+    let (client, server) = serve(app).await;
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let error = client
+        .answer_ask(
+            ReviewAuth::new(&token, "producer"),
+            "answer-5",
+            &expected_binding(Uuid::from_u128(7)),
+            Uuid::from_u128(5),
+            &ask_answer(),
+        )
+        .await
+        .expect_err("503 is a failure");
+    assert_eq!(error.mutation_class(), ReviewMutationErrorClass::Ambiguous);
+    assert_eq!(*attempts.lock().expect("attempts"), 1);
+    server.abort();
+}
+
+#[tokio::test]
+async fn ask_calls_refuse_wrong_media_types_and_oversize_bodies() {
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let (request_id, ask_id) = (Uuid::from_u128(7), Uuid::from_u128(5));
+    let app = Router::new()
+        .route(
+            "/v1/review-requests/{id}/asks/{ask}",
+            get(|| async {
+                let mut response = json_response(
+                    StatusCode::OK,
+                    ask_json(Uuid::from_u128(7), Uuid::from_u128(5)),
+                );
+                response
+                    .headers_mut()
+                    .insert("content-type", HeaderValue::from_static("text/plain"));
+                response
+            }),
+        )
+        .route(
+            "/v1/review-requests/{id}/asks/{ask}/answer",
+            post(|| async {
+                json_response(StatusCode::OK, json!({"padding": "x".repeat(300_000)}))
+            }),
+        );
+    let (client, server) = serve(app).await;
+    assert!(matches!(
+        client
+            .ask(
+                ReviewAuth::new(&token, "producer"),
+                &expected_binding(request_id),
+                ask_id
+            )
+            .await,
+        Err(ReviewClientError::Protocol {
+            failure: ReviewProtocolFailure::MediaType,
+            ..
+        })
+    ));
+    assert!(matches!(
+        client
+            .answer_ask(
+                ReviewAuth::new(&token, "producer"),
+                "answer-5",
+                &expected_binding(request_id),
+                ask_id,
+                &ask_answer()
+            )
+            .await,
+        Err(ReviewClientError::Transport { .. })
+    ));
+    server.abort();
 }

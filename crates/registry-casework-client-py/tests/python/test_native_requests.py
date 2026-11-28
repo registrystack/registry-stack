@@ -125,6 +125,7 @@ class _Handler(BaseHTTPRequestHandler):
                     "version": "1",
                     "digest": f"sha256:{'a' * 64}",
                 },
+                "asks": [{'askId': '00000000-0000-4000-8000-000000000007', 'taskId': '00000000-0000-4000-8000-000000000001', 'text': 'Why?', 'wants': [{'kind': 'answer'}], 'askedAt': '2026-11-27T00:00:00Z', 'state': 'open', 'answer': {'text': 'source answer from BReg', 'documents': [], 'answeredAt': '2026-11-27T01:00:00Z'}}],
                 "requesterReference": "correction-42",
                 "policy": {
                     "id": "registry-correction",
@@ -449,6 +450,7 @@ class NativeRequestTests(unittest.TestCase):
             context["value"]["context"]["projection"]["displayReference"],
             "Correction 42",
         )
+        self.assertEqual(context["value"]["asks"][0]["answer"], {'text': 'source answer from BReg', 'documents': [], 'answeredAt': '2026-11-27T01:00:00Z'})
         observation = _Handler.observations[0]
         self.assertEqual(
             observation["path"], f"/tenant/v1/review-tasks/{ITEM_ID}/context"
@@ -532,6 +534,10 @@ class NativeRequestTests(unittest.TestCase):
             lambda: self.client.decide_review_task(
                 "", "staff", ITEM_ID, 1, "decision-key",
                 {"decision": {"type": "approve", "outcome": "approved"}},
+            ),
+            lambda: self.client.ask_applicant(
+                "", "staff", ITEM_ID, 1, "ask-key",
+                {"text": "Send the form.", "wants": [{"kind": "answer"}]},
             ),
             lambda: self.client.review_history("", "staff", ITEM_ID),
             lambda: self.client.add_review_note(

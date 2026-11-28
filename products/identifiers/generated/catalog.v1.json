@@ -30,11 +30,11 @@
       "description": "Base Registry Engine fixed Proposal lifecycle event schema, reproduced byte-for-byte from its packaged artifact.",
       "source": {
         "path": "crates/registry-breg/src/proposal_hooks.rs",
-        "sha256": "23fceb42341650d4f4a3477a025fe8a8065759a7f490ec98a0ff11281c23a917"
+        "sha256": "8536d155fb4b4007e70122255cbac89bc40ae0aaf42c60366c5c49e0d21caff6"
       },
       "artifact": {
         "path": "products/breg/generated/event-schemas/proposal-lifecycle.schema.json",
-        "sha256": "7d694df0140e03e1a4c1e6a564e52d69a7d334b9e0063d8aeded24d28b83d182",
+        "sha256": "0b68b183c193cd634e7e704051dbd87a4454fa8cc369177303b5faaae994b58e",
         "mediaType": "application/schema+json"
       }
     },
@@ -61,7 +61,7 @@
       "description": "The declared Evidence dependency could not be accepted.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "action.evidence_failed",
@@ -80,7 +80,7 @@
       "description": "The action guard was not satisfied.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "action.guard_failed",
@@ -99,7 +99,7 @@
       "description": "The action handler could not produce an accepted result.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "action.handler_failed",
@@ -118,7 +118,7 @@
       "description": "The action was refused by a declared business rule.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "action.refused",
@@ -137,7 +137,7 @@
       "description": "The file media type is not one the attachment slot accepts.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "attachment.content-type",
@@ -156,10 +156,48 @@
       "description": "The file content does not match its declared SHA-256 digest.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "attachment.digest-mismatch",
+        "httpStatuses": [
+          422
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-breg/attachment/limit-reached",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "breg",
+      "title": "Conflict",
+      "description": "The supporting document slot has reached its file limit.",
+      "source": {
+        "path": "crates/registry-breg/src/problem.rs",
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
+      },
+      "problem": {
+        "code": "attachment.limit-reached",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-breg/attachment/required",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "breg",
+      "title": "Unprocessable Entity",
+      "description": "The required attachment slot is empty.",
+      "source": {
+        "path": "crates/registry-breg/src/problem.rs",
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
+      },
+      "problem": {
+        "code": "attachment.required",
         "httpStatuses": [
           422
         ]
@@ -175,7 +213,7 @@
       "description": "The record attachment slot already holds a file and is write-once.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "attachment.slot-write-once",
@@ -194,12 +232,50 @@
       "description": "The file is larger than the attachment slot accepts.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "attachment.too-large",
         "httpStatuses": [
           413
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-breg/attachment/verification-pending",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "breg",
+      "title": "Conflict",
+      "description": "The attachment is awaiting verification. Refresh the Proposal before submitting.",
+      "source": {
+        "path": "crates/registry-breg/src/problem.rs",
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
+      },
+      "problem": {
+        "code": "attachment.verification-pending",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-breg/attachment/verification-rejected",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "breg",
+      "title": "Unprocessable Entity",
+      "description": "The attachment was rejected by verification. Replace or remove the file before submitting.",
+      "source": {
+        "path": "crates/registry-breg/src/problem.rs",
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
+      },
+      "problem": {
+        "code": "attachment.verification-rejected",
+        "httpStatuses": [
+          422
         ]
       }
     },
@@ -213,7 +289,7 @@
       "description": "The bearer token or delivery signature was not accepted.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "authentication.refused",
@@ -232,7 +308,7 @@
       "description": "The external view's indexed coverage is incomplete for this request.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "external_view.incomplete",
@@ -251,7 +327,7 @@
       "description": "The held response of the idempotency key expired; the key stays spent.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "idempotency.expired",
@@ -270,7 +346,7 @@
       "description": "The idempotency key is bound to another request.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "idempotency.key-reused",
@@ -289,7 +365,7 @@
       "description": "The chunk does not match the expected next chunk.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "ingestion.chunk_mismatch",
@@ -308,7 +384,7 @@
       "description": "The selected access profile does not match the run's bound profile.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "ingestion.profile_mismatch",
@@ -327,7 +403,7 @@
       "description": "The stored receipt of the chunk was erased.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "ingestion.receipt_erased",
@@ -346,7 +422,7 @@
       "description": "The ingestion run is blocked and refuses further chunks.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "ingestion.run_blocked",
@@ -365,7 +441,7 @@
       "description": "The ingestion run is not open for this transition.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "ingestion.run_not_open",
@@ -384,7 +460,7 @@
       "description": "The lookup did not resolve exactly one record.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "lookup.unresolved",
@@ -403,7 +479,7 @@
       "description": "The mutation conflicts with current state.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "mutation.conflict",
@@ -422,7 +498,7 @@
       "description": "A production registry refuses task assertions issued in development.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "platform.task-grant.development-assertion",
@@ -441,7 +517,7 @@
       "description": "The mutation precondition failed.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "precondition.failed",
@@ -460,7 +536,7 @@
       "description": "The mutation precondition is required.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "precondition.required",
@@ -479,7 +555,7 @@
       "description": "The review rejected this Proposal, and a rejection is final. A review result of changes-requested is what lets a Proposal be revised for another attempt.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "proposal.rejected",
@@ -498,7 +574,7 @@
       "description": "The current review result does not match the retained approval.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "proposal.review_result_mismatch",
@@ -517,7 +593,7 @@
       "description": "The review result and application receipt of the submission are no longer retained.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "proposal.submission_expired",
@@ -536,7 +612,7 @@
       "description": "The query cursor is invalid.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "query.cursor_invalid",
@@ -555,7 +631,7 @@
       "description": "The list did not carry the search criteria its access profile requires.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "query.filter_required",
@@ -574,7 +650,7 @@
       "description": "The query request is invalid.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "query.invalid",
@@ -593,7 +669,7 @@
       "description": "The access profile requires a valid Registry-Access-Reason header.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "request.access_reason_required",
@@ -612,7 +688,7 @@
       "description": "The request is invalid.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "request.invalid",
@@ -631,7 +707,7 @@
       "description": "The request timed out.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "request.timeout",
@@ -650,7 +726,7 @@
       "description": "The requested resource was not found.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "resource.not_found",
@@ -669,7 +745,7 @@
       "description": "The Registry field-encryption service is unavailable.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "runtime.field_encryption.unavailable",
@@ -688,7 +764,7 @@
       "description": "Registry runtime is not ready.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "runtime.not_ready",
@@ -707,7 +783,7 @@
       "description": "The Registry mutation service is unavailable.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "service.unavailable",
@@ -726,7 +802,7 @@
       "description": "The Registry data service is unavailable.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "source.unavailable",
@@ -745,7 +821,7 @@
       "description": "A statistical dataset contains a code outside its declared domain.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "statistical_dataset.domain_violation",
@@ -764,7 +840,7 @@
       "description": "The statistical dataset release operation is not eligible.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "statistical_dataset.release_refused",
@@ -783,7 +859,7 @@
       "description": "The statistical dataset computation was superseded or its package changed.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "statistical_dataset.version_conflict",
@@ -802,7 +878,7 @@
       "description": "The statistical dataset version was withdrawn.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "statistical_dataset.version_withdrawn",
@@ -821,7 +897,7 @@
       "description": "The request media type is not supported.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "unsupported.media_type",
@@ -840,7 +916,7 @@
       "description": "The write falls outside what the selected access profile may write: its row boundary or a disclosure condition.",
       "source": {
         "path": "crates/registry-breg/src/problem.rs",
-        "sha256": "d0d2eaca9b4ff3f8dd001223effc38c3d5a1e49a706c1afc295c8371d6c79465"
+        "sha256": "0a5af15e39b51c861ead257e5fadf0ddae53ad2ea65a702d9cdf3aee880ce15e"
       },
       "problem": {
         "code": "write.outside-boundary",
@@ -859,7 +935,7 @@
       "description": "Choose cover assignments that do not return to an earlier person during a shared period.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "absence.cover-cycle",
@@ -878,7 +954,7 @@
       "description": "Set until later than from.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "absence.invalid-period",
@@ -897,7 +973,7 @@
       "description": "Adjust the period so this person has no overlapping absence.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "absence.overlap",
@@ -916,7 +992,7 @@
       "description": "Choose a different staff member as cover.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "absence.self-cover",
@@ -935,7 +1011,7 @@
       "description": "The bearer credential is missing, invalid, or expired. Sign in again.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "authentication.refused",
@@ -954,7 +1030,7 @@
       "description": "Create a new recompute preview and review it before applying.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "clock.recompute-preview-expired",
@@ -973,7 +1049,7 @@
       "description": "This cursor has expired. Start again without a cursor and deduplicate entries by eventId.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "cursor.expired",
@@ -992,7 +1068,7 @@
       "description": "The cursor is invalid for this request.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "cursor.invalid",
@@ -1011,7 +1087,7 @@
       "description": "The stored response for this idempotency key has expired. Reconcile the original operation before choosing a new key.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "idempotency.expired",
@@ -1030,7 +1106,7 @@
       "description": "This idempotency key was used for a different request.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "idempotency.key-reused",
@@ -1049,7 +1125,7 @@
       "description": "Your current Casework authority does not allow this operation.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "operation.not-authorized",
@@ -1068,7 +1144,7 @@
       "description": "The item or directory changed since you loaded it. Reload and try again.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "precondition.failed",
@@ -1087,7 +1163,7 @@
       "description": "This mutation requires the revision that you loaded.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "precondition.required",
@@ -1106,7 +1182,7 @@
       "description": "The selected Casework profile does not authorize this request.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "profile.not-authorized",
@@ -1125,7 +1201,7 @@
       "description": "This action is reserved for a human session.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "profile.not-human",
@@ -1144,7 +1220,7 @@
       "description": "The request body exceeds the one MiB limit.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "request.body-too-large",
@@ -1163,7 +1239,7 @@
       "description": "The Casework request is invalid.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "request.invalid",
@@ -1182,7 +1258,7 @@
       "description": "The limit query parameter must be from 1 to 100, or from 1 to 1000 on the directory absence list. Omit it for the default page size.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "request.limit-out-of-range",
@@ -1201,7 +1277,7 @@
       "description": "This route does not accept that HTTP method.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "request.method-not-allowed",
@@ -1220,7 +1296,7 @@
       "description": "The requested Casework route does not exist.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "request.not-found",
@@ -1239,7 +1315,7 @@
       "description": "The request body does not match the Casework contract.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "request.unprocessable",
@@ -1258,12 +1334,145 @@
       "description": "Send a JSON request body with Content-Type application/json.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "request.unsupported-media-type",
         "httpStatuses": [
           415
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/review/ask-already-open",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Review ask already open",
+      "description": "Wait for the open ask on this request to be answered or closed before asking again.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
+      },
+      "problem": {
+        "code": "review.ask-already-open",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/review/ask-answer-time-invalid",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Review ask answer time invalid",
+      "description": "Report the time the applicant's answer was committed: not before the ask was made and no more than five minutes ahead of Casework's clock.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
+      },
+      "problem": {
+        "code": "review.ask-answer-time-invalid",
+        "httpStatuses": [
+          422
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/review/ask-limit-reached",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Review ask limit reached",
+      "description": "This review request has reached its limit of 50 asks. Continue the review without opening another ask.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
+      },
+      "problem": {
+        "code": "review.ask-limit-reached",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/review/ask-not-offered",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Review ask not offered",
+      "description": "The active stage of this review policy does not let a reviewer ask the applicant.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
+      },
+      "problem": {
+        "code": "review.ask-not-offered",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/review/ask-not-open",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Review ask not open",
+      "description": "This ask was already answered or closed, or the applicant answered after its due date.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
+      },
+      "problem": {
+        "code": "review.ask-not-open",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/review/ask-producer-unsupported",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Review ask producer unsupported",
+      "description": "The producer of this request does not read asks, so the reviewer cannot ask the applicant.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
+      },
+      "problem": {
+        "code": "review.ask-producer-unsupported",
+        "httpStatuses": [
+          409
+        ]
+      }
+    },
+    {
+      "uri": "https://id.registrystack.org/problems/registry-casework/review/ask-task-inactive",
+      "kind": "problem",
+      "status": "active",
+      "compatibilityLine": "v1alpha1",
+      "owner": "casework",
+      "title": "Review ask task inactive",
+      "description": "Ask from a task at the active stage of a request that is still under review.",
+      "source": {
+        "path": "crates/registry-casework/src/problem.rs",
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
+      },
+      "problem": {
+        "code": "review.ask-task-inactive",
+        "httpStatuses": [
+          409
         ]
       }
     },
@@ -1277,7 +1486,7 @@
       "description": "Each approval in this stage must be supplied by a different reviewer.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "review.distinct-approver-required",
@@ -1296,7 +1505,7 @@
       "description": "You submitted this request, and this review stage excludes the person who submitted it. Another reviewer must take it.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "review.initiator-excluded",
@@ -1315,7 +1524,7 @@
       "description": "This review policy excludes the person who submitted the request, so the request must name its initiator.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "review.initiator-required",
@@ -1334,7 +1543,7 @@
       "description": "The expected review policy binding does not match the active policy.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "review.policy-mismatch",
@@ -1353,7 +1562,7 @@
       "description": "Narrow the queue or exact subject query to complete it within the configured read budget.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "review.query-too-broad",
@@ -1372,7 +1581,7 @@
       "description": "The retained review result is no longer available. Reconcile through the producer's retained source correlation.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "review.result-expired",
@@ -1391,7 +1600,7 @@
       "description": "The same producer, source subject, version, and policy were already submitted with different canonical content.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "review.submission-conflict",
@@ -1410,7 +1619,7 @@
       "description": "Claim the review task before deciding it, and decide only while the claim remains current.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "review.task-not-held",
@@ -1429,7 +1638,7 @@
       "description": "Casework could not complete the request.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "runtime.failure",
@@ -1448,7 +1657,7 @@
       "description": "Casework storage is unavailable. Try again after the service recovers.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "service.unavailable",
@@ -1467,7 +1676,7 @@
       "description": "Omit the Registry-Source-Profile header for this request.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "source-profile.not-applicable",
@@ -1486,7 +1695,7 @@
       "description": "Send the Registry-Source-Profile header to select the source profile for this request.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "source-profile.required",
@@ -1505,7 +1714,7 @@
       "description": "The source returned a response that does not match its registered contract.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "source.bad-gateway",
@@ -1524,7 +1733,7 @@
       "description": "Deploy the same Registry Stack version for Casework and its source.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "source.version-mismatch",
@@ -1543,7 +1752,7 @@
       "description": "The source did not report its engine version. Deploy matching Registry Stack versions.",
       "source": {
         "path": "crates/registry-casework/src/problem.rs",
-        "sha256": "4b2bbc4f422cb051a24673c7cb496eecedb142fb3830442ee76b3d376f94ad10"
+        "sha256": "be58eef528abde414d32523a76b329645c485bd020ca0d4fddb8b9eb266c274c"
       },
       "problem": {
         "code": "source.version-unavailable",
@@ -5022,7 +5231,7 @@
       "description": "Base Registry Engine portable Action contract export schema, reproduced from the canonical compiled project.",
       "source": {
         "path": "crates/registry-breg/src/artifacts.rs",
-        "sha256": "d0fa369a7d3294be14150a304a08c8ec9a3fcc3972c8202b93efe78525e05991"
+        "sha256": "751481c0f3327cc162941e0edb94c853511e2e4db2e8408f95abdf472b5693c0"
       },
       "artifact": {
         "path": "products/breg/generated/facility/generated/action-contracts.schema.json",
@@ -5157,20 +5366,20 @@
       }
     },
     {
-      "uri": "https://id.registrystack.org/schemas/breg/lifecycle-explanation/lifecycle-explanation.v1alpha8.schema.json",
+      "uri": "https://id.registrystack.org/schemas/breg/lifecycle-explanation/lifecycle-explanation.v1alpha9.schema.json",
       "kind": "schema",
       "status": "active",
-      "compatibilityLine": "v1alpha8",
+      "compatibilityLine": "v1alpha9",
       "owner": "breg",
       "title": "LifecycleExplanation",
       "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test.",
       "source": {
         "path": "products/breg/contracts/explain/LifecycleExplanation.schema.json",
-        "sha256": "738c5151b6085ee5a5da8d60334f70b179e740bc1af9cb2888325436c338d546"
+        "sha256": "56f3cb89b5feaa96796bcd575dc25776cd4251d58f4f6621e11676907838f952"
       },
       "artifact": {
         "path": "products/breg/contracts/explain/LifecycleExplanation.schema.json",
-        "sha256": "738c5151b6085ee5a5da8d60334f70b179e740bc1af9cb2888325436c338d546",
+        "sha256": "56f3cb89b5feaa96796bcd575dc25776cd4251d58f4f6621e11676907838f952",
         "mediaType": "application/schema+json"
       }
     },
@@ -5260,7 +5469,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-module.schema.json",
-        "sha256": "5845c55619e88b733308991629e48ec5ada815271cdbece040a646f89beb34a6",
+        "sha256": "4731bfc5893e72e2dabc063fdf3d9faeebbdc24662b292dca78b1e4d4b16ce37",
         "mediaType": "application/schema+json"
       }
     },
@@ -5278,7 +5487,7 @@
       },
       "artifact": {
         "path": "products/breg/generated/authoring/registry-project.schema.json",
-        "sha256": "a324136505c5eac049b4a9d7da7cfde01fca4dd97835260e14b857418de06a33",
+        "sha256": "307e44aeb162493357c2b0b5fcc3ae446e33607a49e73c90edc42b380c543a84",
         "mediaType": "application/schema+json"
       }
     },
@@ -5400,7 +5609,7 @@
       "description": "Registry Casework fixture JSON Schema.",
       "source": {
         "path": "crates/registry-casework-core/src/schema.rs",
-        "sha256": "aae3e2891d651ad99989ae4720c08991d954c0f3232e194ec68d18e30642a711"
+        "sha256": "2dcc5d47d3082f719f8a37e4aceb9db3f87b1f2fa523b6243ec268d10b7cb994"
       },
       "artifact": {
         "path": "products/casework/generated/fixture/fixture.schema.json",
@@ -5418,7 +5627,7 @@
       "description": "Registry Casework holiday set JSON Schema.",
       "source": {
         "path": "crates/registry-casework-core/src/schema.rs",
-        "sha256": "aae3e2891d651ad99989ae4720c08991d954c0f3232e194ec68d18e30642a711"
+        "sha256": "2dcc5d47d3082f719f8a37e4aceb9db3f87b1f2fa523b6243ec268d10b7cb994"
       },
       "artifact": {
         "path": "products/casework/generated/holiday-set/holiday-set.schema.json",
@@ -5436,11 +5645,11 @@
       "description": "Registry Casework project JSON Schema.",
       "source": {
         "path": "crates/registry-casework-core/src/schema.rs",
-        "sha256": "aae3e2891d651ad99989ae4720c08991d954c0f3232e194ec68d18e30642a711"
+        "sha256": "2dcc5d47d3082f719f8a37e4aceb9db3f87b1f2fa523b6243ec268d10b7cb994"
       },
       "artifact": {
         "path": "products/casework/generated/project/project.schema.json",
-        "sha256": "81ecfa33b288cab822fa9286b908e54fb641a297ee09a78e14bf3790c0b64b75",
+        "sha256": "d6cd27cf4dcd9672f83f8afa39637a2b26dd3bc51c17a17b3beba8c3b1bfb90c",
         "mediaType": "application/schema+json"
       }
     },
@@ -5458,7 +5667,7 @@
       },
       "artifact": {
         "path": "products/casework/contracts/cli/report.schema.json",
-        "sha256": "c4a6b498a853ea38f78a98167bbc0aea52282cdf9fb613f2852a719beac3b7d7",
+        "sha256": "cd29ba33d8d5f13dcd1489783534d8060bd7f1c5334aaea9e52618a57aa5a2e3",
         "mediaType": "application/schema+json"
       }
     },

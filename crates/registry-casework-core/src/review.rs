@@ -262,10 +262,64 @@ pub struct ReviewStagePolicy {
     #[serde(default, skip_serializing_if = "ReviewNegativeDecisionMode::is_settle")]
     #[cfg_attr(feature = "schema", schemars(extend("default" = "settle")))]
     pub negative_decisions: ReviewNegativeDecisionMode,
+    /// Lets the reviewer who holds a task at this stage ask the subject's
+    /// owner for more. Omission offers no ask and keeps the policy bytes
+    /// unchanged. Only an approval policy may declare it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asks: Option<ReviewStageAsksPolicy>,
     #[serde(default)]
     pub exclude_initiator: bool,
     #[serde(default)]
     pub exclude_previous_stage_reviewers: bool,
+}
+
+/// `asks: {}` offers an ask without a deadline or clock pause.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+#[cfg_attr(
+    feature = "schema",
+    schemars(extend("allOf" = [{
+        "if": {"properties": {"pauseClocks": {"const": true}}, "required": ["pauseClocks"]},
+        "then": {"required": ["answerWithin"]}
+    }]))
+)]
+pub struct ReviewStageAsksPolicy {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer_within: Option<crate::ElapsedDuration>,
+    #[serde(default, skip_serializing_if = "ReviewAskOnDue::is_default")]
+    pub on_due: ReviewAskOnDue,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pause_clocks: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum ReviewAskOnDue {
+    #[default]
+    ReturnToReviewer,
+}
+
+impl ReviewAskOnDue {
+    const fn is_default(&self) -> bool {
+        matches!(self, Self::ReturnToReviewer)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum ReviewResubmissionPolicy {
+    #[default]
+    FirstStage,
+    ResumeAtReturningStage,
+}
+
+impl ReviewResubmissionPolicy {
+    const fn is_default(&self) -> bool {
+        matches!(self, Self::FirstStage)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -445,6 +499,8 @@ impl ReviewStagePolicy {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewPolicy {
+    #[serde(default, skip_serializing_if = "ReviewResubmissionPolicy::is_default")]
+    pub resubmission: ReviewResubmissionPolicy,
     #[serde(deserialize_with = "crate::typed::local_id")]
     #[cfg_attr(feature = "schema", schemars(with = "registry_platform_yaml::LocalId"))]
     pub id: String,
@@ -667,6 +723,35 @@ impl ReviewPolicy {
             }
         }
         tag(ReviewPolicyError::FinalStageAdvisory, advisory_stages);
+
+        let mut asks = Findings::default();
+        for (index, stage) in self.stages.iter().enumerate() {
+            if stage
+                .asks
+                .as_ref()
+                .is_some_and(|asks| asks.pause_clocks && asks.answer_within.is_none())
+            {
+                asks.push(
+                    "casework.review-policy.ask-pause-requires-answer-within",
+                    format!("/stages/{index}/asks/answerWithin"),
+                    "pausing clocks requires an ask deadline",
+                    "Set answerWithin on this stage's asks, or disable pauseClocks.",
+                );
+            }
+        }
+        if self.purpose == ReviewPurpose::Answer {
+            for (index, stage) in self.stages.iter().enumerate() {
+                if stage.asks.is_some() {
+                    asks.push(
+                        "casework.review-policy.asks-in-answer-policy",
+                        format!("/stages/{index}/asks"),
+                        "an answer review policy cannot let a stage ask the applicant",
+                        "Remove asks, or make the review policy's purpose approval.",
+                    );
+                }
+            }
+        }
+        tag(ReviewPolicyError::StageAsks, asks);
 
         match self.purpose {
             ReviewPurpose::Approval => {
@@ -917,6 +1002,7 @@ impl ReviewPolicy {
         dependencies: crate::ReviewPolicyDependencies,
     ) -> Result<ReviewPolicyClosure, ReviewPolicyError> {
         let snapshot = ReviewPolicyClosure {
+            resubmission: self.resubmission,
             identity: ReviewPolicyIdentity {
                 id: self.id.clone(),
                 version: self.version.clone(),
@@ -954,6 +1040,8 @@ pub struct ReviewPolicyIdentity {
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ReviewPolicyClosure {
+    #[serde(default, skip_serializing_if = "ReviewResubmissionPolicy::is_default")]
+    pub resubmission: ReviewResubmissionPolicy,
     pub dependencies: crate::ReviewPolicyDependencies,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
@@ -1113,6 +1201,7 @@ impl ReviewPolicyClosure {
 
     fn as_policy(&self) -> ReviewPolicy {
         ReviewPolicy {
+            resubmission: self.resubmission,
             id: self.identity.id.clone(),
             label: self.label.clone(),
             version: self.identity.version.clone(),
@@ -1230,6 +1319,98 @@ pub struct ReviewTask {
     /// context remains subject to the source's current disclosure.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decision_receipt: Option<ReviewDecisionReceipt>,
+    /// An ask is waiting for the applicant, answered, or expired. The marker stays with the task
+    /// through release and reassignment and clears when the task is decided.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marker: Option<ReviewTaskMarker>,
+}
+
+/// What an ask of the applicant means for the task that made it.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum ReviewTaskMarker {
+    Waiting,
+    Answered,
+    Expired,
+}
+
+impl ReviewTaskMarker {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Waiting => "waiting",
+            Self::Answered => "answered",
+            Self::Expired => "expired",
+        }
+    }
+}
+
+/// A reviewer's ask of the applicant, sent by the task holder.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewTaskAskRequest {
+    #[cfg_attr(
+        feature = "schema",
+        schemars(
+            length(min = 1, max = MAXIMUM_PUBLIC_REASON_BYTES),
+            extend("x-maximum-utf8-bytes" = MAXIMUM_PUBLIC_REASON_BYTES)
+        )
+    )]
+    pub text: String,
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(max = registry_review_protocol::MAXIMUM_ASK_WANTS))
+    )]
+    pub wants: Vec<registry_review_protocol::ReviewAskWant>,
+}
+
+impl ReviewTaskAskRequest {
+    /// The text is plain and bounded like a public reason. The wants are
+    /// distinct and at most the protocol's bound.
+    pub fn check(&self) -> Result<(), registry_review_protocol::ProtocolError> {
+        check_public_reason(&self.text)?;
+        let distinct = self
+            .wants
+            .iter()
+            .enumerate()
+            .all(|(index, want)| !self.wants[..index].contains(want));
+        if self.wants.len() > registry_review_protocol::MAXIMUM_ASK_WANTS || !distinct {
+            return Err(registry_review_protocol::ProtocolError::AskWants);
+        }
+        Ok(())
+    }
+}
+
+/// The ask a holder opened and the task as it now stands.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewTaskAsked {
+    pub task: ReviewTask,
+    pub ask: registry_review_protocol::ReviewAsk,
+}
+
+/// An ask as a reviewer reads it in the task context.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewContextAsk {
+    pub ask_id: Uuid,
+    /// The task that asked.
+    pub task_id: Uuid,
+    pub text: String,
+    pub wants: Vec<registry_review_protocol::ReviewAskWant>,
+    pub asked_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due_at: Option<DateTime<Utc>>,
+    pub state: registry_review_protocol::ReviewAskState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answered_at: Option<DateTime<Utc>>,
+    /// Live source content. Casework retains only its own answer notification time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<crate::ReviewContextAnswer>,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1345,6 +1526,9 @@ pub struct ReviewTaskContext {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result_constraints: Option<Value>,
     pub context: ReviewTaskContextData,
+    /// The asks of the applicant on this request, oldest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub asks: Vec<ReviewContextAsk>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -1434,6 +1618,7 @@ pub struct ReviewAccountabilityRecord {
 #[serde(rename_all = "kebab-case")]
 pub enum ReviewClockState {
     Running,
+    Paused,
     Completed,
     Cancelled,
     SourceFactsMissing,
@@ -1666,10 +1851,26 @@ pub struct ReviewProgress {
     pub active_stage: u16,
     #[serde(default)]
     pub decisions: Vec<Decision>,
+    /// Reviewers who decided a stage, up to and including the returning stage,
+    /// of the earlier rounds a resumed request continues. Each counts as a
+    /// previous-stage reviewer of every stage of this request above the stage
+    /// they decided.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub prior_stage_reviewers: Vec<PriorStageReviewer>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result_constraints: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settlement: Option<ReviewSettlement>,
+}
+
+/// A reviewer of an earlier round and the lowest stage index they decided in
+/// it. Earlier rounds' indices are compared with the resumed request's stages.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PriorStageReviewer {
+    pub reviewer: IssuerPrincipal,
+    pub stage_index: u16,
 }
 
 impl ReviewProgress {
@@ -1688,6 +1889,7 @@ impl ReviewProgress {
             initiator,
             active_stage: 0,
             decisions: Vec::new(),
+            prior_stage_reviewers: Vec::new(),
             result_constraints,
             settlement: None,
         })
@@ -1785,10 +1987,11 @@ pub fn record_review_decision(
         return Err(ReviewDecisionError::InitiatorExcluded);
     }
     if stage.exclude_previous_stage_reviewers
-        && progress
-            .decisions
-            .iter()
-            .any(|recorded| recorded.stage_id != stage.id && recorded.reviewer == decision.reviewer)
+        && (progress.decisions.iter().any(|recorded| {
+            recorded.stage_id != stage.id && recorded.reviewer == decision.reviewer
+        }) || progress.prior_stage_reviewers.iter().any(|prior| {
+            prior.reviewer == decision.reviewer && prior.stage_index < progress.active_stage
+        }))
     {
         return Err(ReviewDecisionError::PreviousStageReviewerExcluded);
     }
@@ -2018,6 +2221,8 @@ pub enum ReviewPolicyError {
     Stages,
     #[error("the final review stage cannot be advisory")]
     FinalStageAdvisory,
+    #[error("stage asks require an approval policy and a due date when pausing clocks")]
+    StageAsks,
     #[error("review stage identifiers, queues, or deciding profiles are invalid")]
     StageIdentity,
     #[error("review clock identifiers must be unique and bounded")]
@@ -2992,6 +3197,7 @@ mod tests {
             required_approvals,
             outcomes: None,
             negative_decisions: ReviewNegativeDecisionMode::Settle,
+            asks: None,
             exclude_initiator: true,
             exclude_previous_stage_reviewers: true,
         }
@@ -2999,6 +3205,7 @@ mod tests {
 
     fn approval_policy(stages: Vec<ReviewStagePolicy>) -> ReviewPolicy {
         ReviewPolicy {
+            resubmission: ReviewResubmissionPolicy::default(),
             id: "registry-correction".to_owned(),
             label: None,
             version: "1".to_owned(),
@@ -3049,6 +3256,7 @@ mod tests {
 
     fn answer_policy() -> ReviewPolicy {
         ReviewPolicy {
+            resubmission: ReviewResubmissionPolicy::default(),
             id: "standalone-question".to_owned(),
             label: None,
             version: "1".to_owned(),
@@ -3116,6 +3324,7 @@ mod tests {
             staffing_diagnostic: None,
             decided_by_caller: None,
             decision_receipt: None,
+            marker: None,
         }
     }
 
@@ -3341,6 +3550,54 @@ mod tests {
     }
 
     #[test]
+    fn a_resumed_request_excludes_reviewers_of_the_earlier_rounds_prior_stages() {
+        // (earlier round's stage, active stage, stage flag, excluded)
+        for (decided_stage, active_stage, exclude, excluded) in [
+            (0, 1, true, true),
+            (0, 1, false, false),
+            // A reviewer of the returning stage may review it again.
+            (1, 1, true, false),
+            (1, 2, true, true),
+            (1, 2, false, false),
+        ] {
+            let stages = ["first", "second", "third"]
+                .into_iter()
+                .map(|id| {
+                    let mut policy = stage(id, 1);
+                    policy.exclude_previous_stage_reviewers = exclude;
+                    policy
+                })
+                .collect();
+            let snapshot = approval_policy(stages)
+                .closure_with(crate::ReviewPolicyDependencies::default())
+                .unwrap();
+            let request_id = Uuid::from_u128(101);
+            let mut progress = ReviewProgress::new(request_id, None, None, &snapshot).unwrap();
+            progress.active_stage = active_stage;
+            progress.prior_stage_reviewers = vec![PriorStageReviewer {
+                reviewer: person("a"),
+                stage_index: decided_stage,
+            }];
+            let stage_id = snapshot.stages[usize::from(active_stage)].id.clone();
+            let returning = task(request_id, active_stage, &stage_id, 1, "a");
+            let decided = record_review_decision(
+                &snapshot,
+                &mut progress,
+                &returning,
+                approve(&returning, person("a")),
+            );
+            if excluded {
+                assert_eq!(
+                    decided,
+                    Err(ReviewDecisionError::PreviousStageReviewerExcluded)
+                );
+            } else {
+                assert!(decided.is_ok(), "{decided:?}");
+            }
+        }
+    }
+
+    #[test]
     fn empty_or_zero_count_stages_are_refused_and_insufficient_staffing_stays_open() {
         assert_eq!(
             approval_policy(vec![]).check(),
@@ -3485,6 +3742,7 @@ mod tests {
                     required_approvals: MAXIMUM_REVIEW_APPROVALS_PER_STAGE,
                     outcomes: None,
                     negative_decisions: ReviewNegativeDecisionMode::Settle,
+                    asks: None,
                     exclude_initiator: true,
                     exclude_previous_stage_reviewers: true,
                 })
@@ -4448,6 +4706,142 @@ mod tests {
             decoded.negative_decisions,
             ReviewNegativeDecisionMode::Settle
         );
+    }
+
+    #[test]
+    fn a_stage_without_asks_keeps_its_policy_bytes_and_digest() {
+        let plain = approval_policy(vec![stage("review", 1)]);
+        let encoded = serde_json::to_value(&plain.stages[0]).unwrap();
+        assert!(encoded.get("asks").is_none());
+
+        let mut asking = plain.clone();
+        asking.stages[0].asks = Some(ReviewStageAsksPolicy::default());
+        let encoded = serde_json::to_value(&asking.stages[0]).unwrap();
+        assert_eq!(encoded["asks"], json!({}));
+        let decoded: ReviewStagePolicy = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded.asks, Some(ReviewStageAsksPolicy::default()));
+
+        let defaults = crate::ReviewPolicyDependencies::default();
+        let plain_digest = plain.digest_with(&defaults).unwrap();
+        assert_ne!(plain_digest, asking.digest_with(&defaults).unwrap());
+        // The same policy without the member decodes and digests as before.
+        let without: ReviewPolicy =
+            serde_json::from_value(serde_json::to_value(&plain).unwrap()).unwrap();
+        assert_eq!(plain_digest, without.digest_with(&defaults).unwrap());
+    }
+
+    #[test]
+    fn asks_reject_unknown_options() {
+        let refused = serde_json::from_value::<ReviewStagePolicy>(json!({
+            "id": "review", "queue": "review", "decidingProfiles": ["reviewer"],
+            "requiredApprovals": 1, "asks": {"dueDays": 3}
+        }));
+        assert!(refused.is_err());
+    }
+
+    #[test]
+    fn ask_timing_options_and_resubmission_round_trip_without_changing_defaults() {
+        let original = approval_policy(vec![stage("review", 1)]);
+        let original_bytes = serde_json::to_value(&original).unwrap();
+        let dependencies = crate::ReviewPolicyDependencies::default();
+        let original_digest = original.digest_with(&dependencies).unwrap();
+        let mut configured = original_bytes.clone();
+        configured["stages"][0]["asks"] = json!({
+            "answerWithin": {"hours": 48},
+            "onDue": "return-to-reviewer",
+            "pauseClocks": true
+        });
+        configured["resubmission"] = json!("resume-at-returning-stage");
+        let policy: ReviewPolicy = serde_json::from_value(configured).expect("timing options");
+        let encoded = serde_json::to_value(&policy).unwrap();
+        assert_eq!(
+            encoded["stages"][0]["asks"]["answerWithin"],
+            json!({"hours": 48})
+        );
+        assert_eq!(encoded["stages"][0]["asks"]["pauseClocks"], true);
+        assert_eq!(encoded["resubmission"], "resume-at-returning-stage");
+        assert_ne!(policy.digest_with(&dependencies).unwrap(), original_digest);
+        let mut defaults = original_bytes.clone();
+        defaults["resubmission"] = json!("first-stage");
+        let defaults: ReviewPolicy = serde_json::from_value(defaults).unwrap();
+        assert_eq!(serde_json::to_value(&defaults).unwrap(), original_bytes);
+        assert_eq!(
+            defaults.digest_with(&dependencies).unwrap(),
+            original_digest
+        );
+        let asks: ReviewStageAsksPolicy = serde_json::from_value(json!({
+            "pauseClocks": false, "onDue": "return-to-reviewer"
+        }))
+        .unwrap();
+        assert_eq!(serde_json::to_value(asks).unwrap(), json!({}));
+    }
+
+    #[test]
+    fn only_an_approval_policy_may_declare_asks() {
+        let mut approval = approval_policy(vec![stage("review", 1)]);
+        approval.stages[0].asks = Some(ReviewStageAsksPolicy::default());
+        assert_eq!(approval.check(), Ok(()));
+
+        let mut answer = answer_policy();
+        answer.stages[0].asks = Some(ReviewStageAsksPolicy::default());
+        assert_eq!(answer.check(), Err(ReviewPolicyError::StageAsks));
+        let finding = answer
+            .findings()
+            .into_iter()
+            .find(|finding| finding.code == "casework.review-policy.asks-in-answer-policy")
+            .expect("an answer policy that asks is reported");
+        assert_eq!(finding.pointer, "/stages/0/asks");
+    }
+
+    #[test]
+    fn pausing_asks_require_a_due_date() {
+        let mut policy = approval_policy(vec![stage("review", 1)]);
+        policy.stages[0].asks = Some(ReviewStageAsksPolicy {
+            pause_clocks: true,
+            ..Default::default()
+        });
+        let finding = policy
+            .findings()
+            .into_iter()
+            .find(|finding| {
+                finding.code == "casework.review-policy.ask-pause-requires-answer-within"
+            })
+            .expect("unbounded clock pause must be reported");
+        assert_eq!(finding.pointer, "/stages/0/asks/answerWithin");
+        assert_eq!(policy.check(), Err(ReviewPolicyError::StageAsks));
+        policy.stages[0].asks.as_mut().unwrap().answer_within =
+            Some(crate::ElapsedDuration::Hours(1));
+        assert_eq!(policy.check(), Ok(()));
+    }
+
+    #[test]
+    fn an_ask_request_bounds_its_text_and_wants() {
+        use registry_review_protocol::ReviewAskWant;
+        let ask = |text: &str, wants: Vec<ReviewAskWant>| ReviewTaskAskRequest {
+            text: text.to_owned(),
+            wants,
+        };
+        assert_eq!(
+            ask("Send the form.", vec![ReviewAskWant::Answer {}]).check(),
+            Ok(())
+        );
+        assert_eq!(ask("Send the form.", vec![]).check(), Ok(()));
+        assert!(ask("", vec![]).check().is_err());
+        assert!(ask("  ", vec![]).check().is_err());
+        assert!(ask("bell\u{7}", vec![]).check().is_err());
+        assert!(ask(&"x".repeat(MAXIMUM_PUBLIC_REASON_BYTES + 1), vec![])
+            .check()
+            .is_err());
+        assert!(ask(
+            "ok",
+            vec![ReviewAskWant::Answer {}, ReviewAskWant::Answer {}]
+        )
+        .check()
+        .is_err());
+        let refused = serde_json::from_value::<ReviewTaskAskRequest>(
+            json!({"text": "ok", "wants": [], "dueAt": "2026-12-01T00:00:00Z"}),
+        );
+        assert!(refused.is_err());
     }
 
     #[test]

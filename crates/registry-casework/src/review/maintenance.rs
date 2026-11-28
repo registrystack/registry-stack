@@ -8,6 +8,7 @@ impl CaseworkService {
         if !self.store.audit_ready().await {
             return Err(StoreError::AuditUnavailable.into());
         }
+        let expired = self.store.expire_due_review_asks(maximum).await?;
         let candidates = self.store.due_review_clock_tasks(maximum).await?;
         let mut verified = Vec::new();
         for task_id in candidates {
@@ -40,9 +41,11 @@ impl CaseworkService {
                 self.store.defer_review_clock_task(task_id).await?;
             }
         }
-        self.store
+        let applied = self
+            .store
             .process_due_review_clocks(maximum, &verified)
-            .await
+            .await?;
+        Ok(expired + applied)
     }
 }
 impl PostgresStore {
@@ -163,7 +166,7 @@ impl PostgresStore {
                 .ok_or(ReviewRuntimeError::Corrupt)?;
             let Some(occurrence) = transaction
                 .query_opt(
-                    "SELECT policy,state,anchor_at,holiday_document,reminders,steps
+                    "SELECT policy,state,anchor_at,holiday_document,reminders,steps,paused_duration_micros
                      FROM casework_review_clock_occurrences
                      WHERE clock_occurrence_id=$1 AND scope='activity'
                        AND ((state='source-facts-missing'
@@ -217,9 +220,10 @@ impl PostgresStore {
                     continue;
                 };
                 let holiday: HolidaySetDocument = serde_json::from_value(holiday_row.get(0))?;
-                let evaluated =
+                let mut evaluated =
                     evaluate_stage_clock(&definition.clock, calendar, &holiday, anchor_at)
                         .map_err(|error| clock_evaluation_error(&definition.clock, error))?;
+                super::ask_clocks::shift_evaluation(&mut evaluated, occurrence.get(6))?;
                 let next_action_at = next_review_clock_action(
                     &evaluated.reminders,
                     &evaluated.steps,
@@ -566,6 +570,14 @@ impl PostgresStore {
             .execute(
                 "DELETE FROM casework_review_decisions d USING casework_review_requests r
                  WHERE d.request_id=r.request_id AND r.request_id=ANY($2)
+                   AND r.result_available_until<=$1",
+                &[&now, &selected],
+            )
+            .await?;
+        transaction
+            .execute(
+                "DELETE FROM casework_review_prior_stage_reviewers p USING casework_review_requests r
+                 WHERE p.request_id=r.request_id AND r.request_id=ANY($2)
                    AND r.result_available_until<=$1",
                 &[&now, &selected],
             )

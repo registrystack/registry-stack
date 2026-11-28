@@ -525,6 +525,8 @@ pub struct CompiledProposalPolicy {
     pub retention: CompiledProposalRetentionMode,
     pub review_context: Option<crate::contract::ProposalReviewContextSource>,
     pub attachments: BTreeMap<String, CompiledAttachmentSlot>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub additions: Option<crate::contract::AdditionSlotSource>,
     /// Proposal files that applied effects reference from record slots, in
     /// effect order.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

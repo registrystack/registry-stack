@@ -40,6 +40,9 @@ does not name is refused with `operation.not-authorized`.
 | POST | `/v1/review-requests/{request_id}/cancel` | Requester | The cancellation |
 | GET | `/v1/review-requests/{request_id}/result` | Requester | `200` with the ReviewResult; bodiless `202` pending, `410` erased |
 | GET | `/v1/review-results` | Requester | A resumable page of settled results |
+| GET | `/v1/review-asks` | Requester that reads asks | A resumable page of ask announcements, `410` past retention |
+| GET | `/v1/review-requests/{request_id}/asks/{ask_id}` | Requester that created the request | The ask; an empty `404` for any other ask |
+| POST | `/v1/review-requests/{request_id}/asks/{ask_id}/answer` | Requester that created the request | The answered ask; `409` `review.ask-not-open` when it is not open |
 | GET | `/v1/review-requests/{request_id}/history`, `/clocks` | Reviewer or requester | History; clocks |
 | POST | `/v1/review-requests/{request_id}/notes` | Reviewer; requester for requester-audience notes | The entry |
 | GET | `/v1/review-tasks`, `/next`, `/holdings`, `/own-decisions` | Staff, supervisor | ReviewTasks |
@@ -50,6 +53,7 @@ does not name is refused with `operation.not-authorized`.
 | POST | `/v1/review-tasks/{task_id}/delegate` | A reviewer whose profile decides the stage | The task |
 | GET, PUT, DELETE | `/v1/review-tasks/{task_id}/draft` | The holder | The private draft; `204` on delete |
 | POST | `/v1/review-tasks/{task_id}/decisions` | The holder | `204` |
+| POST | `/v1/review-tasks/{task_id}/asks` | The holder, at a stage that declares `asks` | The task with its `waiting` marker, and the ask |
 | GET | `/v1/review-tasks/{task_id}/task-templates` | Staff, supervisor | Task grant previews |
 | GET, POST | `/v1/review-tasks/{task_id}/task-grants` | Staff, supervisor | Grants on the task; the approved grant |
 | POST | `/v1/review-tasks/{task_id}/task-grants/{grant_id}/revoke` | Staff, supervisor | The revocation |

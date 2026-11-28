@@ -242,6 +242,7 @@ fn json_fixture_response(value: Value) -> impl IntoResponse {
 #[tokio::test]
 async fn review_policy_refuses_a_valid_snapshot_for_another_identifier() {
     let snapshot = fixture_closure(ReviewPolicy {
+        resubmission: Default::default(),
         id: "returned-kind".to_owned(),
         label: None,
         version: "1".to_owned(),
@@ -257,6 +258,7 @@ async fn review_policy_refuses_a_valid_snapshot_for_another_identifier() {
             required_approvals: 1,
             outcomes: None,
             negative_decisions: ReviewNegativeDecisionMode::Settle,
+            asks: None,
             exclude_initiator: false,
             exclude_previous_stage_reviewers: false,
         }],
@@ -308,6 +310,7 @@ async fn review_policy_refuses_a_valid_snapshot_for_another_identifier() {
 #[tokio::test]
 async fn review_policy_refuses_unverified_governed_response_members() {
     let snapshot = fixture_closure(ReviewPolicy {
+        resubmission: Default::default(),
         id: "requested-kind".to_owned(),
         label: None,
         version: "1".to_owned(),
@@ -323,6 +326,7 @@ async fn review_policy_refuses_unverified_governed_response_members() {
             required_approvals: 1,
             outcomes: None,
             negative_decisions: ReviewNegativeDecisionMode::Settle,
+            asks: None,
             exclude_initiator: false,
             exclude_previous_stage_reviewers: false,
         }],
@@ -377,6 +381,7 @@ async fn review_policy_refuses_unverified_governed_response_members() {
 #[tokio::test]
 async fn review_policy_refuses_duplicate_additive_response_members() {
     let snapshot = fixture_closure(ReviewPolicy {
+        resubmission: Default::default(),
         id: "requested-kind".to_owned(),
         label: None,
         version: "1".to_owned(),
@@ -392,6 +397,7 @@ async fn review_policy_refuses_duplicate_additive_response_members() {
             required_approvals: 1,
             outcomes: None,
             negative_decisions: ReviewNegativeDecisionMode::Settle,
+            asks: None,
             exclude_initiator: false,
             exclude_previous_stage_reviewers: false,
         }],
@@ -2321,6 +2327,7 @@ async fn review_task_context_preserves_the_frozen_source_neutral_shape() {
 
 fn context_body(strategy: ReviewContextPolicy, display_schema: Value, context: Value) -> Value {
     let snapshot = fixture_closure(ReviewPolicy {
+        resubmission: Default::default(),
         id: "standalone-answer".to_owned(),
         label: None,
         version: "1".to_owned(),
@@ -2336,6 +2343,7 @@ fn context_body(strategy: ReviewContextPolicy, display_schema: Value, context: V
             required_approvals: 1,
             outcomes: None,
             negative_decisions: ReviewNegativeDecisionMode::Settle,
+            asks: None,
             exclude_initiator: false,
             exclude_previous_stage_reviewers: false,
         }],
@@ -3502,6 +3510,7 @@ async fn empty_not_found_response() -> axum::http::Response<axum::body::Body> {
 
 async fn task_context_response() -> impl IntoResponse {
     let snapshot = fixture_closure(ReviewPolicy {
+        resubmission: Default::default(),
         id: "standalone-answer".to_owned(),
         label: None,
         version: "1".to_owned(),
@@ -3517,6 +3526,7 @@ async fn task_context_response() -> impl IntoResponse {
             required_approvals: 1,
             outcomes: None,
             negative_decisions: ReviewNegativeDecisionMode::Settle,
+            asks: None,
             exclude_initiator: false,
             exclude_previous_stage_reviewers: false,
         }],
@@ -3688,4 +3698,190 @@ fn approval_outcomes() -> Vec<ReviewOutcomePolicy> {
         public_reason: ReviewPublicReasonRule::Optional,
         result_required: false,
     }]
+}
+
+fn asked_body(task_id: Uuid, revision: i64, marker: Option<&str>, ask_state: &str) -> Value {
+    let request_id = Uuid::from_u128(9);
+    let mut task = json!({
+        "taskId": task_id,
+        "requestId": request_id,
+        "stageIndex": 0,
+        "stageId": "review",
+        "queue": "reviews",
+        "revision": revision,
+        "eligibleProfiles": ["staff"],
+        "state": {"held": {"holder": {"issuer": "https://issuer.example.test", "subject": "someone"}}},
+    });
+    if let Some(marker) = marker {
+        task["marker"] = json!(marker);
+    }
+    let mut body = json!({
+        "task": task,
+        "ask": {
+            "askId": Uuid::from_u128(11),
+            "requestId": request_id,
+            "subject": {
+                "source":"registry", "type":"record", "id":"record-1", "version":"1",
+                "digest":ContentDigest::for_bytes(b"record-1")
+            },
+            "text": "Send the signed form.",
+            "wants": [{"kind": "answer"}],
+            "askedAt": "2026-10-14T00:00:00.000000Z",
+            "state": ask_state,
+            "futureAskMember": true,
+        },
+    });
+    enrich_tasks(&mut body);
+    body
+}
+
+async fn ask_over(
+    body: Value,
+    task_id: Uuid,
+    ask: &registry_casework_client::ReviewTaskAskRequest,
+) -> Result<
+    registry_casework_client::CaseworkComplete<registry_casework_client::ReviewTaskAsked>,
+    CaseworkClientError,
+> {
+    let app = Router::new()
+        .route(
+            "/v1/review-tasks/{task}/asks",
+            post(task_context_fixture_response),
+        )
+        .with_state(body);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind fixture");
+    let address = listener.local_addr().expect("fixture address");
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.expect("serve fixture");
+    });
+    let client = CaseworkClient::new(CaseworkClientConfig::new_without_peer_policy(
+        Url::parse(&format!("http://{address}/")).expect("fixture URL"),
+    ))
+    .expect("client");
+    let token = BearerToken::new("one-call-secret").expect("fixture token");
+    let outcome = client
+        .ask_applicant(CaseworkAuth::new(&token, "staff"), task_id, 2, "ask-1", ask)
+        .await;
+    server.abort();
+    outcome
+}
+
+fn the_ask() -> registry_casework_client::ReviewTaskAskRequest {
+    registry_casework_client::ReviewTaskAskRequest {
+        text: "Send the signed form.".to_owned(),
+        wants: vec![registry_casework_client::ReviewAskWant::Answer {}],
+    }
+}
+
+#[tokio::test]
+async fn ask_applicant_returns_the_waiting_task_and_the_open_ask() {
+    let task_id = Uuid::from_u128(7);
+    let asked = ask_over(
+        asked_body(task_id, 3, Some("waiting"), "open"),
+        task_id,
+        &the_ask(),
+    )
+    .await
+    .expect("a conforming ask response")
+    .value;
+    assert_eq!(
+        asked.task.marker,
+        Some(registry_casework_client::ReviewTaskMarker::Waiting)
+    );
+    assert_eq!(
+        asked.ask.state,
+        registry_casework_client::ReviewAskState::Open
+    );
+}
+
+#[tokio::test]
+async fn ask_applicant_refuses_a_response_that_breaks_its_postconditions() {
+    let task_id = Uuid::from_u128(7);
+    let refused = |outcome: Result<_, CaseworkClientError>| {
+        matches!(
+            outcome,
+            Err(CaseworkClientError::Protocol {
+                status: 200,
+                failure: CaseworkProtocolFailure::Body,
+                ..
+            })
+        )
+    };
+    // The task carries no waiting marker.
+    assert!(refused(
+        ask_over(asked_body(task_id, 3, None, "open"), task_id, &the_ask()).await
+    ));
+    // The revision did not advance by one.
+    assert!(refused(
+        ask_over(
+            asked_body(task_id, 4, Some("waiting"), "open"),
+            task_id,
+            &the_ask()
+        )
+        .await
+    ));
+    // The ask is not open.
+    assert!(refused(
+        ask_over(
+            asked_body(task_id, 3, Some("waiting"), "answered"),
+            task_id,
+            &the_ask()
+        )
+        .await
+    ));
+    // The response is for another task.
+    assert!(refused(
+        ask_over(
+            asked_body(Uuid::from_u128(8), 3, Some("waiting"), "open"),
+            task_id,
+            &the_ask()
+        )
+        .await
+    ));
+}
+
+#[tokio::test]
+async fn ask_applicant_refuses_an_invalid_ask_before_sending() {
+    let task_id = Uuid::from_u128(7);
+    let mut ask = the_ask();
+    ask.text = String::new();
+    assert!(matches!(
+        ask_over(
+            asked_body(task_id, 3, Some("waiting"), "open"),
+            task_id,
+            &ask
+        )
+        .await,
+        Err(CaseworkClientError::InvalidRequest { .. })
+    ));
+}
+
+#[tokio::test]
+async fn review_task_context_carries_the_asks_and_tasks_the_marker() {
+    let mut body = context_body(
+        ReviewContextPolicy::Submitted,
+        json!({
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {"summary": {"type": "string"}}
+        }),
+        json!({"mode": "submitted", "snapshot": {"summary": "Frozen review"}}),
+    );
+    body["asks"] = json!([{
+        "askId": Uuid::from_u128(11),
+        "taskId": Uuid::nil(),
+        "text": "Send the signed form.",
+        "wants": [{"kind": "document"}],
+        "askedAt": "2026-10-14T00:00:00Z",
+        "state": "answered",
+        "answeredAt": "2026-10-14T01:00:00Z",
+    }]);
+    let context = serve_context(body).await.expect("context with asks").value;
+    assert_eq!(context.asks.len(), 1);
+    assert_eq!(
+        context.asks[0].state,
+        registry_casework_client::ReviewAskState::Answered
+    );
 }

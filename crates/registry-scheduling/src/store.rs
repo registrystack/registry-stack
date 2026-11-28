@@ -1074,22 +1074,20 @@ impl PostgresStore {
     }
 
     /// How many reminder and notice intents wait in each outbox state, and
-    /// how long the oldest pending one has been eligible for pickup at `now`.
-    /// An intent that is waiting out a retry back-off is not eligible, so it is
-    /// left out, and a retried intent is measured from the end of its back-off.
-    /// The read runs under the scrape `deadline`, which the server enforces,
-    /// and a failure returns its error class alone.
-    pub async fn outbox_depth(
-        &self,
-        now: DateTime<Utc>,
-        deadline: ScrapeDeadline,
-    ) -> Result<QueueDepth, String> {
+    /// how long the oldest pending one has been eligible for pickup on the
+    /// database clock. An intent that is waiting out a retry back-off is not
+    /// eligible, so it is left out, and a retried intent is measured from the
+    /// end of its back-off. The read runs under the scrape `deadline`, which
+    /// the server enforces, and a failure returns its error class alone.
+    pub async fn outbox_depth(&self, deadline: ScrapeDeadline) -> Result<QueueDepth, String> {
         self.queue_depth(
             "SELECT state, count(*) FROM scheduling_outbox GROUP BY state",
-            "SELECT min(next_attempt_at) FROM scheduling_outbox \
-             WHERE state = 'pending' AND next_attempt_at <= $1",
-            &[&now],
-            now,
+            "SELECT COALESCE(floor(extract(epoch FROM greatest(\
+               transaction_timestamp() - min(next_attempt_at), interval '0'\
+             ))), 0)::bigint \
+             FROM scheduling_outbox \
+             WHERE state = 'pending' AND next_attempt_at <= transaction_timestamp()",
+            &[],
             deadline,
         )
         .await
@@ -1104,10 +1102,12 @@ impl PostgresStore {
     ) -> Result<QueueDepth, String> {
         self.queue_depth(
             "SELECT state, count(*) FROM registry_webhook_delivery_state GROUP BY state",
-            "SELECT min(o.created_at) FROM registry_webhook_delivery_state s \
+            "SELECT COALESCE(floor(extract(epoch FROM greatest(\
+               $1::timestamptz - min(o.created_at), interval '0'\
+             ))), 0)::bigint \
+             FROM registry_webhook_delivery_state s \
              JOIN registry_outbox o USING (event_id) WHERE s.state = 'pending'",
-            &[],
-            now,
+            &[&now],
             deadline,
         )
         .await
@@ -1116,9 +1116,8 @@ impl PostgresStore {
     async fn queue_depth(
         &self,
         counts: &str,
-        oldest: &str,
+        oldest_age_seconds: &str,
         oldest_params: &[&(dyn tokio_postgres::types::ToSql + Sync)],
-        now: DateTime<Utc>,
         deadline: ScrapeDeadline,
     ) -> Result<QueueDepth, String> {
         let class = |error: tokio_postgres::Error| {
@@ -1150,14 +1149,13 @@ impl PostgresStore {
                 row.try_get::<_, i64>(1).map_err(class)?,
             ));
         }
-        let oldest: Option<DateTime<Utc>> = transaction
-            .query_one(oldest, oldest_params)
+        let oldest_pending_age_seconds: i64 = transaction
+            .query_one(oldest_age_seconds, oldest_params)
             .await
             .map_err(class)?
             .try_get(0)
             .map_err(class)?;
         transaction.commit().await.map_err(class)?;
-        let oldest_pending_age_seconds = oldest.map_or(0, |at| (now - at).num_seconds().max(0));
         Ok(QueueDepth {
             by_state,
             oldest_pending_age_seconds,
@@ -5559,7 +5557,7 @@ impl CapacityStatements for deadpool_postgres::Transaction<'_> {
         self.execute(
             "INSERT INTO scheduling_outbox(outbox_id, purpose, generation, state, attempt, \
              next_attempt_at, claim_id, appointment_revision, due_at, payload) \
-             VALUES($1,$2,1,'pending',0,$5,$3,$4,$5,$6)",
+             VALUES($1,$2,1,'pending',0,transaction_timestamp(),$3,$4,$5,$6)",
             &[
                 &Uuid::new_v4(),
                 &purpose,

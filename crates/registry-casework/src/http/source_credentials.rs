@@ -66,7 +66,15 @@ fn target(method: &Method, path: &str) -> Option<Target> {
         let admitted = (method == Method::GET
             && ["", "context", "draft", "task-templates", "task-grants"].contains(&suffix))
             || (method == Method::POST
-                && ["claim", "assign", "delegate", "decisions", "task-grants"].contains(&suffix))
+                && [
+                    "claim",
+                    "assign",
+                    "delegate",
+                    "decisions",
+                    "asks",
+                    "task-grants",
+                ]
+                .contains(&suffix))
             || ((method == Method::PUT || method == Method::DELETE) && suffix == "draft");
         return admitted.then_some(Target::Task(id));
     }
@@ -237,6 +245,7 @@ impl ReviewContextProvider for VerifiedSourceProvider {
         }
         self.inner
             .human_display(HumanDisplayRequest {
+                include_answers: request.include_answers,
                 identity: request.identity,
                 source_profile_id: &self.profile,
                 credential: EphemeralCredential::new(&self.token),
@@ -313,7 +322,14 @@ mod tests {
                 Some(Target::Task(Uuid::parse_str(id).unwrap()))
             );
         }
-        for suffix in ["claim", "assign", "delegate", "decisions", "task-grants"] {
+        for suffix in [
+            "claim",
+            "assign",
+            "delegate",
+            "decisions",
+            "asks",
+            "task-grants",
+        ] {
             assert!(target(&Method::POST, &format!("/v1/review-tasks/{id}/{suffix}")).is_some());
         }
         for method in [Method::PUT, Method::DELETE] {
@@ -399,6 +415,7 @@ mod tests {
                 .unwrap()
                 .push(request.credential.expose().to_owned());
             Ok(HumanDisplayObservation {
+                answers: Default::default(),
                 identity: request.identity.clone(),
                 reviewable: true,
                 display_reference: None,
@@ -447,6 +464,7 @@ mod tests {
             },
         };
         let request = || HumanDisplayRequest {
+            include_answers: true,
             identity: &identity,
             source_profile_id: "source-profile",
             credential: EphemeralCredential::new("casework-canary"),
@@ -462,6 +480,7 @@ mod tests {
         assert_eq!(tokens, ["source-first-canary", "source-second-canary"]);
         assert!(first
             .human_display(HumanDisplayRequest {
+                include_answers: true,
                 identity: &identity,
                 source_profile_id: "wrong",
                 credential: EphemeralCredential::new("casework-canary")

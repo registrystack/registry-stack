@@ -593,6 +593,16 @@ fn lifecycle(value: &Value, lines: &mut Lines) {
                     &format!("turn {}: {}", text(&turn["turn"]), text(&turn["condition"])),
                 );
             }
+            for status in items(&state["statuses"]) {
+                lines.listed(
+                    2,
+                    &format!(
+                        "status {}: {}",
+                        text(&status["status"]),
+                        text(&status["condition"])
+                    ),
+                );
+            }
         }
         lines.heading("Transitions:");
         for transition in items(&lifecycle["transitions"]) {
@@ -732,6 +742,14 @@ mod tests {
             "submitted",
             "turn official:",
             "turn nobody:",
+            "status draft:",
+            "status awaiting-party:",
+            "status in-review:",
+            "status approved:",
+            "status processing:",
+            "status applied:",
+            "status rejected:",
+            "status cancelled:",
             "Transitions:",
             "recovers",
             "dependency-outage",

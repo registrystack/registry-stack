@@ -105,7 +105,7 @@ fn guard_project(readable: &[&str], offset: Option<(&str, i32)>) -> Value {
                 "actions":[{"action":"correct-name","operations":["start"],"targets":[{"recordType":"target",
                     "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}],
                 "proposals":[{"action":"correct-name","operations":["get","list","edit","submit","revise","rebase","retry","cancel","apply"],
-                    "ownership":"caller","targets":[{"recordType":"target",
+                    "ownership":"caller","readableInputs":["target","value","minimum"],"targets":[{"recordType":"target",
                     "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}]}}}});
     if let Some((member, offset)) = offset {
         source["project"]["timezone"] = json!("UTC");
@@ -294,6 +294,54 @@ async fn apply_names_a_failed_field_guard_and_keeps_stale_revisions_generic() {
         Some(BRegProblemCode::ActionGuardFailed)
     );
     assert_eq!(refusal.guard_reason(), Some("target-not-open"));
+    let blocked = fixture
+        .http
+        .client
+        .read_proposal(&submitted)
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(
+        blocked.status(),
+        Some(registry_breg_client::BRegProposalStatus::AwaitingParty)
+    );
+    assert_eq!(
+        serde_json::to_value(&blocked).unwrap()["applicationStatus"]["recovery"],
+        "rebase"
+    );
+    assert!(
+        blocked
+            .link("rebase")
+            .unwrap()
+            .availability()
+            .unwrap()
+            .available
+    );
+
+    let (_, replacement_id) = draft(&fixture, "open", 10, "guard-replacement").await;
+    let client = &fixture.http.client;
+    let rebased = client
+        .execute_proposal(
+            &client
+                .prepare_proposal(
+                    &blocked,
+                    "rebase",
+                    json!({"input":{"target":replacement_id,"value":"After","minimum":5}}),
+                    &key("guard-rebase"),
+                )
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .value;
+    let resubmitted = submit(&fixture, &rebased, "guard-resubmit").await.unwrap();
+    let applied = apply(&fixture, &resubmitted, "guard-reapply")
+        .await
+        .unwrap();
+    assert_eq!(
+        applied.state(),
+        registry_breg_client::BRegProposalState::Applied
+    );
 
     // A revision mismatch is concurrency, never a business-state refusal, even
     // while the guard would also fail.

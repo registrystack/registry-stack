@@ -105,21 +105,6 @@ const fromTypedCall = proposalFromServed(answer.data)
   digest. The Blob is typed with the served type only for PDF, PNG and JPEG, and as plain binary
   otherwise.
 
-Known limits until the register changes:
-
-- **Downloads of a Proposal attachment fail today** with `unexpected`/`media` for any file not
-  served as plain binary: BReg's API description declares only `application/octet-stream` for
-  that route, and the register answers with the stored type. The fix is in BReg, and a test pins
-  today's failure so it flips when the fix lands.
-- **Submit with an empty required slot reads as `stale` today.** The register answers a bare 412
-  and keeps offering Submit. The register is adding the link reason `attachment-required` (which
-  the helper shows in `can.submit` once the client is regenerated from the register's updated API
-  description) and the code `attachment.required`. Until then a page can
-  check `p.attachments` (`required` and `status === 'empty'`) before offering Submit.
-- **Register refusals on Proposal commands carry no code yet.** BReg's API description declares no
-  problem body on the lifecycle routes, so a refusal reaches the page without `code`, `detail` or
-  the field it names. The fix is in BReg.
-
 ## Files in the Document Store
 
 ```ts

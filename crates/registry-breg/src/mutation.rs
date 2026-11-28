@@ -9,7 +9,8 @@ pub(crate) use action::validate_action_attachments;
 pub(crate) use action::{HookChangeApplication, HookChangeOutcome};
 mod proposal;
 pub(crate) use proposal::{
-    proposal_operation_name, CheckedProposalTaskAuthority, ProposalApplyPreflight,
+    link_readable, proposal_http_method, proposal_operation_name, CheckedProposalTaskAuthority,
+    ProposalApplyPreflight, ProposalReadDisclosure,
 };
 pub(crate) use proposal::{PUBLIC_REASON_REFERENCE, REVIEW_PROGRESS_REFERENCE};
 mod timer;
@@ -2381,6 +2382,36 @@ impl std::fmt::Debug for ProposalGuardFailure {
     }
 }
 
+/// Party recovery for a refusal after admission of an exact frozen application.
+/// Only facts about the frozen data block the Proposal. A write outside the
+/// applying caller's row boundary is a fact about that caller: it refuses the
+/// call and records nothing, so a caller whose boundary covers the result can
+/// still Apply.
+#[derive(Clone, Copy)]
+pub(crate) enum ApplicationRefusal {
+    Rebase,
+    Revise,
+}
+
+impl ApplicationRefusal {
+    pub(crate) fn for_error(error: &MutationError) -> Option<Self> {
+        match error {
+            MutationError::ProposalTargetChanged | MutationError::ProposalGuardFailed(_) => {
+                Some(Self::Rebase)
+            }
+            MutationError::ProposalUniqueConflict => Some(Self::Revise),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn storage_code(self) -> &'static str {
+        match self {
+            Self::Rebase => "application-rebase",
+            Self::Revise => "application-refused",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum MutationError {
     #[error("{}", crate::migration::posture_mismatch_message(*.recorded))]
@@ -2410,6 +2441,10 @@ pub enum MutationError {
     WriteOutsideBoundary,
     #[error("mutation precondition failed")]
     PreconditionFailed,
+    /// An admitted frozen application found a changed target. It keeps the
+    /// ordinary precondition problem, but records Rebase as its recovery.
+    #[error("mutation precondition failed")]
+    ProposalTargetChanged,
     /// Internal cause only. HTTP must retain the generic precondition refusal
     /// unless a fresh, ordinary authorized GET safely confirms the failed guard.
     #[error("mutation precondition failed")]
@@ -2435,6 +2470,14 @@ pub enum MutationError {
     /// write-once, so a second write is refused whatever its bytes are.
     #[error("the record attachment slot already holds a file")]
     AttachmentSlotWriteOnce,
+    #[error("the supporting document slot has reached its file limit")]
+    AttachmentLimitReached,
+    #[error("the required attachment slot is empty")]
+    AttachmentRequired { slot: String },
+    #[error("the attachment is awaiting verification")]
+    AttachmentVerificationPending { slot: String },
+    #[error("the attachment was rejected by verification")]
+    AttachmentVerificationRejected { slot: String },
     /// A file is larger than its attachment slot's `maximumBytes`.
     #[error("the file is larger than the attachment slot accepts")]
     AttachmentTooLarge,
@@ -2515,12 +2558,17 @@ impl MutationError {
             | Self::InvalidRequestAt(_)
             | Self::InvalidTimerWindow { .. }
             | Self::PreconditionFailed
+            | Self::ProposalTargetChanged
             | Self::ProposalReviewResultMismatch
             | Self::Conflict
             | Self::ProposalUniqueConflict
             | Self::ProposalRejected
             | Self::AttachmentSlotWriteOnce
             | Self::AttachmentTooLarge
+            | Self::AttachmentLimitReached
+            | Self::AttachmentRequired { .. }
+            | Self::AttachmentVerificationPending { .. }
+            | Self::AttachmentVerificationRejected { .. }
             | Self::AttachmentContentType
             | Self::AttachmentDigestMismatch
             | Self::IdempotencyConflict

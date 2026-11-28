@@ -26,6 +26,12 @@ pub const MAXIMUM_PORTABLE_JSON_INTEGER: u64 = 9_007_199_254_740_991;
 pub const REVIEW_REQUESTS_PATH: &str = "/v1/review-requests";
 pub const REVIEW_RESULTS_FEED_PATH: &str = "/v1/review-results";
 pub const REVIEW_COMPLETIONS_PATH: &str = "/v1/review-completions";
+pub const REVIEW_ASKS_FEED_PATH: &str = "/v1/review-asks";
+/// Upper bound on the kinds of reply one ask can request.
+pub const MAXIMUM_ASK_WANTS: usize = 8;
+/// The problem code of the 409 a provider returns when an ask is no longer
+/// open. Any other 409 on the answer call is a different refusal.
+pub const REVIEW_ASK_NOT_OPEN_PROBLEM: &str = "review.ask-not-open";
 /// Authenticated producer identity on successful create/recovery responses.
 /// One ASCII identifier of at most 128 bytes; never an identity inferred from a digest.
 pub const REVIEW_PRODUCER_HEADER: &str = "registry-review-producer";
@@ -46,6 +52,16 @@ pub fn review_result_path(request_id: Uuid) -> String {
 #[must_use]
 pub fn review_cancel_path(request_id: Uuid) -> String {
     format!("{}/{request_id}/cancel", REVIEW_REQUESTS_PATH)
+}
+
+#[must_use]
+pub fn review_ask_path(request_id: Uuid, ask_id: Uuid) -> String {
+    format!("{}/{request_id}/asks/{ask_id}", REVIEW_REQUESTS_PATH)
+}
+
+#[must_use]
+pub fn review_ask_answer_path(request_id: Uuid, ask_id: Uuid) -> String {
+    format!("{}/answer", review_ask_path(request_id, ask_id))
 }
 
 #[derive(Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
@@ -639,6 +655,142 @@ impl ReviewCancelRequest {
     }
 }
 
+/// What a reviewer's ask requests from the subject's owner.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum ReviewAskWant {
+    // Struct variants, because serde does not enforce `deny_unknown_fields`
+    // on the unit variants of an internally tagged enum.
+    Answer {},
+    Document {},
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum ReviewAskState {
+    Open,
+    Answered,
+    Expired,
+    Closed,
+}
+
+/// A reviewer's request for more from the subject's owner. The provider owns
+/// the ask; the producer reads it and reports only that it was answered.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewAsk {
+    pub ask_id: Uuid,
+    pub request_id: Uuid,
+    pub subject: SubjectBinding,
+    #[cfg_attr(feature="schema",schemars(length(min=1,max=MAXIMUM_PUBLIC_REASON_BYTES),extend("x-maximum-utf8-bytes"=MAXIMUM_PUBLIC_REASON_BYTES)))]
+    pub text: String,
+    #[cfg_attr(
+        feature = "schema",
+        schemars(length(max = MAXIMUM_ASK_WANTS), extend("uniqueItems" = true))
+    )]
+    pub wants: Vec<ReviewAskWant>,
+    pub asked_at: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub due_at: Option<DateTime<Utc>>,
+    pub state: ReviewAskState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answered_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closed_at: Option<DateTime<Utc>>,
+}
+
+impl ReviewAsk {
+    pub fn check(&self) -> Result<(), ProtocolError> {
+        if self.ask_id.is_nil() || self.request_id.is_nil() {
+            return Err(ProtocolError::Identifier);
+        }
+        self.subject.check()?;
+        check_public_reason(&self.text)?;
+        let distinct = self
+            .wants
+            .iter()
+            .enumerate()
+            .all(|(index, want)| !self.wants[..index].contains(want));
+        if self.wants.len() > MAXIMUM_ASK_WANTS || !distinct {
+            return Err(ProtocolError::AskWants);
+        }
+        if self.due_at.is_some_and(|due_at| due_at <= self.asked_at) {
+            return Err(ProtocolError::AskTimes);
+        }
+        let closes = matches!(self.state, ReviewAskState::Expired | ReviewAskState::Closed);
+        if self.answered_at.is_some() != (self.state == ReviewAskState::Answered)
+            || self.closed_at.is_some() != closes
+        {
+            return Err(ProtocolError::AskTimes);
+        }
+        if self
+            .answered_at
+            .into_iter()
+            .chain(self.closed_at)
+            .any(|at| at < self.asked_at)
+        {
+            return Err(ProtocolError::AskTimes);
+        }
+        // An ask expires only once its due time has passed.
+        if self.state == ReviewAskState::Expired
+            && !matches!((self.due_at, self.closed_at), (Some(due), Some(closed)) if closed >= due)
+        {
+            return Err(ProtocolError::AskTimes);
+        }
+        Ok(())
+    }
+}
+
+/// Announces that an ask was opened, answered, expired or closed. The
+/// producer reads the ask next.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewAskFeedEntry {
+    pub event_id: Uuid,
+    pub request_id: Uuid,
+    pub ask_id: Uuid,
+    pub changed_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewAskFeedPage {
+    pub items: Vec<ReviewAskFeedEntry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_cursor: Option<Uuid>,
+}
+
+/// The producer's report that the subject's owner answered an ask. It carries
+/// the subject binding and the time the answer was committed, so it cannot
+/// carry the answer itself. The provider judges the answer by that time, at
+/// microsecond precision.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ReviewAskAnswer {
+    pub subject: SubjectBinding,
+    pub answered_at: DateTime<Utc>,
+}
+
+impl ReviewAskAnswer {
+    pub fn check(&self) -> Result<(), ProtocolError> {
+        self.subject.check()?;
+        if !self
+            .answered_at
+            .timestamp_subsec_nanos()
+            .is_multiple_of(1_000)
+        {
+            return Err(ProtocolError::AskTimes);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(
@@ -755,7 +907,7 @@ pub enum ProtocolError {
     #[error("the terminal status does not permit the supplied outcome or result")]
     TerminalPayload,
     #[error(
-        "publicReason must be non-blank text of at most 2000 UTF-8 bytes without control characters"
+        "reviewer-facing text must be non-blank text of at most 2000 UTF-8 bytes without control characters"
     )]
     PublicReason,
     #[error("result availability must end after completion")]
@@ -764,6 +916,12 @@ pub enum ProtocolError {
     Identifier,
     #[error("the result endpoint returned a status outside the review lookup contract")]
     UnexpectedResultStatus,
+    #[error("an ask lists at most eight distinct wants")]
+    AskWants,
+    #[error(
+        "ask times must be ordered, match the ask state and have at most microsecond precision"
+    )]
+    AskTimes,
 }
 
 #[cfg(test)]
@@ -1382,5 +1540,312 @@ mod policy_binding_tests {
             original,
             submission_digest("producer", "source", &changed).unwrap()
         );
+    }
+}
+
+#[cfg(test)]
+mod ask_tests {
+    use chrono::TimeZone;
+    use serde_json::json;
+
+    use super::*;
+
+    fn at(hour: u32) -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 11, 27, hour, 0, 0).unwrap()
+    }
+
+    fn subject() -> SubjectBinding {
+        SubjectBinding {
+            source: "registry".to_owned(),
+            subject_type: "change-request".to_owned(),
+            id: "proposal-7".to_owned(),
+            version: "3".to_owned(),
+            digest: ContentDigest::for_bytes(b"proposal"),
+        }
+    }
+
+    fn open_ask() -> ReviewAsk {
+        ReviewAsk {
+            ask_id: Uuid::from_u128(2),
+            request_id: Uuid::from_u128(1),
+            subject: subject(),
+            text: "Please send the signed form.".to_owned(),
+            wants: vec![ReviewAskWant::Answer {}, ReviewAskWant::Document {}],
+            asked_at: at(1),
+            due_at: Some(at(2)),
+            state: ReviewAskState::Open,
+            answered_at: None,
+            closed_at: None,
+        }
+    }
+
+    #[test]
+    fn an_open_ask_is_accepted() {
+        assert_eq!(open_ask().check(), Ok(()));
+        let mut bare = open_ask();
+        bare.wants.clear();
+        bare.due_at = None;
+        assert_eq!(bare.check(), Ok(()));
+    }
+
+    #[test]
+    fn nil_identifiers_are_refused() {
+        let mut ask = open_ask();
+        ask.ask_id = Uuid::nil();
+        assert_eq!(ask.check(), Err(ProtocolError::Identifier));
+        let mut ask = open_ask();
+        ask.request_id = Uuid::nil();
+        assert_eq!(ask.check(), Err(ProtocolError::Identifier));
+    }
+
+    #[test]
+    fn the_subject_binding_is_checked() {
+        let mut ask = open_ask();
+        ask.subject.id = " ".to_owned();
+        assert_eq!(ask.check(), Err(ProtocolError::Text));
+    }
+
+    #[test]
+    fn text_is_bounded_like_a_public_reason() {
+        for bad in [
+            String::new(),
+            "  ".to_owned(),
+            "a\nb".to_owned(),
+            "x".repeat(MAXIMUM_PUBLIC_REASON_BYTES + 1),
+        ] {
+            let mut ask = open_ask();
+            ask.text = bad;
+            assert_eq!(ask.check(), Err(ProtocolError::PublicReason));
+        }
+        let mut ask = open_ask();
+        ask.text = "x".repeat(MAXIMUM_PUBLIC_REASON_BYTES);
+        assert_eq!(ask.check(), Ok(()));
+    }
+
+    #[test]
+    fn wants_are_at_most_eight_and_distinct() {
+        let mut ask = open_ask();
+        ask.wants = vec![ReviewAskWant::Answer {}, ReviewAskWant::Answer {}];
+        assert_eq!(ask.check(), Err(ProtocolError::AskWants));
+        // Eight entries pass the count, so only the duplicate rule refuses them.
+        ask.wants = vec![ReviewAskWant::Answer {}; MAXIMUM_ASK_WANTS];
+        assert_eq!(ask.check(), Err(ProtocolError::AskWants));
+        ask.wants = vec![ReviewAskWant::Answer {}; MAXIMUM_ASK_WANTS + 1];
+        assert_eq!(ask.check(), Err(ProtocolError::AskWants));
+        ask.wants = vec![ReviewAskWant::Document {}];
+        assert_eq!(ask.check(), Ok(()));
+    }
+
+    #[test]
+    fn the_due_time_follows_the_ask_time() {
+        let mut ask = open_ask();
+        ask.due_at = Some(ask.asked_at);
+        assert_eq!(ask.check(), Err(ProtocolError::AskTimes));
+        ask.due_at = Some(at(0));
+        assert_eq!(ask.check(), Err(ProtocolError::AskTimes));
+    }
+
+    #[test]
+    fn answered_at_is_present_exactly_when_answered() {
+        let mut ask = open_ask();
+        ask.state = ReviewAskState::Answered;
+        assert_eq!(ask.check(), Err(ProtocolError::AskTimes));
+        ask.answered_at = Some(at(2));
+        assert_eq!(ask.check(), Ok(()));
+        for state in [
+            ReviewAskState::Open,
+            ReviewAskState::Expired,
+            ReviewAskState::Closed,
+        ] {
+            let mut other = open_ask();
+            other.state = state;
+            other.answered_at = Some(at(2));
+            other.closed_at =
+                matches!(state, ReviewAskState::Expired | ReviewAskState::Closed).then(|| at(3));
+            assert_eq!(other.check(), Err(ProtocolError::AskTimes), "{state:?}");
+        }
+    }
+
+    #[test]
+    fn closed_at_is_present_exactly_when_expired_or_closed() {
+        for state in [ReviewAskState::Expired, ReviewAskState::Closed] {
+            let mut ask = open_ask();
+            ask.state = state;
+            assert_eq!(ask.check(), Err(ProtocolError::AskTimes), "{state:?}");
+            ask.closed_at = Some(at(3));
+            assert_eq!(ask.check(), Ok(()), "{state:?}");
+        }
+        for state in [ReviewAskState::Open, ReviewAskState::Answered] {
+            let mut ask = open_ask();
+            ask.state = state;
+            ask.answered_at = (state == ReviewAskState::Answered).then(|| at(2));
+            ask.closed_at = Some(at(3));
+            assert_eq!(ask.check(), Err(ProtocolError::AskTimes), "{state:?}");
+        }
+    }
+
+    #[test]
+    fn ask_times_are_ordered() {
+        // Answered before it was asked.
+        let mut ask = open_ask();
+        ask.state = ReviewAskState::Answered;
+        ask.answered_at = Some(at(0));
+        assert_eq!(ask.check(), Err(ProtocolError::AskTimes));
+        ask.answered_at = Some(ask.asked_at);
+        assert_eq!(ask.check(), Ok(()));
+        // Closed or expired before it was asked.
+        for state in [ReviewAskState::Expired, ReviewAskState::Closed] {
+            let mut ask = open_ask();
+            ask.state = state;
+            ask.closed_at = Some(at(0));
+            assert_eq!(ask.check(), Err(ProtocolError::AskTimes), "{state:?}");
+        }
+    }
+
+    #[test]
+    fn an_expired_ask_has_a_due_time_that_has_passed() {
+        let mut ask = open_ask();
+        ask.state = ReviewAskState::Expired;
+        ask.due_at = None;
+        ask.closed_at = Some(at(3));
+        assert_eq!(ask.check(), Err(ProtocolError::AskTimes));
+        ask.due_at = Some(at(4));
+        assert_eq!(ask.check(), Err(ProtocolError::AskTimes));
+        ask.due_at = Some(at(3));
+        assert_eq!(ask.check(), Ok(()));
+        // A closed ask may close before its due time.
+        ask.state = ReviewAskState::Closed;
+        ask.due_at = Some(at(4));
+        assert_eq!(ask.check(), Ok(()));
+    }
+
+    #[test]
+    fn the_answer_time_has_at_most_microsecond_precision() {
+        let mut answer = ReviewAskAnswer {
+            subject: subject(),
+            answered_at: at(2) + chrono::Duration::microseconds(123_456),
+        };
+        assert_eq!(answer.check(), Ok(()));
+        answer.answered_at += chrono::Duration::nanoseconds(1);
+        assert_eq!(answer.check(), Err(ProtocolError::AskTimes));
+    }
+
+    #[test]
+    fn the_not_open_problem_code_is_fixed() {
+        assert_eq!(REVIEW_ASK_NOT_OPEN_PROBLEM, "review.ask-not-open");
+    }
+
+    #[test]
+    fn wire_names_are_fixed() {
+        let mut ask = open_ask();
+        ask.state = ReviewAskState::Answered;
+        ask.answered_at = Some(at(2));
+        let value = serde_json::to_value(&ask).unwrap();
+        assert_eq!(value["state"], json!("answered"));
+        assert_eq!(
+            value["wants"],
+            json!([{"kind": "answer"}, {"kind": "document"}])
+        );
+        for member in [
+            "askId",
+            "requestId",
+            "subject",
+            "text",
+            "askedAt",
+            "dueAt",
+            "answeredAt",
+        ] {
+            assert!(value.get(member).is_some(), "{member}");
+        }
+        assert!(value.get("closedAt").is_none());
+        assert_eq!(
+            serde_json::from_value::<ReviewAsk>(value.clone()).unwrap(),
+            ask
+        );
+
+        for (state, word) in [
+            (ReviewAskState::Open, "open"),
+            (ReviewAskState::Answered, "answered"),
+            (ReviewAskState::Expired, "expired"),
+            (ReviewAskState::Closed, "closed"),
+        ] {
+            assert_eq!(serde_json::to_value(state).unwrap(), json!(word));
+        }
+        let mut unknown = value;
+        unknown["extra"] = json!(true);
+        assert!(serde_json::from_value::<ReviewAsk>(unknown).is_err());
+        assert!(serde_json::from_value::<ReviewAskWant>(json!({"kind": "photo"})).is_err());
+        assert!(
+            serde_json::from_value::<ReviewAskWant>(json!({"kind": "answer", "x": 1})).is_err()
+        );
+    }
+
+    #[test]
+    fn the_answer_body_cannot_carry_text_or_anything_else() {
+        let ok = json!({"subject": serde_json::to_value(subject()).unwrap(), "answeredAt": "2026-11-27T02:00:00Z"});
+        let answer: ReviewAskAnswer = serde_json::from_value(ok.clone()).unwrap();
+        assert_eq!(answer.answered_at, at(2));
+        assert_eq!(answer.check(), Ok(()));
+        for member in ["text", "files", "anything"] {
+            let mut body = ok.clone();
+            body[member] = json!("x");
+            assert!(
+                serde_json::from_value::<ReviewAskAnswer>(body).is_err(),
+                "{member}"
+            );
+        }
+        let mut bad = answer;
+        bad.subject.version = String::new();
+        assert_eq!(bad.check(), Err(ProtocolError::Text));
+    }
+
+    #[test]
+    fn the_feed_is_shaped_like_the_result_feed() {
+        let page = json!({
+            "items": [{
+                "eventId": Uuid::from_u128(9),
+                "requestId": Uuid::from_u128(1),
+                "askId": Uuid::from_u128(2),
+                "changedAt": "2026-11-27T01:00:00Z"
+            }],
+            "nextCursor": Uuid::from_u128(9)
+        });
+        let parsed: ReviewAskFeedPage = serde_json::from_value(page.clone()).unwrap();
+        assert_eq!(parsed.items[0].changed_at, at(1));
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), page);
+        let mut extra = page;
+        extra["items"][0]["text"] = json!("leak");
+        assert!(serde_json::from_value::<ReviewAskFeedPage>(extra).is_err());
+    }
+
+    #[test]
+    fn paths_follow_the_review_routes() {
+        let request = Uuid::from_u128(1);
+        let ask = Uuid::from_u128(2);
+        assert_eq!(REVIEW_ASKS_FEED_PATH, "/v1/review-asks");
+        assert_eq!(
+            review_ask_path(request, ask),
+            format!("/v1/review-requests/{request}/asks/{ask}")
+        );
+        assert_eq!(
+            review_ask_answer_path(request, ask),
+            format!("/v1/review-requests/{request}/asks/{ask}/answer")
+        );
+    }
+
+    #[cfg(feature = "schema")]
+    #[test]
+    fn schemas_follow_the_wire_shape() {
+        let ask = serde_json::to_value(schemars::schema_for!(ReviewAsk)).unwrap();
+        assert_eq!(ask["additionalProperties"], false);
+        assert_eq!(
+            ask["$defs"]["ReviewAskState"]["enum"],
+            json!(["open", "answered", "expired", "closed"])
+        );
+        assert_eq!(ask["properties"]["wants"]["maxItems"], 8);
+        assert_eq!(ask["properties"]["wants"]["uniqueItems"], true);
+        let answer = serde_json::to_value(schemars::schema_for!(ReviewAskAnswer)).unwrap();
+        assert_eq!(answer["additionalProperties"], false);
+        assert_eq!(answer["properties"].as_object().unwrap().len(), 2);
     }
 }

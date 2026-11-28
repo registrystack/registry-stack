@@ -186,7 +186,8 @@ impl BregContextProvider {
     ) -> Result<BRegProposalReviewDocument, ReviewContextError> {
         self.validate_identity(identity)?;
         let binding = self.read_binding(client, profile, display).await?;
-        self.read_bound(client, identity, &binding, display).await
+        self.read_bound(client, identity, &binding, display, display)
+            .await
     }
 
     fn validate_identity(
@@ -244,6 +245,7 @@ impl BregContextProvider {
         identity: &ReviewContextIdentity,
         binding: &BRegProposalReviewBinding,
         display: bool,
+        include_answers: bool,
     ) -> Result<BRegProposalReviewDocument, ReviewContextError> {
         if identity.contract != self.export.contract
             || identity.subject.source != self.export.source_namespace
@@ -251,18 +253,24 @@ impl BregContextProvider {
         {
             return Err(ReviewContextError::ContractChanged);
         }
-        let document = client
-            .read_proposal_review_by_id(binding, &identity.subject.id)
-            .await
-            .map_err(|error| match error {
-                // A context reply without the owning closed contract is not
-                // the interface this paired provider was authorized to use.
-                BaseRegistryClientError::InvalidRequest { .. } if display => {
-                    ReviewContextError::ContractChanged
-                }
-                error => map_error(error),
-            })?
-            .value;
+        let document = if include_answers {
+            client
+                .read_proposal_review_by_id(binding, &identity.subject.id)
+                .await
+        } else {
+            client
+                .read_proposal_review_by_id_without_answers(binding, &identity.subject.id)
+                .await
+        }
+        .map_err(|error| match error {
+            // A context reply without the owning closed contract is not
+            // the interface this paired provider was authorized to use.
+            BaseRegistryClientError::InvalidRequest { .. } if display => {
+                ReviewContextError::ContractChanged
+            }
+            error => map_error(error),
+        })?
+        .value;
         self.validate_bound(identity, document)
     }
 
@@ -431,8 +439,22 @@ impl BregContextProvider {
         {
             return Err(ReviewContextError::Invalid);
         }
+        let mut answers = std::collections::BTreeMap::new();
+        for ask in document.context.asks {
+            if let Some(answer) = ask.answer {
+                let id = uuid::Uuid::parse_str(&ask.id).map_err(|_| ReviewContextError::Invalid)?;
+                let answer = serde_json::from_value(
+                    serde_json::to_value(answer).map_err(|_| ReviewContextError::Invalid)?,
+                )
+                .map_err(|_| ReviewContextError::Invalid)?;
+                if answers.insert(id, answer).is_some() {
+                    return Err(ReviewContextError::Invalid);
+                }
+            }
+        }
         let display_reference = Some(document.context.reference);
         Ok(HumanDisplayObservation {
+            answers,
             identity: identity.clone(),
             reviewable: document.reviewable,
             display_reference,
@@ -457,8 +479,18 @@ impl ReviewContextProvider for BregContextProvider {
         let token = BearerToken::new(request.credential.expose().to_owned())
             .map_err(|_| ReviewContextError::Denied)?;
         let client = self.client.with_bearer_token(token);
+        self.validate_identity(request.identity)?;
+        let binding = self
+            .read_binding(&client, request.source_profile_id, true)
+            .await?;
         let document = self
-            .read(&client, request.identity, request.source_profile_id, true)
+            .read_bound(
+                &client,
+                request.identity,
+                &binding,
+                true,
+                request.include_answers,
+            )
             .await?;
         self.display_observation(request.identity, document)
     }
@@ -503,7 +535,9 @@ impl ReviewContextProvider for BregContextProvider {
         let document = self
             .read(&client, request.identity, request.source_profile_id, true)
             .await?;
-        self.display_observation(request.identity, document)
+        let mut view = self.display_observation(request.identity, document)?;
+        view.answers.clear();
+        Ok(view)
     }
     async fn delegated_display_batch(
         &self,
@@ -531,6 +565,14 @@ impl ReviewContextProvider for BregContextProvider {
         let client = self.client.with_bearer_token(token);
         self.display_batch_with_client(identities, source_profile_id, &client)
             .await
+            .into_iter()
+            .map(|result| {
+                result.map(|mut observation| {
+                    observation.answers.clear();
+                    observation
+                })
+            })
+            .collect()
     }
     async fn service_status(
         &self,

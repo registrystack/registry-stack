@@ -71,7 +71,8 @@ fn overlapping_default_proposal_grants_are_refused_naming_both_profiles() {
 
 #[test]
 fn default_proposal_grants_with_disjoint_operations_compile() {
-    compile(&project(json!(["edit"]), json!(["get"])))
+    // Submit, not Edit: an Edit grant must hold Get, which would overlap the other default's Get.
+    compile(&project(json!(["submit"]), json!(["get"])))
         .expect("disjoint default operations are legal");
 }
 

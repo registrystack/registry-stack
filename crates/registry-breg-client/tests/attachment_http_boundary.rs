@@ -248,6 +248,107 @@ fn proposal_response() -> MockResponse {
         .with_header("cache-control", "no-store")
         .with_header("vary", "authorization, accept")
 }
+
+fn addition_document(state: &str, revision: u64, filled: bool) -> Value {
+    let mut value = proposal_document();
+    value["state"] = json!(state);
+    value["revision"] = json!(revision);
+    if state == "submitted" {
+        value["effectDigest"] = json!(REVISION);
+    }
+    value["links"]["submit"] = json!({"method":"POST","path":format!("/v1/proposals/{RECORD_ID}/submit"),
+        "accessProfile":"writer","operation":"submit","ifMatch":SERVER_ETAG});
+    value["additions"] = json!({"other":{"id":"other","maximumBytes":1024,"maximumCount":2,
+        "contentTypes":["application/pdf"],"classification":"restricted","items":[],"links":{
+            "add":{"method":"POST","path":format!("/v1/proposals/{RECORD_ID}/additions/other"),
+                "accessProfile":"writer","operation":"add","ifMatch":SERVER_ETAG}}}});
+    if filled {
+        let id = "00000000-0000-4000-8000-000000000002";
+        let sha256 = Sha256::digest(PDF)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
+        value["additions"]["other"]["items"] = json!([{"id":id,"submissionVersion":2,
+            "sha256":sha256,"byteSize":PDF.len(),"contentType":"application/pdf","addedAt":"2026-11-27T00:00:00Z",
+            "verificationStatus":"notRequired","links":{"download":{"method":"GET",
+                "path":format!("/v1/proposals/{RECORD_ID}/additions/{id}?submissionVersion=2"),
+                "accessProfile":"writer","operation":"download"}}}]);
+    }
+    value
+}
+
+#[tokio::test]
+async fn additions_send_exact_raw_bytes_and_download_under_the_callers_token() {
+    let response = |value| {
+        MockResponse::json(StatusCode::OK, value)
+            .with_header("cache-control", "no-store")
+            .with_header("vary", "authorization, accept")
+    };
+    let (fixture, draft) = selected_with_document(
+        addition_document("draft", 3, false),
+        vec![
+            response(addition_document("submitted", 4, false)),
+            response(addition_document("submitted", 5, true)),
+            download_response(),
+        ],
+    )
+    .await;
+    let client = &fixture.client;
+    let submitted = client
+        .execute_proposal(
+            &client
+                .prepare_proposal(&draft, "submit", json!({}), &key("addition-submit"))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .value;
+    let requests_before = fixture.requests.lock().unwrap().len();
+    for (media, bytes) in [
+        ("application/pdf", b"".as_slice()),
+        ("text/plain", PDF),
+        ("application/pdf", &[0; 1025]),
+    ] {
+        assert!(client
+            .add_proposal_addition(&submitted, "other", media, bytes, &key("invalid-addition"))
+            .await
+            .is_err());
+    }
+    assert_eq!(fixture.requests.lock().unwrap().len(), requests_before);
+    let added = client
+        .add_proposal_addition(
+            &submitted,
+            "other",
+            "application/pdf",
+            PDF,
+            &key("addition-one"),
+        )
+        .await
+        .unwrap()
+        .value;
+    let downloaded = client
+        .download_proposal_addition(&added, "00000000-0000-4000-8000-000000000002")
+        .await
+        .unwrap();
+    assert_eq!(downloaded.value.as_bytes(), PDF);
+    let requests = fixture.requests.lock().unwrap();
+    let upload = &requests[requests_before];
+    assert_eq!(upload.method, "POST");
+    assert_eq!(
+        upload.uri,
+        format!("/tenant/base/v1/proposals/{RECORD_ID}/additions/other?accessProfile=writer")
+    );
+    assert_eq!(upload.body, PDF);
+    assert_eq!(upload.if_match.as_deref(), Some(SERVER_ETAG));
+    assert_eq!(upload.idempotency_key.as_deref(), Some("addition-one"));
+    let download = &requests[requests_before + 1];
+    assert_eq!(download.method, "GET");
+    assert!(download.uri.contains(
+        "/additions/00000000-0000-4000-8000-000000000002?accessProfile=writer&submissionVersion=2"
+    ));
+    assert!(upload.authorization.is_some());
+    assert!(download.authorization.is_some());
+}
 fn action_metadata() -> Value {
     json!({"id":"attachment-test","version":"1","revision":REVISION,"metadataVersion":"2","recordTypes":[],"operations":[],"actions":[{
         "id":"correct","apiName":"correct","revision":REVISION,"display":{},"execution":{"mode":"proposal"},"route":"/v1/actions/correct/proposals","inputMode":"fixed","inputs":[],"referenceInputs":[],"requiredConditionKeys":[],"resultEffects":[],"access":{"selectedProfile":"writer"},

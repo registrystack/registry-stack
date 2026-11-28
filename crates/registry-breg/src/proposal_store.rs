@@ -26,6 +26,7 @@ pub(crate) const PROPOSAL_TABLES: &[(&str, &[&str])] = &[
     ("registry_proposal_activation_compatibility", &["SELECT"]),
     ("registry_proposal_state", &["INSERT", "SELECT", "UPDATE"]),
     ("registry_proposal_submissions", &["INSERT", "SELECT"]),
+    ("registry_proposal_additions", &["INSERT", "SELECT"]),
     ("registry_proposal_task_authority", &["INSERT", "SELECT"]),
     ("registry_proposal_targets", &["INSERT", "SELECT"]),
     ("registry_proposal_applications", &["INSERT", "SELECT"]),
@@ -54,7 +55,7 @@ pub(crate) async fn install(
              blocked_reason text
                  CONSTRAINT registry_proposal_state_blocked_reason_values
                  CHECK (blocked_reason IS NULL OR blocked_reason IN
-                     ('package-changed','application-refused')),
+                     ('package-changed','application-refused','application-rebase')),
              detail_erased_at timestamptz,
              created_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
              updated_at timestamptz NOT NULL DEFAULT transaction_timestamp(),
@@ -73,6 +74,15 @@ pub(crate) async fn install(
                  ALTER TABLE registry_internal.registry_proposal_state
                      DROP CONSTRAINT registry_proposal_state_blocked_reason_check;
              END IF;
+             IF EXISTS (
+                 SELECT 1 FROM pg_catalog.pg_constraint
+                  WHERE conname = 'registry_proposal_state_blocked_reason_values'
+                    AND conrelid = 'registry_internal.registry_proposal_state'::regclass
+                    AND position('application-rebase' IN pg_get_constraintdef(oid)) = 0
+             ) THEN
+                 ALTER TABLE registry_internal.registry_proposal_state
+                     DROP CONSTRAINT registry_proposal_state_blocked_reason_values;
+             END IF;
              IF NOT EXISTS (
                  SELECT 1 FROM pg_catalog.pg_constraint
                   WHERE conname = 'registry_proposal_state_blocked_reason_values'
@@ -81,7 +91,7 @@ pub(crate) async fn install(
                  ALTER TABLE registry_internal.registry_proposal_state
                      ADD CONSTRAINT registry_proposal_state_blocked_reason_values
                      CHECK (blocked_reason IS NULL OR blocked_reason IN
-                         ('package-changed','application-refused'));
+                         ('package-changed','application-refused','application-rebase'));
              END IF;
          END;
          $proposal_state_blocked_reason$;
@@ -465,17 +475,23 @@ pub(crate) async fn block_manual_application_refusal(
     action_id: &str,
     proposal_id: Uuid,
     previous_revision: i64,
+    refusal: crate::mutation::ApplicationRefusal,
 ) -> Result<(), MutationError> {
     let changed = transaction
         .execute(
             "UPDATE registry_internal.registry_proposal_state
-                SET blocked_reason='application-refused',
+                SET blocked_reason=$4,
                     workflow_revision=workflow_revision+1,
                     updated_at=transaction_timestamp()
               WHERE action_id=$1 AND proposal_id=$2 AND state='submitted'
                 AND blocked_reason IS NULL AND detail_erased_at IS NULL
                 AND workflow_revision=$3",
-            &[&action_id, &proposal_id, &previous_revision],
+            &[
+                &action_id,
+                &proposal_id,
+                &previous_revision,
+                &refusal.storage_code(),
+            ],
         )
         .await
         .map_err(map_store_error)?;
@@ -485,6 +501,21 @@ pub(crate) async fn block_manual_application_refusal(
     Ok(())
 }
 
+/// Correlated with the Proposal row `p`. Shared by document reads and the
+/// collection's one-page ask observation, without a remote lookup.
+pub(crate) const OPEN_ASK_SQL: &str = "p.state='submitted' AND EXISTS (
+    SELECT 1 FROM registry_internal.registry_proposal_review_asks a
+    JOIN registry_internal.registry_proposal_review_submissions s
+      USING(action_id,proposal_id,submission_version)
+    WHERE a.action_id=p.action_id AND a.proposal_id=p.proposal_id
+      AND a.submission_version=p.submission_version AND a.state='open'
+      AND a.detail_erased_at IS NULL AND NOT s.withdrawn
+      AND s.accepted_binding->>'requestId'=a.review_request_id::text
+      AND s.authority=a.authority
+      AND (a.due_at IS NULL OR a.due_at>statement_timestamp())
+      AND NOT EXISTS (SELECT 1 FROM registry_internal.registry_proposal_review_ask_answers x
+        WHERE x.authority=a.authority AND x.review_request_id=a.review_request_id AND x.ask_id=a.ask_id))";
+
 pub(crate) struct ProposalDocument {
     pub action_id: String,
     pub proposal_id: Uuid,
@@ -493,6 +524,7 @@ pub(crate) struct ProposalDocument {
     pub input: Option<Map<String, Value>>,
     pub input_targets: Vec<(String, Uuid)>,
     pub blocked_reason: Option<String>,
+    pub ask_open: bool,
     /// When the draft was started, as RFC 3339 UTC text.
     pub created_at: String,
     pub header: ProposalWorkflowHeader,
@@ -516,10 +548,22 @@ pub(crate) async fn load_document(
     proposal_id: Uuid,
     lock: DocumentLock,
 ) -> Result<ProposalDocument, MutationError> {
+    load_document_with_ask(transaction, proposal_id, lock, None).await
+}
+
+/// Reuse the page's ask observation while its Proposal revision still matches.
+/// A changed revision is reobserved inside this existing locked document query.
+pub(crate) async fn load_document_with_ask(
+    transaction: &Transaction<'_>,
+    proposal_id: Uuid,
+    lock: DocumentLock,
+    observed: Option<(i64, bool)>,
+) -> Result<ProposalDocument, MutationError> {
     let sql = format!(
         "SELECT action_id, action_revision, action_title, input, blocked_reason, input_targets,
-                to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')
-           FROM registry_internal.registry_proposal_state WHERE proposal_id=$1{}",
+                to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
+                CASE WHEN $2::bigint=p.workflow_revision THEN $3::boolean ELSE ({OPEN_ASK_SQL}) END
+           FROM registry_internal.registry_proposal_state p WHERE proposal_id=$1{}",
         match lock {
             DocumentLock::None => "",
             DocumentLock::Share => " FOR SHARE",
@@ -527,7 +571,14 @@ pub(crate) async fn load_document(
         },
     );
     let row = transaction
-        .query_opt(&sql, &[&proposal_id])
+        .query_opt(
+            &sql,
+            &[
+                &proposal_id,
+                &observed.map(|value| value.0),
+                &observed.map(|value| value.1),
+            ],
+        )
         .await
         .map_err(map_store_error)?
         .ok_or(MutationError::PreconditionFailed)?;
@@ -545,6 +596,7 @@ pub(crate) async fn load_document(
         input,
         blocked_reason: row.get(4),
         created_at: row.get(6),
+        ask_open: row.get(7),
         header,
         input_targets: serde_json::from_value(row.get(5))
             .map_err(|_| MutationError::Unavailable)?,
@@ -1347,6 +1399,26 @@ mod tests {
             .expect("legacy constraint count loads")
             .get::<_, i64>(0);
         assert_eq!(legacy_constraints, 0);
+
+        // Upgrade an already named constraint from a package that predates
+        // the persisted Rebase recovery, preserving its existing refusal row.
+        migration.batch_execute(
+            "ALTER TABLE registry_internal.registry_proposal_state
+                 DROP CONSTRAINT registry_proposal_state_blocked_reason_values;
+             ALTER TABLE registry_internal.registry_proposal_state
+                 ADD CONSTRAINT registry_proposal_state_blocked_reason_values
+                 CHECK (blocked_reason IS NULL OR blocked_reason IN ('package-changed','application-refused'))"
+        ).await.unwrap();
+        install_mutation_schema(&migration, &database.runtime_role)
+            .await
+            .unwrap();
+        migration.execute(
+            "UPDATE registry_internal.registry_proposal_state SET blocked_reason='application-rebase' WHERE proposal_id=$1",
+            &[&proposal_id],
+        ).await.expect("the named constraint upgrades without losing the submitted Proposal");
+        install_mutation_schema(&migration, &database.runtime_role)
+            .await
+            .unwrap();
 
         migration_task.abort();
         database.cleanup().await;

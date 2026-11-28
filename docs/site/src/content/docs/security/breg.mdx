@@ -76,6 +76,33 @@ An accepted completion only makes a result lookup due.
     crates/registry-breg/src/event_destination.rs, distinct_delivery_keys();
     crates/registry-breg/src/review_store.rs, verify_completion(), receive_completion(). */}
 
+### Review ask disclosure
+
+An applicant's answer and cited files are disclosed to the reviewers of the current accepted review, even when no authored additions context field exists.
+The applicant page must explain this before answering.
+Answers and their cited files reach only a human reviewer of the current review binding: a verified human caller on a profile written for humans or for any kind, acting for no one else and holding no task grant.
+A standing agent, a task-granted agent, a delegated actor or a service receives neither questions nor answers, whatever its grant says, and BReg records no answer disclosure for it.
+Its ask-bound download is concealed like any file it may not read.
+A file it can reach through an authored additions context field follows that field's grant, as any other context field does.
+On the Proposal document, Get, list items and command responses carry the `asks` member only for a caller who may answer on that Proposal: the selected profile holds Get and `answer`, and the caller passes the same human test.
+Other Get holders, including status profiles, agents and services, receive no `asks` member. The `answer` command refuses any caller that fails the human test.
+A human reviewer reads the questions and answers of its own review only through the single review-context read.
+Cited-file downloads also check the exact current submission and review binding, so a link from an earlier round is refused.
+A cited file is admitted in place of the authored additions field, so the reviewer's readable context fields do not limit it.
+The batch review-context read carries no questions or answers and records no answer disclosure.
+The single-Proposal review-context read serves them only with `include=answers`, which the client's display read supplies.
+Casework claim, ask and decide preflight omit that option and record no answer disclosure.
+No human token is forwarded to the review authority. The worker sends only the subject and stored answer timestamp under its producer credential.
+Answer audits retain cited file IDs, and ask-bound download audits identify the actor, ask and file without recording content.
+Casework reads answer content live and does not persist it.
+Review maintenance prunes value-free feed receipts after their observation recovery window, independently of question and answer retention.
+
+{/* Evidence: crates/registry-breg/tests/support/proposal_review_asks.rs;
+    crates/registry-breg/tests/support/proposal_review_asks_final.rs;
+    crates/registry-casework/tests/support/source_ask_answers.rs;
+    crates/registry-casework/src/review/source_answers.rs;
+    crates/registry-casework-breg/src/lib.rs. */}
+
 ### In-process refresh worker
 
 Indexed external views are refreshed by a worker inside BReg, not by an outside client.
@@ -347,6 +374,33 @@ The link has these known limits:
     history_erasure_keeps_a_promoted_file_and_removes_the_link_to_the_erased_revision,
     an_applied_proposal_stays_bounded_by_a_record_whose_revision_was_erased;
     products/breg/contracts/security-invariant-matrix.yaml, BREG-SEC-217. */}
+
+### Supporting files during Proposal review
+
+BReg admits an addition through the independent `add` operation and the declared slot's `writableAttachments` grant.
+BReg accepts it only while the current submission's review is pending or retrying.
+The upload holds the Proposal lock and changes its workflow revision.
+The idempotency binding covers the slot and the exact file identity.
+
+Additions remain separate from the frozen attachment manifest and effect digest.
+BReg's Apply check continues to compare the frozen manifest with its original attachment references.
+An addition grants no authority over the effects that Apply writes.
+
+Ordinary downloads require Get and the slot's `readableAttachments` grant.
+Reviewer downloads instead require the declared review-context field and its exact submission and schema binding.
+BReg rechecks current disclosure before releasing verified bytes under the reviewer's own token.
+Proposal detail erasure counts and erases addition references with attachment references.
+The shared blob store retains bytes while either kind of live reference needs them.
+BReg trusts the declared media type within the slot's permitted types.
+Downloads use attachment disposition and `nosniff` to limit browser interpretation.
+Each addition occupies a place for the submission's lifetime because this release has no removal operation.
+
+{/* Evidence: crates/registry-breg/src/mutation/proposal.rs ensure_additions_open;
+    crates/registry-breg/src/postgres/proposal.rs proposal_attachment_download;
+    crates/registry-breg/src/attachment_store.rs;
+    crates/registry-breg/tests/support/proposal_additions.rs;
+    crates/registry-breg/tests/support/proposal_additions_authority.rs;
+    products/breg/contracts/security-invariant-matrix.yaml BREG-SEC-225, BREG-SEC-226, BREG-SEC-227, BREG-SEC-228. */}
 
 ### One-call writes
 

@@ -169,7 +169,7 @@ function humanSourceCredentialValue(value) {
   return source;
 }
 
-const sourceCredentialIndexes = new Map([["nextReviewTask", 4], ["reviewTasks", 4], ["supervisoryReviewTasks", 4], ["ownReviewDecisions", 4], ["reviewTask", 4], ["reviewTaskContext", 4], ["approveReviewTaskGrant", 7], ["claimReviewTask", 6], ["assignReviewTask", 7], ["delegateReviewTask", 7], ["reviewTaskDraft", 4], ["saveReviewTaskDraft", 7], ["deleteReviewTaskDraft", 6], ["decideReviewTask", 7], ["reviewHistory", 5], ["addReviewNote", 6], ["reviewClocks", 4], ["reviewTaskHoldings", 4], ["previewClockRecompute", 3], ["applyClockRecompute", 4], ["previewCaseloadMove", 4], ["applyCaseloadMove", 5]]);
+const sourceCredentialIndexes = new Map([["nextReviewTask", 4], ["reviewTasks", 4], ["supervisoryReviewTasks", 4], ["ownReviewDecisions", 4], ["reviewTask", 4], ["reviewTaskContext", 4], ["approveReviewTaskGrant", 7], ["claimReviewTask", 6], ["assignReviewTask", 7], ["delegateReviewTask", 7], ["reviewTaskDraft", 4], ["saveReviewTaskDraft", 7], ["deleteReviewTaskDraft", 6], ["decideReviewTask", 7], ["askApplicant", 7], ["reviewHistory", 5], ["addReviewNote", 6], ["reviewClocks", 4], ["reviewTaskHoldings", 4], ["previewClockRecompute", 3], ["applyClockRecompute", 4], ["previewCaseloadMove", 4], ["applyCaseloadMove", 5]]);
 for (const [method, jsonIndexes] of [
   ['description', []],
   ['createOrRecoverReviewRequest', [3]],
@@ -196,6 +196,7 @@ for (const [method, jsonIndexes] of [
   ['saveReviewTaskDraft', [5]],
   ['deleteReviewTaskDraft', []],
   ['decideReviewTask', [5]],
+  ['askApplicant', [5]],
   ['reviewHistory', [3]],
   ['addReviewNote', [4]],
   ['reviewClocks', []],

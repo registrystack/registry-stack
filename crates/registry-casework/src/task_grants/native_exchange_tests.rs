@@ -64,6 +64,7 @@ impl ReviewContextProvider for Source {
         request: HumanDisplayRequest<'_>,
     ) -> Result<HumanDisplayObservation, ReviewContextError> {
         Ok(HumanDisplayObservation {
+            answers: Default::default(),
             identity: request.identity.clone(),
             reviewable: true,
             display_reference: Some("Synthetic request".into()),

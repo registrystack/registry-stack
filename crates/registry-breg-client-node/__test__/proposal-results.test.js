@@ -30,6 +30,7 @@ const statusDocument = state => {
 test('Proposal response boundaries preserve disclosure and exact Action revision bindings', async t => {
   let value = document();
   let replyStatus = 200;
+  let replyContentType = 'application/json';
   let downloadBytes;
   const requests = [];
   const wireRequests = [];
@@ -46,7 +47,7 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
       response.end(downloadBytes);
       return;
     }
-    response.writeHead(replyStatus, {'content-type': 'application/json', 'cache-control': 'no-store', 'vary': 'authorization, accept',
+    response.writeHead(replyStatus, {'content-type': replyContentType, 'cache-control': 'no-store', 'vary': 'authorization, accept',
       traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01'});
     response.end(JSON.stringify(request.url.startsWith('/v1/registry') ? metadata : value));
   });
@@ -94,6 +95,45 @@ test('Proposal response boundaries preserve disclosure and exact Action revision
         value.links.apply.availability.recovery = recovery;
         await assert.rejects(client.getProposal(binding, id), error => error.kind === 'invalid-request', `${reason}/${recovery}`);
       }
+    });
+
+    await t.test('application refusals preserve Rebase and Revise recovery', async () => {
+      for (const [reason, recovery] of [['stale-revision', 'rebase'], ['invalid-input', 'revise']]) {
+        value = statusDocument('blocked');
+        Object.assign(value.applicationStatus, {reason: 'application-refused', recovery});
+        value.links.apply = {method: 'POST', path: `/v1/proposals/${id}/apply`, accessProfile: 'reader', operation: 'apply', ifMatch: '"blocked-condition"',
+          availability: {available: false, observedRevision: 8, reason, recovery}};
+        const observed = JSON.parse((await client.getProposal(binding, id)).documentJson);
+        assert.deepEqual(observed.applicationStatus, value.applicationStatus);
+        assert.deepEqual(observed.links.apply.availability, value.links.apply.availability);
+      }
+    });
+
+    await t.test('Submit attachment problems preserve only their slot location', async () => {
+      value = document(); value.state = 'draft'; delete value.application; delete value.effectDigest;
+      value.links.submit = {method: 'POST', path: `/v1/proposals/${id}/submit`, accessProfile: 'reader',
+        operation: 'submit', ifMatch: '"attachment-condition"'};
+      const draft = await client.getProposal(binding, id);
+      try {
+        for (const [code, status, detail] of [
+          ['attachment.required', 422, 'The required attachment slot is empty.'],
+          ['attachment.verification-pending', 409, 'The attachment is awaiting verification. Refresh the Proposal before submitting.'],
+          ['attachment.verification-rejected', 422, 'The attachment was rejected by verification. Replace or remove the file before submitting.'],
+        ]) {
+          const attempt = client.prepareProposal(draft, 'submit', {}, `attachment-${code}`);
+          replyStatus = status; replyContentType = 'application/problem+json';
+          value = {type: `https://id.registrystack.org/problems/registry-breg/${code.replaceAll('.', '/')}`,
+            title: status === 409 ? 'Conflict' : 'Unprocessable Entity', status, detail, code,
+            traceId: '4bf92f3577b34da6a3ce929d0e0e4736', fieldPath: '/attachments/support'};
+          await assert.rejects(client.executeProposal(attempt), error => {
+            assert.equal(error.kind, 'problem'); assert.equal(error.code, code);
+            assert.equal(error.status, status); assert.equal(error.fieldPath, '/attachments/support');
+            assert.equal(error.outcomeUnknown, false); return true;
+          });
+          assert.equal(wireRequests.at(-1).method, 'POST');
+          assert.match(wireRequests.at(-1).url, /\/submit\?accessProfile=reader$/);
+        }
+      } finally { replyStatus = 200; replyContentType = 'application/json'; }
     });
 
     value = document();

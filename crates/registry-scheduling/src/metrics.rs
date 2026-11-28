@@ -377,7 +377,7 @@ pub async fn scrape(metrics: &Metrics, store: &PostgresStore, deadline: ScrapeDe
         metrics,
         SampledQueue::Outbox,
         deadline,
-        store.outbox_depth(now, deadline),
+        store.outbox_depth(deadline),
     )
     .await;
     let hook_deliveries = bounded(

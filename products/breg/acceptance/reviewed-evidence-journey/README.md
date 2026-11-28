@@ -29,7 +29,8 @@ PATH="$HOME/.cargo/bin:$PATH" \
   CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0 \
   cargo build --locked -j2 \
   -p registry-breg -p registry-bregctl -p registry-casework \
-  -p registry-caseworkctl -p registry-evidence -p registry-evidencectl --bins
+  -p registry-caseworkctl -p registry-evidence -p registry-evidencectl \
+  --features registry-breg/runtime --bins
 ```
 
 On macOS direct Cargo-built binaries need the AWS-LC FIPS library directory in
@@ -37,6 +38,10 @@ On macOS direct Cargo-built binaries need the AWS-LC FIPS library directory in
 `scripts/cargo-runtime-library-path.sh` build helper when preparing those
 binaries, or preserve the exact library path from the build's Cargo messages.
 Released executables use their installation's runtime dependencies.
+For Cargo-built macOS binaries, source that helper and prepare the same six
+packages with the build arguments above in the shell used for the run.
+The runner carries the helper's `REGISTRY_CARGO_RUNTIME_LIBRARY_PATH` into
+child processes if the Python launcher strips `DYLD_FALLBACK_LIBRARY_PATH`.
 
 ```sh
 uv sync --locked --project products/breg/acceptance/reviewed-evidence-journey
@@ -70,7 +75,7 @@ Generated output is retained for inspection, including after a failed run.
    The administrator staffs its queue through the public Directory API.
 3. The source exports only its lookup identity fields and `status`. Evidence
    imports the generated source contract into an ordinary normalized project,
-   checks it, runs the maintained 11 source/derivation/privacy fixtures, packages
+   checks it, runs the maintained 12 source/derivation/privacy fixtures, packages
    it and activates the separately compiled caller authority.
 4. An independent consumer verifies a signed false assertion from the retired
    source record. A human author submits a frozen correction under an explicit
@@ -78,26 +83,48 @@ Generated output is retained for inspection, including after a failed run.
    `{id, version, digest}` binding at acceptance. The source retains and exposes
    the exact accepted provider request ID under its service-status grant.
 5. A separate synthetic human reads current-source review context, claims the
-   exact task and approves it. The runner compares request, policy, subject,
+   exact task and asks the applicant for one document. The opted-in stage gives
+   the ask an absolute one-hour due date, and the producer declares `readsAsks`.
+   BReg mirrors it as `awaiting-party` / `party`, and the applicant finds it in
+   the party-turn list. A receiver verifies the signed `proposal.asked` hook.
+6. The applicant uses their own BReg token to add a file and answer with text
+   and that file's ID. The submission version and effects stay frozen, and the
+   Proposal returns to `in-review`. The same Casework task acquires its
+   `answered` marker. Its holder reads the answer live and downloads the cited
+   bytes through `reviewAskId` under the holder's own source authority.
+   The holder then approves that same task. A transparent loopback observer
+   records only actor labels, request identifiers, routes and HTTP states.
+   It asserts that every accepted create names the same review request and
+   that no Casework request carried the applicant's token, including worker
+   traffic. It forwards authentication unchanged to the real executable.
+   The runner compares request, policy, subject,
    submission version, effect digest and submission digest with the immutable
    result. Review approval leaves the source unchanged until explicit application.
-6. The independently authorized applier commits the exact frozen correction.
+7. The independently authorized applier commits the exact frozen correction.
    Reviewer, producer and source lookup credentials cannot apply it. Direct
    Patch cannot bypass the source's Proposal-required mutation policy; even the
    authorized applier cannot apply before approval.
-7. The consumer prepares a new request, verifies a signed true assertion from
+8. The consumer prepares a new request, verifies a signed true assertion from
    the corrected source, and checks the exact Boolean output and absence of
    private labels, business identifiers and raw status. An ungranted caller is
    refused and a tampered signature produces no verified output.
-8. Cleanup verifies that child processes, owned databases, roles and container
+9. Cleanup verifies that child processes, owned databases, roles and container
    are gone. A failed cleanup fails the journey.
 
 The unit suite tests the acceptance oracle with deliberately mismatched review
 identities, policies, digests, decisions, disclosed values and cleanup receipts.
 It also refuses before/after pairs whose subject, contract or issuer drifts.
+The ask-loop oracle rejects wrong turns, missing due dates or hooks, changed
+submissions, substituted asks, files, requests or deciding tasks, undelivered
+markers, different answer content, and applicant-token disclosure to Casework.
+`ask-loop.json` retains only identifiers and states. Answer text and file bytes
+are compared in memory and are never written into proof summaries or traffic
+logs. The authored scenario is `native-review-ask-answer-handoff`; the live
+runner additionally checks signed hooks, exact bytes, request uniqueness and
+the token boundary.
 `products/breg/scripts/check-contracts.sh` runs this unit suite. The live run
 needs Docker and matching binaries and runs only when invoked.
-The 11 Evidence fixtures are synthetic calculation and protocol checks. The
+The 12 Evidence fixtures are synthetic calculation and protocol checks. The
 combined run is real-runtime HTTP proof. Neither establishes released artifact
 installation, production issuer integration, outages, upgrades, or production
 readiness.
@@ -120,7 +147,11 @@ it does not authorize or alter source writes.
 
 The runner copies authored fixtures into the fresh output tree. It imports the
 BReg-generated Evidence source, then reuses the maintained `record-active`
-definition, Function and 11 cases from `products/breg/evidence/starter`.
+definition, Function and 12 cases from `products/breg/evidence/starter`.
+It omits the copied cases' OAuth replay exchanges to match this journey's
+static source credential, while retaining every source-response and privacy
+expectation. The Evidence target binds `connections.registry.endpoints.registry`
+and removes the replaced starter's unused extract binding.
 Environment origins, test issuer identities, secret references and credentials
 are generated separately in that output tree. The crypto helpers come from the
 maintained farmer-landholding Evidence runner; its HTTP source is never used.

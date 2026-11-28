@@ -617,7 +617,10 @@ fn event_inspection_uses_owner_hooks_for_phase_and_transitions() {
             "cancelled",
             "applied",
             "rejected",
-            "review-returned"
+            "review-returned",
+            "added",
+            "asked",
+            "answered"
         ])
     );
     let model = inspect_registry(&registry);

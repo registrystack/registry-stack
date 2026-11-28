@@ -54,6 +54,8 @@ reviewPolicies:
       - staff
       requiredApprovals: 1
       excludeInitiator: true
+      asks:
+        answerWithin: {hours: 1}
     retention:
       terminalRetentionDays: 30
       accountabilityRetentionDays: 90
@@ -73,6 +75,7 @@ reviewPolicies:
 trustedProducers:
   registry:
     profile: requester
+    readsAsks: true
     issuer: https://issuer.example.test
     subject: producer
     trustedInitiatorIssuer: https://issuer.example.test

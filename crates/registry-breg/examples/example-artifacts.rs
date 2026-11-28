@@ -9,7 +9,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut args = env::args_os().skip(1);
     if args.next().as_deref() != Some(std::ffi::OsStr::new("--output")) {
         return Err(
-            "usage: example-artifacts --output DIRECTORY [--project minimal|facility]".into(),
+            "usage: example-artifacts --output DIRECTORY [--project minimal|facility|required-attachment]".into(),
         );
     }
     let output = PathBuf::from(args.next().ok_or("missing output directory")?);
@@ -18,7 +18,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(flag) if flag == "--project" => args
             .next()
             .and_then(|value| value.into_string().ok())
-            .ok_or("--project requires minimal or facility")?,
+            .ok_or("--project requires minimal, facility or required-attachment")?,
         _ => return Err("unexpected argument".into()),
     };
     if args.next().is_some() {
@@ -27,6 +27,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (source, assets): (&[u8], Vec<ModuleAssetSource>) = match selected.as_str() {
         "minimal" => (
             include_bytes!("../../../products/breg/examples/minimal/registry.yaml"),
+            Vec::new(),
+        ),
+        "required-attachment" => (
+            include_bytes!("../../../products/breg/examples/required-attachment/registry.yaml"),
             Vec::new(),
         ),
         "facility" => (
@@ -40,7 +44,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .to_vec(),
             }],
         ),
-        _ => return Err("--project requires minimal or facility".into()),
+        _ => return Err("--project requires minimal, facility or required-attachment".into()),
     };
     let project = parse_project_yaml(source)?;
     let model = compile_project_with_assets(&project, &[], &assets, CompileProfile::Authoring)?;

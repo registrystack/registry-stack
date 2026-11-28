@@ -58,7 +58,10 @@
                 "cancelled",
                 "applied",
                 "rejected",
-                "review-returned"
+                "review-returned",
+                "added",
+                "asked",
+                "answered"
               ]
             }
           }

@@ -25,20 +25,21 @@ test('Documents download accepts its declared wildcard and returns exact bytes a
   assert.deepEqual(result.data, { bytes, mediaType: 'application/pdf' })
 })
 
-test('BReg attachment has a fixed media type', async () => {
+test('BReg attachment accepts its declared wildcard and returns exact bytes and media', async () => {
   let media = 'application/octet-stream'
   const facility = make(Facility, fixture(async () =>
     new Response(bytes, { headers: { 'Content-Type': media } })))
-  const result = await facility.call('proposals.attachments.supporting-document.get', {
+  const first = await facility.call('proposals.attachments.supporting-document.get', {
     path: { proposal_id: 'fixture' },
     query: { accessProfile: 'facility-correction-author', submissionVersion: 1 },
   })
-  assert.deepEqual(result.data, { bytes, mediaType: 'application/octet-stream' })
+  assert.deepEqual(first.data, { bytes, mediaType: 'application/octet-stream' })
   media = 'application/pdf'
-  await assert.rejects(facility.call('proposals.attachments.supporting-document.get', {
+  const second = await facility.call('proposals.attachments.supporting-document.get', {
     path: { proposal_id: 'fixture' },
     query: { accessProfile: 'facility-correction-author', submissionVersion: 1 },
-  }), { kind: 'unexpected', status: 200, raw: bytes })
+  })
+  assert.deepEqual(second.data, { bytes, mediaType: 'application/pdf' })
 })
 
 test('Evidence supports declared compact credentials and typed Accept negotiation', async () => {

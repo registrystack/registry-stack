@@ -1067,7 +1067,8 @@ fn a_caller_document_declares_the_workflow_write_refusal_only_to_a_bound_writer(
             registry.actions(),
             registry.entities(),
             Some(&visible),
-        );
+        )
+        .unwrap();
         assert_eq!(
             paths["/v1/proposals/{proposal_id}/apply"]["post"]["responses"]["403"].is_object(),
             declared,
@@ -1101,7 +1102,7 @@ fn compiled_bound_writer_registry() -> CompiledRegistry {
                     {"action": "propose-person-phone", "operations": ["start"], "targets": targets}],
                 "proposals": [{"action": "propose-person-phone", "ownership": "caller",
                     "operations": ["get", "list", "edit", "submit", "cancel", "apply"],
-                    "targets": targets}]}})
+                    "readableInputs": ["person", "phone"], "targets": targets}]}})
     };
     let source = json!({"datasets": {"test-dataset": {}},
         "apiVersion": "id.registrystack.org/formats/breg/project/v1alpha1", "kind": "BRegProject",
@@ -1168,7 +1169,8 @@ fn a_caller_document_declares_a_record_condition_write_refusal_to_a_bound_writer
                 registry.actions(),
                 registry.entities(),
                 Some(&visible),
-            );
+            )
+            .unwrap();
             assert_eq!(
                 paths["/v1/proposals/{proposal_id}/apply"]["post"]["responses"]["403"].is_object(),
                 declared,
@@ -1216,6 +1218,7 @@ fn compiled_record_condition_writer_registry(effect: &str) -> CompiledRegistry {
                     {"action": "propose-person", "operations": ["start"], "targets": targets}],
                 "proposals": [{"action": "propose-person", "ownership": "caller",
                     "operations": ["get", "list", "edit", "submit", "cancel", "apply"],
+                    "readableInputs": if effect == "patch" { json!(["person", "phone"]) } else { json!(["phone"]) },
                     "targets": targets}]}})
     };
     let source = json!({"datasets": {"test-dataset": {}},

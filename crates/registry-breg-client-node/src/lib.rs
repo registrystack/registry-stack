@@ -3567,6 +3567,66 @@ impl BaseRegistryClient {
     }
 
     #[napi]
+    pub async fn answer_proposal_ask(
+        &self,
+        proposal: &Proposal,
+        ask_id: String,
+        body: Value,
+        key: String,
+    ) -> Result<Proposal> {
+        let body: registry_breg_client::BRegProposalAnswerRequest = serde_json::from_value(body)
+            .map_err(|_| binding_error("invalid-request", "Proposal answer must be exact JSON"))?;
+        let key = idempotency_key(key)?;
+        self.inner
+            .answer_proposal_ask(&proposal.inner, &ask_id, &body, &key)
+            .await
+            .map(|response| Proposal {
+                response_etag: response
+                    .metadata
+                    .etag()
+                    .map(|etag| etag.as_str().to_owned()),
+                inner: response.value,
+            })
+            .map_err(client_error)
+    }
+
+    #[napi]
+    pub async fn add_proposal_addition(
+        &self,
+        proposal: &Proposal,
+        slot: String,
+        content_type: String,
+        bytes: Buffer,
+        key: String,
+    ) -> Result<Proposal> {
+        let key = idempotency_key(key)?;
+        self.inner
+            .add_proposal_addition(&proposal.inner, &slot, &content_type, &bytes, &key)
+            .await
+            .map(|response| Proposal {
+                response_etag: response
+                    .metadata
+                    .etag()
+                    .map(|etag| etag.as_str().to_owned()),
+                inner: response.value,
+            })
+            .map_err(client_error)
+    }
+
+    #[napi]
+    pub async fn download_proposal_addition(
+        &self,
+        proposal: &Proposal,
+        addition: String,
+    ) -> Result<RawOutcome> {
+        self.inner
+            .download_proposal_addition(&proposal.inner, &addition)
+            .await
+            .map(raw_value)
+            .map_err(client_error)
+    }
+
+    #[napi]
     pub async fn upload_proposal_attachment(
         &self,
         proposal: &Proposal,

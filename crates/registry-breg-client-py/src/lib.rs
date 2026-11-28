@@ -3037,6 +3037,85 @@ impl BaseRegistryClient {
             .map_err(|error| sdk_error(py, error))?;
         complete_value(py, &response.value, &response.metadata)
     }
+    fn answer_proposal_ask(
+        &self,
+        py: Python<'_>,
+        proposal: PyRef<'_, Proposal>,
+        ask_id: &str,
+        body: &Bound<'_, PyAny>,
+        key: &str,
+    ) -> PyResult<Proposal> {
+        let proposal = proposal.inner.clone();
+        let value =
+            python_to_json(body).map_err(|_| invalid(py, "Proposal answer must be exact JSON"))?;
+        let body: breg_client_sdk::BRegProposalAnswerRequest = serde_json::from_value(value)
+            .map_err(|_| invalid(py, "Proposal answer must be exact JSON"))?;
+        let key = BRegIdempotencyKey::parse(key).map_err(|error| invalid(py, error.to_string()))?;
+        let response = py
+            .detach(|| {
+                self.runtime.block_on(
+                    self.inner
+                        .answer_proposal_ask(&proposal, ask_id, &body, &key),
+                )
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        Ok(Proposal {
+            response_etag: response
+                .metadata
+                .etag()
+                .map(|etag| etag.as_str().to_owned()),
+            inner: response.value,
+        })
+    }
+
+    fn add_proposal_addition(
+        &self,
+        py: Python<'_>,
+        proposal: PyRef<'_, Proposal>,
+        slot: &str,
+        content_type: &str,
+        bytes: &[u8],
+        key: &str,
+    ) -> PyResult<Proposal> {
+        let proposal = proposal.inner.clone();
+        let bytes = bytes.to_vec();
+        let key = BRegIdempotencyKey::parse(key).map_err(|error| invalid(py, error.to_string()))?;
+        let response = py
+            .detach(|| {
+                self.runtime.block_on(self.inner.add_proposal_addition(
+                    &proposal,
+                    slot,
+                    content_type,
+                    &bytes,
+                    &key,
+                ))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        Ok(Proposal {
+            response_etag: response
+                .metadata
+                .etag()
+                .map(|etag| etag.as_str().to_owned()),
+            inner: response.value,
+        })
+    }
+
+    fn download_proposal_addition<'py>(
+        &self,
+        py: Python<'py>,
+        proposal: PyRef<'_, Proposal>,
+        addition: &str,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let proposal = proposal.inner.clone();
+        let response = py
+            .detach(|| {
+                self.runtime
+                    .block_on(self.inner.download_proposal_addition(&proposal, addition))
+            })
+            .map_err(|error| sdk_error(py, error))?;
+        raw_value(py, &response.value, &response.metadata)
+    }
+
     fn upload_proposal_attachment(
         &self,
         py: Python<'_>,

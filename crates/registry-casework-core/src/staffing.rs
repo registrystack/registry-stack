@@ -25,6 +25,9 @@ pub struct ReviewStaffingQuery {
     pub subject_version: Option<String>,
     pub subject_digest: Option<ContentDigest>,
     pub reference: Option<String>,
+    /// Lists tasks by their ask marker: waiting, answered, or expired.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub marker: Option<crate::ReviewTaskMarker>,
     #[serde(default)]
     pub sort: ReviewTaskSort,
     pub cursor: Option<Uuid>,
@@ -219,6 +222,19 @@ pub struct ReviewClockRecomputeResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn a_query_without_a_marker_serializes_without_one() {
+        // The query is hashed into the staffing cursors it mints, so a query
+        // that names no marker must hash as it did before markers existed.
+        let value = serde_json::to_value(ReviewStaffingQuery::default()).unwrap();
+        assert!(value.get("marker").is_none());
+        let value = serde_json::to_value(ReviewStaffingQuery {
+            marker: Some(crate::ReviewTaskMarker::Waiting),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(value["marker"], "waiting");
+    }
     #[test]
     fn exact_subject_filter_rejects_partial_binding() {
         let q = ReviewStaffingQuery {

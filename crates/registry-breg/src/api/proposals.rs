@@ -4,11 +4,13 @@
 //! admitted independently; a business Record is never used as a Proposal.
 
 use super::*;
+mod answers;
 use crate::model::{
     CompiledAction, CompiledActionExecution, CompiledActionRoute, CompiledProposalPermission,
     CompiledRegistry, HttpMethod, ProposalOperation,
 };
 use crate::postgres::{ProposalAuthority, ProposalAuthorityOperation, RowBoundaryContext};
+pub(super) use answers::answer;
 
 pub(super) fn proposal_problem(error: MutationError) -> Response {
     match error {
@@ -38,6 +40,7 @@ pub(crate) struct ProposalMutationInput<'a> {
     pub executor_lease: Option<ExecutorLease>,
     pub rebase_start_authority: Option<&'a ProposalAuthority>,
     pub attachment: Option<crate::attachment::AttachmentMutation>,
+    pub answer: Option<crate::review_store::asks::AnswerMutation>,
     pub correlation: &'a RequestCorrelation,
     pub human_identity: Option<&'a registry_review_client::HumanIdentity>,
     pub claims: Option<&'a VerifiedRequestClaims>,
@@ -60,8 +63,13 @@ pub(crate) struct ProposalRecordReadAuthority {
     pub context: crate::postgres::ClaimContext,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum ReviewDocumentSource<'a> {
+    Field(&'a str),
+    Ask(Uuid),
+}
 pub(crate) struct ReviewContextDocumentRead<'a> {
-    pub field: &'a str,
+    pub source: ReviewDocumentSource<'a>,
     pub effect_digest: &'a str,
     pub schema_digest: &'a str,
     pub records: &'a BTreeMap<String, ProposalRecordReadAuthority>,
@@ -305,7 +313,7 @@ pub(crate) fn authorize_checked(
     {
         return Err(FailedCheck::TaskGrantMissing);
     }
-    let (profile, targets, task_source) = match operation {
+    let (profile, targets, task_source, profile_kind) = match operation {
         ProposalAuthorityOperation::Start => {
             let grant = action
                 .permissions
@@ -339,6 +347,7 @@ pub(crate) fn authorize_checked(
                 grant.profile_id.as_str(),
                 targets,
                 grant.task_grant.as_ref(),
+                grant.actor_kind,
             )
         }
         ProposalAuthorityOperation::Lifecycle(operation) => {
@@ -389,6 +398,7 @@ pub(crate) fn authorize_checked(
                 grant.profile_id.as_str(),
                 targets,
                 grant.task_grant.as_ref(),
+                grant.actor_kind,
             )
         }
     };
@@ -405,6 +415,27 @@ pub(crate) fn authorize_checked(
     authority.common = authority
         .common
         .with_audit_context(crate::audit::RequestAuditContext::from_claims(claims));
+    // An applicant's answers and the files they cite reach human reviewers
+    // only: a verified human caller, on a profile written for humans or for
+    // any kind, acting for no one else and under no task grant. A delegated
+    // actor, a standing or task-granted agent and a service never receive
+    // them, whatever their grant says.
+    authority.receives_review_answers = claims.actor_kind()
+        == Some(registry_platform_oidc::ActorKind::Human)
+        && claims.actor_subject().is_none()
+        && claims.grant().is_none()
+        && task_source.is_none()
+        && matches!(
+            profile_kind,
+            None | Some(crate::contract::ActorKindSource::Human)
+        );
+    // Answering is the applicant's own act and takes the same human test.
+    // The Proposal document's `asks` member follows this admission.
+    if operation == ProposalAuthorityOperation::Lifecycle(ProposalOperation::Answer)
+        && !authority.receives_review_answers
+    {
+        return Err(FailedCheck::ActorKind);
+    }
     match (task_source, claims.grant()) {
         (None, None) => {}
         (Some(source), Some(grant)) => {
@@ -461,6 +492,10 @@ pub(super) fn selected_profile(raw: Option<&str>) -> Result<Option<String>, ()> 
 }
 
 fn review_status_options(raw: Option<&str>) -> Result<(Option<String>, bool), ()> {
+    review_include_options(raw, "progress")
+}
+
+fn review_include_options(raw: Option<&str>, include: &str) -> Result<(Option<String>, bool), ()> {
     let Some(raw) = raw else {
         return Ok((None, false));
     };
@@ -468,20 +503,20 @@ fn review_status_options(raw: Option<&str>) -> Result<(Option<String>, bool), ()
         return Err(());
     }
     let mut ordinary = Vec::new();
-    let mut include_progress = false;
+    let mut included = false;
     for pair in raw.split('&') {
         let (name, value) = pair.split_once('=').ok_or(())?;
         if percent_decode(name).map_err(|_| ())? == "include" {
-            if include_progress || percent_decode(value).map_err(|_| ())? != "progress" {
+            if included || percent_decode(value).map_err(|_| ())? != include {
                 return Err(());
             }
-            include_progress = true;
+            included = true;
         } else {
             ordinary.push(pair);
         }
     }
     let ordinary = (!ordinary.is_empty()).then(|| ordinary.join("&"));
-    Ok((selected_profile(ordinary.as_deref())?, include_progress))
+    Ok((selected_profile(ordinary.as_deref())?, included))
 }
 
 fn parse_input(action: &CompiledAction, value: &Value) -> Result<Map<String, Value>, ()> {
@@ -764,6 +799,7 @@ pub(super) async fn start(
             executor_lease: None,
             rebase_start_authority: None,
             attachment: None,
+            answer: None,
             correlation: &correlation,
             human_identity: claims.human_identity(),
             claims: Some(&claims),
@@ -1165,6 +1201,7 @@ pub(super) async fn transition(
             executor_lease: None,
             rebase_start_authority: rebase_start_authority.as_ref(),
             attachment: None,
+            answer: None,
             correlation: &correlation,
             human_identity: claims.human_identity(),
             claims: Some(&claims),
@@ -1321,6 +1358,7 @@ pub(super) async fn review_context_batch(
             claims.clone(),
             profile.clone(),
             ProposalOperation::GetReviewContext,
+            ReviewAnswers::Omitted,
             correlation.clone(),
         )
         .await;
@@ -1364,6 +1402,7 @@ pub(super) async fn review_context(
         claims,
         raw,
         ProposalOperation::GetReviewContext,
+        ReviewAnswers::Served,
         correlation,
     )
     .await
@@ -1382,6 +1421,7 @@ pub(super) async fn review_status(
         claims,
         raw,
         ProposalOperation::GetReviewStatus,
+        ReviewAnswers::Omitted,
         correlation,
     )
     .await
@@ -1559,12 +1599,23 @@ pub(super) async fn task_grant_context(
     }
 }
 
+/// Whether a review read may carry applicant answers. The batch inbox read
+/// shows none, so it neither serves nor audits them; only the single-Proposal
+/// review-context read does, and then only to a human reviewer.
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum ReviewAnswers {
+    Served,
+    Omitted,
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn review_read(
     service: Arc<HttpService>,
     id: String,
     claims: VerifiedRequestClaims,
     raw: Option<String>,
     operation: ProposalOperation,
+    answers: ReviewAnswers,
     correlation: RequestCorrelation,
 ) -> Response {
     let Some(mutations) = &service.mutations else {
@@ -1573,8 +1624,10 @@ async fn review_read(
     let Ok(id) = Uuid::parse_str(&id) else {
         return concealed(FailedCheck::Visibility);
     };
-    let Ok((selected, include_progress)) = (if operation == ProposalOperation::GetReviewStatus {
+    let Ok((selected, included)) = (if operation == ProposalOperation::GetReviewStatus {
         review_status_options(raw.as_deref())
+    } else if operation == ProposalOperation::GetReviewContext {
+        review_include_options(raw.as_deref(), "answers")
     } else {
         selected_profile(raw.as_deref()).map(|selected| (selected, false))
     }) else {
@@ -1594,7 +1647,7 @@ async fn review_read(
     else {
         return concealed(FailedCheck::Visibility);
     };
-    let authority = match authorize_checked(
+    let mut authority = match authorize_checked(
         &service.registry,
         action,
         &claims,
@@ -1617,6 +1670,10 @@ async fn review_read(
             .await;
         }
     };
+    if answers == ReviewAnswers::Omitted || !included {
+        authority.receives_review_answers = false;
+    }
+    let include_progress = included && operation == ProposalOperation::GetReviewStatus;
     let records = review_record_authorities(
         &service.registry,
         action,
@@ -1673,6 +1730,7 @@ pub(crate) fn review_record_authorities(
             use crate::contract::ProposalContextValueSource;
             let target = match source {
                 ProposalContextValueSource::Input { .. }
+                | ProposalContextValueSource::Additions { .. }
                 | ProposalContextValueSource::Document { .. } => continue,
                 ProposalContextValueSource::Record { input, .. } => {
                     let input = action

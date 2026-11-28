@@ -3,7 +3,210 @@
 import copy
 import unittest
 
-from proof import check_correlation, check_minimized, check_cleanup, check_observations
+from proof import check_correlation, check_minimized, check_cleanup, check_observations, check_ask_loop
+
+
+class AskLoopTests(unittest.TestCase):
+    def test_static_source_fixture_omits_only_oauth_replay(self):
+        from run_live import bind_static_fixture
+
+        fixture = {
+            "cases": [
+                {
+                    "id": "positive",
+                    "acquisition": {
+                        "intercepts": [
+                            {"type": "endpoint", "endpoint": "registry"},
+                            {"type": "token-endpoint", "endpoint": "registry"},
+                        ],
+                        "exchanges": [
+                            {"request": {"tokenRequest": True}},
+                            {"request": {"path": "/lookup"}, "response": {"status": 200}},
+                        ],
+                    },
+                },
+                {"id": "timeout", "sourceFailure": "timeout"},
+            ]
+        }
+        bind_static_fixture(fixture)
+        self.assertEqual(
+            fixture["cases"][0]["acquisition"],
+            {
+                "intercepts": [{"type": "endpoint", "endpoint": "registry"}],
+                "exchanges": [{"request": {"path": "/lookup"}, "response": {"status": 200}}],
+            },
+        )
+        self.assertEqual(fixture["cases"][1], {"id": "timeout", "sourceFailure": "timeout"})
+
+    def test_evidence_connection_uses_the_current_endpoint_binding(self):
+        from run_live import registry_connection
+
+        self.assertEqual(
+            registry_connection("http://127.0.0.1:1234"),
+            {
+                "endpoints": {
+                    "registry": {
+                        "origin": "http://127.0.0.1:1234",
+                        "authentication": {
+                            "type": "static-authorization",
+                            "tokenRef": "secret:file/source-token",
+                        },
+                    }
+                }
+            },
+        )
+
+    def test_literal_loopback_hook_uses_the_default_dns_policy(self):
+        from pathlib import Path
+        from types import SimpleNamespace
+        from run_live import breg_runtime
+
+        harness = SimpleNamespace(
+            output=Path("/unused"),
+            secret_root=Path("/unused/secrets"),
+            hook_origin="http://127.0.0.1:1234",
+            db_configs={"source": {}},
+            issuer_url="http://127.0.0.1:1235",
+            tokens={},
+        )
+        runtime = breg_runtime(
+            harness, "source", Path("/unused/package"), "http://127.0.0.1:1236", "http://127.0.0.1:1237"
+        )
+        self.assertEqual(runtime["destinations"]["hooks"]["ask-observer"]["dnsFamily"], "dual-stack-strict")
+
+    def observations(self):
+        submitted = {"id": "p1", "submissionVersion": 1, "effectDigest": "sha256:effects"}
+        ask = {
+            "askId": "q1",
+            "state": "open",
+            "wants": [{"kind": "document"}],
+            "askedAt": "2026-11-28T00:00:00Z",
+            "dueAt": "2026-11-28T01:00:00Z",
+        }
+        task = {"taskId": "t1", "requestId": "r1", "marker": "waiting"}
+        party = dict(
+            submitted,
+            state="submitted",
+            status="awaiting-party",
+            turn="party",
+            asks=[{"id": "q1", "state": "open", "dueAt": ask["dueAt"]}],
+        )
+        answered = dict(
+            submitted,
+            state="submitted",
+            status="in-review",
+            turn="official",
+            asks=[
+                {"id": "q1", "state": "answered", "answer": {"text": "PRIVATE-ANSWER", "additions": ["f1"]}}
+            ],
+        )
+        document = {
+            "id": "f1",
+            "verificationStatus": "notRequired",
+            "download": {
+                "method": "GET",
+                "operation": "get-review-context",
+                "accessProfile": "reviewer",
+                "path": "/v1/proposals/p1/additions/f1?reviewAskId=q1&submissionVersion=1",
+            },
+        }
+        return {
+            "submitted": submitted,
+            "accepted": {"requestId": "r1"},
+            "asked": {"task": task, "ask": ask},
+            "party": party,
+            "partyPage": {"items": [party]},
+            "hook": {
+                "id": "e1",
+                "type": "proposal.asked",
+                "data": {"proposalId": "p1", "submissionVersion": 1, "transition": "asked"},
+            },
+            "answered": answered,
+            "additionId": "f1",
+            "task": dict(task, marker="answered"),
+            "context": {
+                "taskId": "t1",
+                "requestId": "r1",
+                "asks": [
+                    {
+                        "askId": "q1",
+                        "taskId": "t1",
+                        "state": "answered",
+                        "answer": {"text": "PRIVATE-ANSWER", "documents": [document]},
+                    }
+                ],
+            },
+            "download": b"PRIVATE-FILE",
+            "createdRequestIds": ["r1"],
+            "correlations": [{"requestId": "r1"}] * 3,
+            "decidedTask": dict(
+                task,
+                state="decided",
+                decidedByCaller=True,
+                decisionReceipt={"decision": "approve", "outcome": "approved"},
+            ),
+            "requests": [{"actor": "producer", "method": "POST", "status": 201}],
+        }
+
+    def test_served_loop_returns_only_identifiers_and_states(self):
+        summary = check_ask_loop(self.observations(), "PRIVATE-ANSWER", b"PRIVATE-FILE")
+        self.assertEqual(summary["requestId"], "r1")
+        self.assertEqual(summary["taskId"], "t1")
+        self.assertNotIn("PRIVATE", str(summary))
+        self.assertEqual(summary["marker"], "answered")
+
+    def test_mirror_compares_absolute_deadlines_across_utc_spellings(self):
+        observations = self.observations()
+        observations["party"]["asks"][0]["dueAt"] = "2026-11-28T01:00:00+00:00"
+        check_ask_loop(observations, "PRIVATE-ANSWER", b"PRIVATE-FILE")
+
+    def test_each_loop_boundary_rejects_a_mismatched_observation(self):
+        mutations = [
+            ("party", "status", "in-review"),
+            ("party", "turn", "official"),
+            ("answered", "submissionVersion", 2),
+            ("answered", "effectDigest", "other"),
+            ("answered", "status", "awaiting-party"),
+            ("task", "marker", "waiting"),
+            ("task", "taskId", "another-task"),
+            ("context", "requestId", "another-request"),
+            ("decidedTask", "taskId", "another-task"),
+            ("decidedTask", "decidedByCaller", False),
+        ]
+        for member, key, value in mutations:
+            observations = self.observations()
+            observations[member][key] = value
+            with self.subTest(member=member, key=key), self.assertRaises(AssertionError):
+                check_ask_loop(observations, "PRIVATE-ANSWER", b"PRIVATE-FILE")
+        for member, value in [
+            ("partyPage", {"items": []}),
+            ("createdRequestIds", ["r1", "r2"]),
+            ("download", b"other"),
+            ("requests", [{"actor": "applicant"}]),
+        ]:
+            observations = self.observations()
+            observations[member] = value
+            with self.subTest(member=member), self.assertRaises(AssertionError):
+                check_ask_loop(observations, "PRIVATE-ANSWER", b"PRIVATE-FILE")
+
+    def test_answer_and_citation_are_read_from_the_right_ask(self):
+        for change in ("text", "file", "ask", "link", "deadline", "event"):
+            observations = self.observations()
+            answer = observations["context"]["asks"][0]["answer"]
+            if change == "text":
+                answer["text"] = "another answer"
+            elif change == "file":
+                answer["documents"][0]["id"] = "another-file"
+            elif change == "ask":
+                observations["context"]["asks"][0]["askId"] = "another-ask"
+            elif change == "link":
+                answer["documents"][0]["download"]["path"] = "/v1/proposals/p1/additions/f1?reviewAskId=q2"
+            elif change == "deadline":
+                del observations["asked"]["ask"]["dueAt"]
+            else:
+                observations["hook"]["type"] = "proposal.submitted"
+            with self.subTest(change=change), self.assertRaises(AssertionError):
+                check_ask_loop(observations, "PRIVATE-ANSWER", b"PRIVATE-FILE")
 
 
 class CorrelationTests(unittest.TestCase):

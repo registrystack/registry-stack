@@ -188,6 +188,7 @@ impl Fixture {
                 identity: &self.identity,
                 source_profile_id: "reviewer",
                 credential: EphemeralCredential::new("synthetic-human"),
+                include_answers: false,
             })
             .await;
         match posture {

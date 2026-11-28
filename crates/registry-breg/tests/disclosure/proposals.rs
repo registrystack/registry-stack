@@ -134,6 +134,7 @@ fn proposal_project() -> Value {
         profile["permissions"]["actions"] = json!(actions);
         profile["permissions"]["proposals"] = json!(proposals);
     }
+    super::fixture::grant_readable_inputs(&mut source);
     source
 }
 

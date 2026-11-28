@@ -3,7 +3,8 @@
 `registry-review-client` is the bounded, runtime-free HTTP client for the
 producer-facing review handoff contract. It creates or recovers review
 requests, reads their bindings, retrieves terminal results, pages the
-requester result feed, and cancels unfinished requests.
+requester result feed, cancels unfinished requests, and pages, reads and
+answers reviewer asks.
 
 The producer selects an explicitly granted provider profile with
 `Registry-Review-Profile`. Failures accept bounded, well-formed opaque provider problem URIs and
@@ -38,3 +39,17 @@ failure grants permission to retry with a fresh idempotency key.
 Authentication is supplied for each call. The client does not retain
 credentials, retry mutations, follow redirects, use ambient proxies, evaluate
 review policy, operate reviewer tasks, or apply a source-system result.
+
+`ask_feed`, `ask` and `answer_ask` follow the result feed and result read where
+they can. The feed refuses nil identifiers and a cursor that is not its final
+entry, and a cursor past retention surfaces as a 410 `Problem`. `ask` and
+`answer_ask` take the accepted request binding, as the result read and cancel
+do, and refuse a response whose request, ask or subject differs from it.
+`answer_ask` posts only the subject binding and answer time with an
+idempotency key, and refuses an answer for another subject before any request.
+Its typed outcomes are `Answered`, `ConcealedOrUnknown` for an empty 404, and
+`NotOpen` for a 409 whose problem code is `review.ask-not-open`. Any other 404
+or 409, including a problem document, is a `Problem` error. A success must be
+the same ask, answered, with the `answeredAt` that was sent. None of them
+retries. See the protocol README for the rules a producer follows when it
+consumes the feed.

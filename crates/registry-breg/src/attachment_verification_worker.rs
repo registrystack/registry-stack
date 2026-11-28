@@ -117,6 +117,10 @@ macro_rules! verifiable {
              WHERE reference.sha256 = verdict.sha256 \
                AND reference.content_type = verdict.content_type \
                AND reference.erased_at IS NULL) \
+           OR EXISTS (SELECT 1 FROM {schema}.registry_proposal_additions AS addition_reference \
+             WHERE addition_reference.sha256 = verdict.sha256 \
+               AND addition_reference.content_type = verdict.content_type \
+               AND addition_reference.erased_at IS NULL) \
            OR EXISTS (SELECT 1 FROM {schema}.registry_record_attachments AS record_reference \
              WHERE record_reference.sha256 = verdict.sha256 \
                AND record_reference.content_type = verdict.content_type \

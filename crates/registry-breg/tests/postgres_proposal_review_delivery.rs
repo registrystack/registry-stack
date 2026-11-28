@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Native Proposal review delivery uses durable, authority-bound PostgreSQL work.
 #![cfg(feature = "postgres-test")]
+#[path = "support/proposal_review_asks.rs"]
+mod asks;
 #[path = "support/client_http.rs"]
 #[allow(dead_code)]
 mod client_http;
@@ -136,6 +138,7 @@ enum ResultReply {
 }
 
 struct AuthorityState {
+    asks: Mutex<asks::FeedState>,
     gates: [Gate; 2],
     gated: bool,
     first_succeeds: bool,
@@ -167,6 +170,7 @@ impl Authority {
         result_replies: [ResultReply; 2],
     ) -> Self {
         let state = Arc::new(AuthorityState {
+            asks: Mutex::new(Default::default()),
             gates: [Gate::default(), Gate::default()],
             gated,
             first_succeeds,
@@ -182,6 +186,12 @@ impl Authority {
             .route("/v1/review-requests/{id}/cancel", post(cancel_review))
             .route("/v1/review-requests/{id}/result", get(lookup_result))
             .route("/v1/review-results", get(empty_feed))
+            .route("/v1/review-asks", get(asks::feed))
+            .route(
+                "/v1/review-requests/{request}/asks/{ask}/answer",
+                post(asks::answer_remote),
+            )
+            .route("/v1/review-requests/{request}/asks/{ask}", get(asks::read))
             .with_state(state.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}/", listener.local_addr().unwrap());
@@ -2533,6 +2543,8 @@ async fn a_handoff_refusal_is_named_only_while_the_refused_submission_is_current
     let mut source = registry_source(json!(policy()));
     source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["operations"] =
         json!(["get", "list", "submit", "revise", "cancel"]);
+    source["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"] =
+        json!(["target", "value"]);
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
     let bindings = authority.registry.clone();

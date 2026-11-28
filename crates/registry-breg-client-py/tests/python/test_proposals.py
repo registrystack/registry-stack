@@ -28,6 +28,58 @@ PROPOSAL = {
 
 
 class ProposalLookupTests(unittest.TestCase):
+    def test_status_is_closed_and_application_pending_requires_refresh(self):
+        document = dict(PROPOSAL)
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.send_header('Content-Type', 'application/json')
+                self.send_header('Cache-Control', 'no-store')
+                self.send_header('Vary', 'authorization, accept')
+                self.send_header('traceparent', '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01')
+                self.end_headers()
+                self.wfile.write(json.dumps(METADATA if '/registry' in self.path else document).encode())
+
+            def log_message(self, *_args):
+                return
+
+        server = HTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            client = BaseRegistryClient(f'http://127.0.0.1:{server.server_port}/')
+            binding = client.registry_contract('reader').select_proposal_get('reader')
+            for status, state, turn in [
+                ('draft', 'draft', 'party'), ('awaiting-party', 'submitted', 'party'),
+                ('in-review', 'submitted', 'official'), ('approved', 'submitted', 'official'),
+                ('processing', 'submitted', 'nobody'), ('applied', 'applied', 'nobody'),
+                ('rejected', 'rejected', 'nobody'), ('cancelled', 'cancelled', 'nobody'),
+            ]:
+                document = dict(PROPOSAL, status=status, state=state, turn=turn, links={'self': PROPOSAL['links']['self']})
+                if state == 'submitted':
+                    document['effectDigest'] = REVISION
+                self.assertEqual(client.get_proposal(binding, ID).document['status'], status)
+            document = dict(PROPOSAL, state='submitted', status='approved', turn='official', effectDigest=REVISION, links={
+                'self': PROPOSAL['links']['self'], 'revise': {
+                    'method': 'POST', 'path': f'/v1/proposals/{ID}/revise', 'accessProfile': 'reader', 'operation': 'revise',
+                    'ifMatch': '"condition"', 'availability': {'available': False, 'observedRevision': 2,
+                                                             'reason': 'application-pending', 'recovery': 'refresh'}}})
+            self.assertEqual(client.get_proposal(binding, ID).document['links']['revise']['availability']['reason'], 'application-pending')
+            document['links']['revise']['availability']['recovery'] = 'retry'
+            with self.assertRaises(BaseRegistryClientError):
+                client.get_proposal(binding, ID)
+            for status in ['unknown', None, False, 1]:
+                document = dict(PROPOSAL, status=status)
+                with self.assertRaises(BaseRegistryClientError):
+                    client.get_proposal(binding, ID)
+            document = PROPOSAL
+            self.assertNotIn('status', client.get_proposal(binding, ID).document)
+        finally:
+            server.shutdown()
+            thread.join()
+            server.server_close()
+
     def test_metadata_inventory_summaries_and_version_refusals(self):
         fixture = Path(__file__).resolve().parents[3] / 'registry-breg-client/tests/fixtures/attachments.json'
         document = json.loads(fixture.read_text())['metadata']

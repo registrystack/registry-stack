@@ -28,8 +28,12 @@ pub enum ProblemCode {
     ActionRefused,
     AttachmentContentType,
     AttachmentDigestMismatch,
+    AttachmentLimitReached,
+    AttachmentRequired,
     AttachmentSlotWriteOnce,
     AttachmentTooLarge,
+    AttachmentVerificationPending,
+    AttachmentVerificationRejected,
     AuthenticationRefused,
     ExternalViewIncomplete,
     IdempotencyConflict,
@@ -75,8 +79,12 @@ impl ProblemCode {
         Self::ActionRefused,
         Self::AttachmentContentType,
         Self::AttachmentDigestMismatch,
+        Self::AttachmentLimitReached,
+        Self::AttachmentRequired,
         Self::AttachmentSlotWriteOnce,
         Self::AttachmentTooLarge,
+        Self::AttachmentVerificationPending,
+        Self::AttachmentVerificationRejected,
         Self::AuthenticationRefused,
         Self::ExternalViewIncomplete,
         Self::IdempotencyExpired,
@@ -127,8 +135,12 @@ impl ProblemCode {
         Self::ActionRefused,
         Self::AttachmentContentType,
         Self::AttachmentDigestMismatch,
+        Self::AttachmentLimitReached,
+        Self::AttachmentRequired,
         Self::AttachmentSlotWriteOnce,
         Self::AttachmentTooLarge,
+        Self::AttachmentVerificationPending,
+        Self::AttachmentVerificationRejected,
         Self::AuthenticationRefused,
         Self::IdempotencyExpired,
         Self::IdempotencyConflict,
@@ -171,6 +183,10 @@ impl ProblemCode {
             Self::ActionRefused => "action.refused",
             Self::AttachmentContentType => "attachment.content-type",
             Self::AttachmentDigestMismatch => "attachment.digest-mismatch",
+            Self::AttachmentLimitReached => "attachment.limit-reached",
+            Self::AttachmentRequired => "attachment.required",
+            Self::AttachmentVerificationPending => "attachment.verification-pending",
+            Self::AttachmentVerificationRejected => "attachment.verification-rejected",
             Self::AttachmentSlotWriteOnce => "attachment.slot-write-once",
             Self::AttachmentTooLarge => "attachment.too-large",
             Self::AuthenticationRefused => "authentication.refused",
@@ -223,6 +239,8 @@ impl ProblemCode {
             Self::IngestionProfileMismatch | Self::WriteOutsideBoundary => 403,
             Self::LookupUnresolved | Self::ResourceNotFound => 404,
             Self::AttachmentSlotWriteOnce
+            | Self::AttachmentLimitReached
+            | Self::AttachmentVerificationPending
             | Self::IdempotencyConflict
             | Self::IngestionChunkMismatch
             | Self::IngestionRunBlocked
@@ -241,6 +259,8 @@ impl ProblemCode {
             Self::AttachmentContentType | Self::UnsupportedMediaType => 415,
             Self::ActionRefused
             | Self::AttachmentDigestMismatch
+            | Self::AttachmentRequired
+            | Self::AttachmentVerificationRejected
             | Self::StatisticalDatasetReleaseRefused => 422,
             Self::PreconditionRequired => 428,
             Self::ActionHandlerFailed | Self::StatisticalDatasetDomainViolation => 500,
@@ -300,6 +320,10 @@ impl ProblemCode {
                 "The record attachment slot already holds a file and is write-once."
             }
             Self::AttachmentTooLarge => "The file is larger than the attachment slot accepts.",
+            Self::AttachmentLimitReached => "The supporting document slot has reached its file limit.",
+            Self::AttachmentRequired => "The required attachment slot is empty.",
+            Self::AttachmentVerificationPending => "The attachment is awaiting verification. Refresh the Proposal before submitting.",
+            Self::AttachmentVerificationRejected => "The attachment was rejected by verification. Replace or remove the file before submitting.",
             Self::AuthenticationRefused => "The bearer token or delivery signature was not accepted.",
             Self::ExternalViewIncomplete => {
                 "The external view's indexed coverage is incomplete for this request."

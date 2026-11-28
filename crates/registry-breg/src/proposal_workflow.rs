@@ -246,6 +246,52 @@ impl ProposalWorkflow {
         })
     }
 
+    /// Record supporting information without changing the frozen submission.
+    pub fn record_addition(
+        mut self,
+        _context: TrustedTransitionContext,
+    ) -> Result<WorkflowTransition, WorkflowError> {
+        self.refuse_rejected()?;
+        if self.state != ProposalState::Submitted {
+            return Err(WorkflowError::InvalidTransition);
+        }
+        self.workflow_revision = self.workflow_revision.next()?;
+        Ok(WorkflowTransition {
+            workflow: self,
+            effect: TransitionEffect::Added,
+        })
+    }
+
+    /// Record an arriving review ask without changing the submission.
+    pub fn record_ask(
+        self,
+        context: TrustedTransitionContext,
+    ) -> Result<WorkflowTransition, WorkflowError> {
+        let mut transition = self.record_addition(context)?;
+        transition.effect = TransitionEffect::Asked;
+        Ok(transition)
+    }
+
+    /// Record a mirrored ask's state change without changing the submission.
+    pub fn record_ask_change(
+        self,
+        context: TrustedTransitionContext,
+    ) -> Result<WorkflowTransition, WorkflowError> {
+        let mut transition = self.record_addition(context)?;
+        transition.effect = TransitionEffect::AskChanged;
+        Ok(transition)
+    }
+
+    /// Record the applicant's answer without changing the submission.
+    pub fn record_answer(
+        self,
+        context: TrustedTransitionContext,
+    ) -> Result<WorkflowTransition, WorkflowError> {
+        let mut transition = self.record_addition(context)?;
+        transition.effect = TransitionEffect::Answered;
+        Ok(transition)
+    }
+
     /// Records the review authority's rejection of the current submission.
     /// A rejection is terminal: the review policy's changes-requested outcome,
     /// not this state, is how a reviewer allows another attempt.
@@ -1690,6 +1736,10 @@ impl WorkflowTransition {
 
 #[derive(Clone, PartialEq)]
 pub enum TransitionEffect {
+    Added,
+    Asked,
+    AskChanged,
+    Answered,
     RetryScheduled,
     Submitted {
         version: SubmissionVersion,
@@ -2320,6 +2370,10 @@ impl fmt::Debug for WorkflowTransition {
 impl fmt::Debug for TransitionEffect {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::Added => formatter.write_str("Added"),
+            Self::Asked => formatter.write_str("Asked"),
+            Self::AskChanged => formatter.write_str("AskChanged"),
+            Self::Answered => formatter.write_str("Answered"),
             Self::RetryScheduled => formatter.write_str("RetryScheduled"),
             Self::Submitted { version, .. } => formatter
                 .debug_struct("Submitted")
@@ -3108,6 +3162,119 @@ mod source_owned_review_tests {
         assert_eq!(
             tampered.verify_digest(submitted.key()),
             Err(WorkflowError::DigestMismatch)
+        );
+    }
+
+    #[test]
+    fn addition_changes_only_the_submitted_workflow_revision() {
+        let now = context("submitter", "2026-09-19T00:00:00Z");
+        assert_eq!(
+            workflow().record_addition(now.clone()).err(),
+            Some(WorkflowError::InvalidTransition)
+        );
+        let submitted = workflow()
+            .submit(now.clone(), proposal(required_review()))
+            .unwrap()
+            .into_workflow();
+        let before = submitted.clone();
+        let added = submitted
+            .record_addition(now.clone())
+            .unwrap()
+            .into_workflow();
+        assert_eq!(added.state(), ProposalState::Submitted);
+        assert_eq!(added.current_version(), before.current_version());
+        assert_eq!(added.current_proposal(), before.current_proposal());
+        assert_eq!(
+            added.workflow_revision(),
+            before.workflow_revision().next().unwrap()
+        );
+        let revised = before.clone().revise(now.clone()).unwrap().into_workflow();
+        assert_eq!(
+            revised.record_addition(now.clone()).err(),
+            Some(WorkflowError::InvalidTransition)
+        );
+        let rejected = before.clone().reject(now.clone()).unwrap().into_workflow();
+        assert_eq!(
+            rejected.record_addition(now.clone()).err(),
+            Some(WorkflowError::Rejected)
+        );
+        let cancelled = before.cancel(now.clone()).unwrap().into_workflow();
+        assert_eq!(
+            cancelled.record_addition(now).err(),
+            Some(WorkflowError::InvalidTransition)
+        );
+    }
+
+    fn assert_ask_transition(answer: bool) {
+        let now = context("submitter", "2026-09-19T00:00:00Z");
+        let run = |state: ProposalWorkflow| {
+            if answer {
+                state.record_answer(now.clone())
+            } else {
+                state.record_ask(now.clone())
+            }
+        };
+        assert_eq!(
+            run(workflow()).err(),
+            Some(WorkflowError::InvalidTransition)
+        );
+        let before = workflow()
+            .submit(now.clone(), proposal(required_review()))
+            .unwrap()
+            .into_workflow();
+        let transition = run(before.clone()).unwrap();
+        assert_eq!(
+            format!("{:?}", transition.effect()),
+            if answer { "Answered" } else { "Asked" }
+        );
+        let after = transition.into_workflow();
+        assert_eq!(after.state(), ProposalState::Submitted);
+        assert_eq!(after.current_version(), before.current_version());
+        assert_eq!(after.current_proposal(), before.current_proposal());
+        assert_eq!(
+            after.workflow_revision(),
+            before.workflow_revision().next().unwrap()
+        );
+        assert_eq!(
+            run(before.clone().cancel(now.clone()).unwrap().into_workflow()).err(),
+            Some(WorkflowError::InvalidTransition)
+        );
+        assert_eq!(
+            run(before.reject(now.clone()).unwrap().into_workflow()).err(),
+            Some(WorkflowError::Rejected)
+        );
+    }
+
+    #[test]
+    fn ask_changes_only_the_submitted_workflow_revision() {
+        assert_ask_transition(false);
+    }
+
+    #[test]
+    fn answer_changes_only_the_submitted_workflow_revision() {
+        assert_ask_transition(true);
+    }
+
+    #[test]
+    fn an_ask_state_change_advances_only_the_submitted_revision() {
+        let now = context("authority", "2026-09-19T00:00:00Z");
+        assert_eq!(
+            workflow().record_ask_change(now.clone()).err(),
+            Some(WorkflowError::InvalidTransition)
+        );
+        let before = workflow()
+            .submit(now.clone(), proposal(required_review()))
+            .unwrap()
+            .into_workflow();
+        let transition = before.clone().record_ask_change(now).unwrap();
+        assert!(matches!(transition.effect(), TransitionEffect::AskChanged));
+        let after = transition.into_workflow();
+        assert_eq!(after.state(), before.state());
+        assert_eq!(after.current_version(), before.current_version());
+        assert_eq!(after.current_proposal(), before.current_proposal());
+        assert_eq!(
+            after.workflow_revision(),
+            before.workflow_revision().next().unwrap()
         );
     }
 

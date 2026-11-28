@@ -123,7 +123,7 @@ Any required Evidence is resolved under explicit operator trust and the Action's
 
 Profiles declare `permissions.records`, `permissions.actions`, and `permissions.proposals` independently.
 Start authorises creation of a draft.
-Proposal Get, List, Edit, Submit, Revise, Rebase, Retry, Cancel, and Apply each need their own grant.
+Proposal Get, List, Edit, Submit, Revise, Rebase, Retry, Cancel, Apply, Add, and Answer each need their own grant.
 `get-application-actor` is a supplemental disclosure grant and must appear with Get in the same Proposal grant.
 List requires List authority and conceals other owners' and jurisdictions' work before filters or counts.
 Record and changes projections in review context also require current Record disclosure.
@@ -145,6 +145,13 @@ The draft stays unchanged and the refusal is audited without the value.
 The list must name declared inputs and needs Start, Edit, Revise or Rebase authority.
 When the grant holds Edit, Revise or Rebase, every input outside the list must be in `readableInputs`, so the equality check never reveals a value the caller cannot read.
 Attachments keep their own `writableAttachments` grant.
+
+A grant that holds Edit, Revise or Rebase must also read every input it may write: `readableInputs` has to cover `writableInputs`, or every declared input when `writableInputs` is absent.
+Get and List serve `input` projected to `readableInputs`, while a write replaces the stored input as a whole, so a client that merges its change into what it read would otherwise clear the inputs it could not see.
+With the rule for inputs outside `writableInputs` above, such a grant reads every declared input, whatever `writableInputs` names.
+`readableInputs` requires Get, so a grant that holds Edit, Revise or Rebase without `get` must add it.
+The compiler refuses the grant with `breg.proposal.input-write-unreadable`, naming the access profile, the Action and the missing inputs.
+An agent profile without a task grant cannot hold Get, drafts blind and is exempt.
 
 For an Action whose inputs are `holder`, `statement` and `licence-number`, an applicant may write the first two while an officer, under a grant without the list, records the licence number:
 
@@ -315,10 +322,16 @@ Observation cannot establish whether an earlier uncertain Start or Submit execut
 Under required Review it reads `awaiting-review` until an approved result exists, then `pending`, `applying`, `blocked`, `applied`, `cancelled` or `rejected`.
 Its `application-refused` reason means an executor refused the frozen effects; a review outcome never appears there.
 
+{/* Evidence: crates/registry-breg/src/mutation.rs ApplicationRefusal;
+    crates/registry-breg/tests/postgres_proposal.rs manual_apply_unique_conflict_and_stale_revision_offer_party_recovery, admitted_apply_outside_the_callers_write_boundary_persists_nothing;
+    crates/registry-breg/tests/postgres_proposal_guard_failure.rs apply_names_a_failed_field_guard_and_keeps_stale_revisions_generic. */}
+
 A unique-constraint failure during manual Apply returns `409 mutation.conflict` without retaining any Record effects.
-Subsequent reads report `applicationStatus.state: blocked`, `reason: application-refused`, and `recovery: correct-input`.
-Apply is unavailable; Rebase remains available to correct the input and prepare a fresh submission.
-A stale Record revision instead returns `412 precondition.failed` without creating that application block.
+Subsequent reads report `applicationStatus.state: blocked`, `reason: application-refused`, and `recovery: revise`.
+Apply is unavailable. Revise can correct the input, and Rebase can inspect the current target and prepare a fresh submission.
+A stale Record revision returns `412 precondition.failed` and records the same application block with `recovery: rebase`.
+A failed frozen field guard also needs Rebase. A frozen write that would leave the applying caller's row boundary answers `403 write.outside-boundary` and records nothing.
+The boundary belongs to that caller, so the Proposal stays as it was and a caller whose boundary covers the result can still Apply.
 Read the current Proposal before choosing the next authorised operation.
 
 Submit and Apply check the Action's field commit guards against the current target Record.
@@ -348,6 +361,45 @@ When Revise is the recovery, the Retry link reports the same reason instead of `
     crates/registry-breg/src/problem.rs action.guard_failed;
     crates/registry-breg/src/review_store.rs review-ended. */}
 
+### Complete required attachment slots
+
+Upload a file into each required attachment slot before submitting the Proposal.
+BReg makes the Submit link unavailable while any required slot is empty.
+The link names `attachment-required` with recovery `correct-input`.
+BReg checks storage even when your profile may upload to a slot but cannot read its value.
+A profile can hold Submit without permission to write a required slot.
+Different people can fill the slot and submit the Proposal. A missing-file
+problem tells the submitter only the slot's ID, without file metadata.
+
+A direct Submit request with an empty required slot answers `422 attachment.required`.
+Its `fieldPath` names the slot, such as `/attachments/supporting-document`.
+Upload the missing file and read the updated Proposal.
+Follow the Submit link when it becomes available.
+You do not need to infer availability from attachment values.
+An upload with the wrong media type answers `415 attachment.content-type`.
+A file larger than its slot's limit answers `413 attachment.too-large`.
+
+A required file rejected by verification counts as empty.
+While verification is pending, Submit is unavailable with `attachment-pending`
+and recovery `refresh`. A direct call answers `409 attachment.verification-pending`.
+Refresh the Proposal until verification finishes.
+A rejected file in an optional slot makes Submit unavailable with `invalid-input`
+and recovery `correct-input`. A direct call answers `422 attachment.verification-rejected`.
+Replace or remove that file before submitting. These problems identify only
+the slot in `fieldPath`, including when you cannot read its metadata.
+With several empty required slots, the response identifies the first in
+compiled slot order. Correct that slot and read the Proposal again.
+
+{/* Evidence: crates/registry-breg/tests/support/proposal_required_attachment.rs
+    submit_names_an_empty_required_attachment_and_recovers_after_upload,
+    submit_checks_required_attachments_the_writer_cannot_read,
+    submit_and_link_agree_for_pending_verification,
+    submit_and_link_treat_a_rejected_required_file_as_empty,
+    submit_and_link_name_a_rejected_optional_file_without_metadata,
+    submit_without_slot_write_authority_names_the_first_empty_slot_only,
+    required_file_precedes_plan_evaluation, slot_upload_names_media_and_size_refusals;
+    crates/registry-breg/src/problem.rs AttachmentRequired, AttachmentVerificationPending, AttachmentVerificationRejected. */}
+
 ### Whose turn it is
 
 Every Proposal document and lifecycle event carries a derived `turn`:
@@ -356,10 +408,27 @@ Every Proposal document and lifecycle event carries a derived `turn`:
 - `official`: a reviewer or applier acts next. Review in progress or being retried, an approved or review-free manual submission awaiting Apply, and an automatic application blocked on a dependency outage are an official's turn.
 - `nobody`: no one needs to act. The Proposal is `applied`, `cancelled` or `rejected`, or its automatic application is queued or running.
 
-`turn` is derived from the lifecycle state, the current submission's review progress and its application status when the Proposal is read; nothing stores it.
+Proposal Get, list items and command responses also serve a derived `status` whenever the caller has claims, including for a draft:
+
+- `draft`: not yet submitted.
+- `awaiting-party`: submitted and the party must act next, for example after a send-back, an ended review or a package or application block.
+- `in-review`: with the review provider, with no open ask.
+- `approved`: approved by review, with the change not yet in force.
+- `processing`: submitted under an Action with no review, with the change not yet in force.
+- `applied`: the change is in force.
+- `rejected`: refused by review.
+- `cancelled`: cancelled without applying the change.
+
+`status` and `turn` come from one pure rule over the lifecycle state, the current submission's review progress and its application status. Nothing stores either value.
+Lifecycle events carry `turn` but do not carry `status`. An older retained command receipt can replay without `status`.
+`bregctl explain lifecycle` lists each state's possible statuses and turns with their conditions in its `v1alpha9` explanation format.
 It says whose move the work waits on, not who is authorised to make it: the links still decide what the current caller may do.
 List Proposals by turn with `GET /v1/proposals?turn=party` (or `official`, `nobody`).
+There is no `status` query filter.
 A page may hold fewer than `limit` items, so keep paging while `nextCursor` is present.
+
+{/* Evidence: crates/registry-breg/src/lifecycle.rs proposal_status_and_turn_follow_the_exhaustive_lifecycle_table;
+    crates/registry-breg/tests/support/proposal_status.rs proposal_status_is_served_on_draft_review_approval_and_application. */}
 
 Every Proposal document carries `createdAt`, the UTC time its draft was started (RFC 3339, microsecond precision).
 It does not change when the Proposal is submitted, revised or applied, so it orders attempts on the same target chronologically; the list itself is ordered by Proposal id, not by time.
@@ -417,7 +486,7 @@ Any other result leaves the Proposal `submitted` until it is applied or cancelle
 
 ### The decision
 
-Proposal Get, each Proposal in a list, and the per-version submission read carry `decision` once the reviewer decided the submission:
+Proposal Get, each Proposal in a list, the per-version submission read and, under Get authority, each command response carry `decision` once the reviewer decided the submission:
 
 ```json
 "decision": {
@@ -431,14 +500,25 @@ Proposal Get, each Proposal in a list, and the per-version submission read carry
 `publicReason` appears only when the reviewer wrote one for the subject; it is the only reviewer text BReg serves.
 Notes, internal reasons and the reviewer's identity stay with the review provider.
 A provider-side end (`cancelled`, `superseded`) is not a decision and has no `decision`; neither has a result whose content retention erased.
-A lifecycle command's response omits `decision`: read the Proposal to see it.
-Each read that serves a public reason records a fixed `proposal-review-public-reason` marker in its audit entry, never the text.
+Every Proposal command response, and each attachment upload or removal, carries `decision` and `input` exactly as a Get by the same caller would right after the command, so a client need not read the Proposal again.
+A profile that may run a command but holds no Get grant on the Proposal gets neither, because command authority is not read authority.
+A replay with the same `Idempotency-Key` returns the stored response of the first execution, not the Proposal's current state.
+A command receipt stored before this release replays without `decision` and `input`.
+A later package that narrows the grant's `readableInputs` makes an earlier key conflict instead of replaying an input a Get now withholds.
+Each response that serves a public reason, a read, a command or a replay, records a fixed `proposal-review-public-reason` marker in its audit entry, never the text.
 
-Revise after an approved, not yet applied, manual submission discards the approval.
-The approval binds the earlier version only, and the revised version needs its own Review before it can be applied.
-Apply first if the approved change must take effect.
+Revise and Rebase of a submitted Proposal are available only at `awaiting-party` or `in-review`, subject to their other authority and package checks.
+At `approved` or `processing`, both links are unavailable with `application-pending` and recovery `refresh`, and both commands answer 412.
+Apply the current submission or Cancel it. If an admitted Apply fails because the target revision changed or a frozen field guard failed, BReg records a blocked application with recovery `rebase`.
+A unique constraint conflict records recovery `revise`, so the party can correct its inputs.
+A result outside the applying caller's row boundary records nothing: that caller is refused and the Proposal stays approved for a caller whose boundary covers it.
+These blocks return the Proposal to `awaiting-party`, where Revise and Rebase can open a draft for a new submission.
+An expired approval also returns the turn to the party and allows a new draft.
+Deleted targets and targets outside the caller's current row boundary stay concealed. They do not create a recovery block or make the Proposal visible.
+Rebase of a draft is unchanged. A revised or rebased version needs its own Review when the Action requires one.
 
-Cancel, and Revise or Rebase of a submitted Proposal, close the Proposal's queued, applying or blocked automatic application job in the same transaction.
+Cancel closes the Proposal's queued, applying or blocked automatic application job in the same transaction.
+An allowed Revise or Rebase also closes the old submission's job. Queued or running work at `approved` or `processing` cannot be revised or rebased.
 The job reads `cancelled`; it never applies a superseded version.
 
 {/* Evidence: crates/registry-breg/tests/postgres_proposal.rs proposal-review-public-reason;
@@ -461,7 +541,7 @@ The Proposal stays submitted and its authorised requester can still Rebase or Ca
 This includes an approved result received after withdrawal when no application job exists: Get, List and turn filtering keep the Proposal recoverable, while its retained decision remains historical evidence.
 Manual rounds also return the turn to the requester and refuse Apply after a restoring package clears the block.
 
-A Proposal blocked by a refused manual Apply (`application-refused`) keeps that reason through every package activation; only Rebase clears it.
+A Proposal blocked by a refused manual Apply (`application-refused`) keeps its refusal and recovery through every package activation. An authorised Revise or Rebase clears the block when it opens the next draft.
 A compatible activation leaves the block, its Review and its Apply refusal in place.
 An activation that changes the Action withdraws the Review as described but keeps `application-refused` as the reason, and a later restoring package neither clears the refusal nor reopens the withdrawn round.
 
@@ -642,6 +722,165 @@ The facility template combines supporting-document display with current Record a
 {/* Evidence: crates/registry-breg/tests/postgres_facility_proposal.rs supporting-document;
     crates/registry-breg/src/compiler/review_context.rs review_context. */}
 
+## Accept supporting files during review
+
+Declare `additions` when your applicant or an authorised officer needs to supply files after Submit.
+Configure required review before declaring this slot.
+BReg refuses an additions slot with `review.type: none` (`breg.addition.review-required`).
+BReg keeps these files beside the current submission.
+An addition changes the Proposal revision and ETag while preserving its submission version and frozen effect digest.
+
+```yaml
+execution:
+  mode: proposal
+  proposal:
+    additions:
+      id: other-documents
+      contentTypes: [application/pdf]
+      maximumBytes: 1048576
+      maximumCount: 8
+      classification: restricted
+```
+
+You can declare one additions slot with a limit of 1 to 32 files per submission.
+Give it an ID distinct from every attachment slot.
+The byte and media-type rules match attachment slots.
+Each accepted file consumes one place for that submission.
+This release offers no operation to remove an addition.
+BReg trusts the declared media type as it does for other attachments.
+Downloads use `Content-Disposition: attachment` and `X-Content-Type-Options: nosniff`.
+
+Declaring or changing the slot changes the Action revision.
+An existing submitted Proposal needs Rebase, then Submit, before the changed slot accepts files.
+BReg withdraws the previous review and starts review for the rebased submission.
+
+Grant `add` and list the slot in `writableAttachments` to allow uploads.
+Grant `get` and list it in `readableAttachments` to disclose its files and download links.
+These grants remain independent.
+BReg records the authenticated actor who added each file.
+
+Follow `additions.<slotId>.links.add` and send the file as the raw request body.
+Use the declared media type and the link's `ifMatch` value.
+Choose an idempotency key and retain the exact request for uncertain-outcome recovery.
+The response contains the full Proposal and its changed ETag.
+Refetch before adding another file from a second tab.
+
+BReg accepts additions only while the current submission's review is pending or retrying.
+BReg closes the slot when review ends or the Proposal leaves `submitted`.
+A blocked Proposal also refuses additions.
+The descriptor retains an unavailable Add link when you have write authority.
+At the file limit, its reason is `limit-reached` and its recovery is `receipt-only`.
+
+To show the files to your reviewer, declare a review-context field:
+
+```yaml
+reviewContext:
+  id: supporting-review
+  fields:
+    otherDocuments:
+      type: additions
+      slot: other-documents
+```
+
+BReg serves an array of verified document descriptors for the bound submission.
+Each download link uses the reviewer's own authority and carries the exact review-context binding.
+Additions follow Proposal detail retention and share attachment byte verification and cleanup.
+Revise starts a submission version with no additions.
+Use the `added` hook transition to observe the value-free `proposal.added` event.
+Proposal hooks without a `transitions` filter also receive `added`, `asked` and `answered`.
+Configure an explicit transition filter if your receiver cannot accept those events.
+
+{/* Evidence: crates/registry-breg/src/contract.rs AdditionSlotSource;
+    crates/registry-breg/src/immediate_actions.rs breg.addition.review-required, definition_revision;
+    crates/registry-breg/src/api/attachments.rs;
+    crates/registry-breg/src/mutation/proposal/additions.rs append_additions;
+    crates/registry-breg/src/mutation/proposal/context_projection.rs;
+    crates/registry-breg/src/proposal_hooks.rs matching_transitions;
+    crates/registry-breg/tests/support/proposal_additions.rs;
+    crates/registry-breg/src/proposal_retention.rs. */}
+
+## Answer a reviewer's ask
+
+A reviewer can ask for an explanation, supporting files, or both while the review stays open.
+BReg learns of asks by polling the review authority within its configured worker cadence.
+The Proposal's `asks` array shows the current submission's questions newest first, with their wants, absolute `askedAt` and optional `dueAt`, state and answer link.
+Each submission version retains at most 50 asks. BReg skips and counts further distinct announcements.
+An announcement that arrives before BReg records acceptance waits as value-free identifiers and time until BReg can match the review request.
+It expires within the submission recovery window without retaining question text.
+The `asks` member, on Get, list items and command responses, goes only to a caller who may answer on this Proposal: the selected profile holds Get and `answer` for it, and the caller passes the same human test as review answers below.
+Every other caller gets no `asks` member at all: another Get holder, a status profile, a standing or task-granted agent, a delegated actor and a service.
+Status and turn still show them that an ask is open.
+An open, unanswered ask changes the same derived status and turn to `awaiting-party` and `party`.
+After the local answer commits, they return to `in-review` and `official` when review remains pending.
+
+Grant `answer` in the applicant profile's Proposal operations.
+Only a verified human caller acting for no one else, under no task grant, on a profile written for humans or for any kind, may answer. Any other caller is refused, whatever its grant says.
+If the ask wants documents, also grant `add` with the additions slot in `writableAttachments`, as described above.
+Follow the ask's promoted `links.answer` with the current `If-Match` and a caller-chosen `Idempotency-Key`:
+
+```http
+POST /v1/proposals/{proposal_id}/asks/{ask_id}/answer?accessProfile=applicant
+Content-Type: application/json
+If-Match: "<current-proposal-etag>"
+Idempotency-Key: <caller-chosen-key>
+
+{"text":"The explanation","additions":["<addition-uuid>"]}
+```
+
+`text` is required for an `answer` want, must be nonblank and is bounded to 2,000 UTF-8 bytes.
+A `document` want requires at least one addition ID from the current submission that no other answer cites.
+An uncited file already on the submission can satisfy it, even when the additions slot is full.
+The list holds at most 32 distinct IDs. Unknown body members are refused.
+Every answer needs text or at least one cited file, even when the ask has no wants.
+Use `request.invalid` and its `fieldPath` to correct the body.
+The successful response is the full caller-filtered Proposal with a new ETag, unchanged submission version and unchanged frozen effects.
+Resending the same key and request returns the stored response. Changing the body with that key conflicts.
+
+Page authors must tell applicants before they answer:
+
+> Your answer and any file you attach go to the reviewers of this application.
+
+Answering discloses the answer and its cited files to reviewers of this review even when the Action declares no additions context field.
+BReg serves them live in the reserved `context.asks` sibling beside authored `context.fields`.
+Casework joins validated answers onto its own asks by ask ID and does not store their text or file descriptors.
+Only human reviewers receive answers. A reviewer uses their own review-context authority and token.
+Agents, standing or task-granted, delegated reads and services receive neither asks nor answers, even with a `get-review-context` grant, and get no ask-bound download.
+A file they can reach through an authored additions context field follows that field's grant as before.
+The batch review-context read used for inboxes carries no asks.
+The single review-context route includes them only with `include=answers`, which the BReg client's display read supplies.
+Casework omits that option for claim, ask and decide preflight, so those reads neither disclose answers nor audit an answer disclosure.
+A cited file is not limited by the reviewer's readable context fields, because it is admitted in place of an authored additions field.
+A cited file's download remains bound to the current review request, submission version, frozen effect and context schema, and its bytes must pass verification.
+A file not cited by an answer still needs an authored additions context field.
+
+The answer link becomes unavailable with `ask-answered`, `ask-closed` or `ask-due-passed`, each with recovery `receipt-only`.
+Shared lifecycle refusals still apply. Availability is an observation, so refetch after a refusal.
+The due date is absolute from the provider's ask, not from when BReg polls it.
+Closing or expiring an ask through the feed advances the Proposal revision and ETag once.
+The clock passing `dueAt` changes answer-link availability without changing the ETag. Pages must check the link's current availability before answering.
+BReg refuses answers after that date by its own clock. The provider judges an answer by its stored `answeredAt`.
+An on-time answer can therefore be delivered after the provider has marked the ask expired.
+BReg rounds a higher-precision ask time up to a microsecond and uses the later of that instant and its own commit clock for `answeredAt`.
+
+The worker sends the provider only the frozen subject and stored answer time, using BReg's producer credential.
+Answer text and files stay in BReg.
+Transient failures retry with the same key and timestamp until this answer's recovery deadline, measured from `answeredAt`.
+A deterministic refusal ends delivery and preserves the local answer. `review.ask-not-open` records that the provider no longer accepts it.
+Keep BReg and Casework clocks synchronized within five minutes: a future `answeredAt` beyond that tolerance is permanently refused as `review.ask-answer-time-invalid` and raises `review.result_lookups.unavailable`.
+Revise, Rebase and Cancel close open asks and supersede pending deliveries for that submission.
+The `asked` and `answered` hook transitions carry value-free lifecycle events.
+Question disclosure and ask-bound downloads are audited, and the answer audit records only cited file IDs.
+Answers and added files follow the Action's `retention` mode and are erased per submission version by operator erasure.
+Separately, review maintenance prunes value-free feed deduplication receipts after the authority's recovery window, measured from observation.
+A feed cursor reset checks stored asks before fetching them again, including after those receipts expire.
+
+{/* Evidence: crates/registry-breg/tests/support/proposal_review_asks.rs
+    asks_reach_only_a_human_caller_who_may_answer_this_proposal,
+    a_human_reviewer_without_answer_reads_answers_only_through_the_review_context;
+    crates/registry-breg/src/review_store/asks.rs answer_time;
+    crates/registry-breg/src/review_store/asks/delivery.rs;
+    crates/registry-casework/src/review/source_answers.rs. */}
+
 ## Keep a supporting document on the record
 
 A Proposal file can stay with the record that the Proposal writes.
@@ -718,6 +957,7 @@ Expired or erased receipts cannot execute again.
 ### Bounded review-context reads
 
 A caller with the existing `get-review-context` grant can request up to 100 distinct canonical Proposal UUIDs in one exchange: `GET /v1/proposals/review-context?accessProfile=<profile>&ids=<uuid>,<uuid>`.
+Batch items never carry `context.asks`.
 The ordered `items` contain the requested `id` and either `status: visible` with the ordinary `context` document, or `status: concealed` with no document.
 Unknown and currently unauthorised Proposals have the same concealed result.
 Every item retains its own current Proposal and Record disclosure checks, transaction, and paired audit entries.

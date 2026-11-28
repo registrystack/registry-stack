@@ -134,11 +134,13 @@ fn registry() -> registry_breg::CompiledRegistry {
                 "proposals":[
                     {"action":"register-target",
                         "operations":["get","submit","revise","retry","apply"],"ownership":"caller",
+                        "readableInputs":["name","jurisdiction"],
                         "targets":[{"recordType":"target","rowBoundaries":[{
                             "field":"jurisdiction","claim":"jurisdiction","operator":"equals"
                         }]}]},
                     {"action":"register-target-with-document",
                         "operations":["get","edit","submit"],"ownership":"caller",
+                        "readableInputs":["name","jurisdiction"],
                         "readableAttachments":["support"],"writableAttachments":["support"],
                         "targets":[{"recordType":"target","rowBoundaries":[{
                             "field":"jurisdiction","claim":"jurisdiction","operator":"equals"

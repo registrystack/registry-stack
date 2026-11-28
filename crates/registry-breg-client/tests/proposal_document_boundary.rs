@@ -130,6 +130,45 @@ fn proposal(state: &str) -> Value {
     value
 }
 
+#[test]
+fn proposal_status_is_closed_and_old_receipts_remain_readable() {
+    for (status, state, turn) in [
+        ("draft", "draft", "party"),
+        ("awaiting-party", "submitted", "party"),
+        ("in-review", "submitted", "official"),
+        ("approved", "submitted", "official"),
+        ("processing", "submitted", "nobody"),
+        ("applied", "applied", "nobody"),
+        ("rejected", "rejected", "nobody"),
+        ("cancelled", "cancelled", "nobody"),
+    ] {
+        let mut value = proposal(state);
+        value["status"] = json!(status);
+        value["turn"] = json!(turn);
+        BRegProposal::from_slice(&serde_json::to_vec(&value).unwrap())
+            .expect("known status decodes");
+    }
+    let mut value = proposal("submitted");
+    for status in [json!("unknown"), json!(null), json!(true), json!(42)] {
+        value["status"] = status;
+        assert!(BRegProposal::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
+    }
+    value.as_object_mut().unwrap().remove("status");
+    BRegProposal::from_slice(&serde_json::to_vec(&value).unwrap()).expect("stored older receipt");
+}
+
+#[test]
+fn proposal_application_pending_is_a_refresh_only_link_reason() {
+    let mut value = proposal("submitted");
+    value["links"]["revise"] = json!({"method":"POST","path":format!("/v1/proposals/{ID}/revise"),
+        "accessProfile":"writer","operation":"revise","ifMatch":"\"condition\"",
+        "availability":{"available":false,"observedRevision":2,"reason":"application-pending","recovery":"refresh"}});
+    BRegProposal::from_slice(&serde_json::to_vec(&value).unwrap())
+        .expect("application-pending decodes");
+    value["links"]["revise"]["availability"]["recovery"] = json!("retry");
+    assert!(BRegProposal::from_slice(&serde_json::to_vec(&value).unwrap()).is_err());
+}
+
 fn review(context: bool) -> Value {
     let mut value = json!({"id":ID,"actionId":"correct","actionRevision":DIGEST,
         "submissionVersion":1,"revision":2,"effectDigest":DIGEST,
@@ -362,13 +401,14 @@ async fn application_recovery_is_bound_to_its_reason_in_current_and_retained_rea
             "current":true,"effectDigest":DIGEST,"review":null,"application":application});
         (current, submission)
     };
-    // The only pairs BReg emits: a package change is rebased, a dependency
-    // outage or an expired lease can be retried, and application failures need
-    // corrected input.
+    // Refused applications name the next workflow command. Older receipts
+    // that named corrected input remain readable.
     for (reason, recovery) in [
         ("package-changed", "rebase"),
         ("attempts-exhausted", "correct-input"),
         ("application-refused", "correct-input"),
+        ("application-refused", "rebase"),
+        ("application-refused", "revise"),
         ("dependency-outage", "retry"),
         ("lease-expired", "retry"),
     ] {
@@ -430,10 +470,16 @@ async fn link_recovery_is_bound_to_its_availability_reason_in_current_and_list_r
         ("review-changes-requested", "revise"),
         ("review-ended", "revise"),
         ("stale-revision", "receipt-only"),
+        ("stale-revision", "rebase"),
         ("package-changed", "rebase"),
         ("dependency-outage", "retry"),
         ("invalid-input", "correct-input"),
+        ("invalid-input", "revise"),
         ("already-applied", "receipt-only"),
+        ("limit-reached", "receipt-only"),
+        ("application-pending", "refresh"),
+        ("attachment-required", "correct-input"),
+        ("attachment-pending", "refresh"),
     ];
     let reads = |state: &str, availability: Value| {
         let mut value = proposal(state);
@@ -451,6 +497,10 @@ async fn link_recovery_is_bound_to_its_availability_reason_in_current_and_list_r
         "dependency-outage",
         "invalid-input",
         "already-applied",
+        "limit-reached",
+        "application-pending",
+        "attachment-required",
+        "attachment-pending",
     ] {
         for recovery in [
             "refresh",
@@ -463,6 +513,7 @@ async fn link_recovery_is_bound_to_its_availability_reason_in_current_and_list_r
             let state = match (reason, recovery) {
                 ("already-applied", _) => "applied",
                 ("review-rejected", "receipt-only") => "rejected",
+                ("attachment-required" | "attachment-pending", _) => "draft",
                 _ => "submitted",
             };
             let (current, list) = reads(
@@ -1916,4 +1967,99 @@ async fn submission_read_carries_only_an_allowlisted_handoff_refusal() {
         }
     }
     assert!(accepted.is_empty(), "accepted: {accepted:?}");
+}
+
+#[tokio::test]
+async fn answer_commands_bind_the_selected_ask_and_validate_before_tokens_or_io() {
+    use registry_breg_client::BRegProposalAnswerRequest;
+    let fixture = Fixture::start().await;
+    let ask = "00000000-0000-4000-8000-000000000007";
+    let mut prior = proposal("submitted");
+    prior["asks"] = json!([{"id":ask,"text":"Why?","wants":[{"kind":"answer"}],"askedAt":"2026-11-27T00:00:00Z","state":"open","links":{
+        "answer":{"method":"POST","path":format!("/v1/proposals/{ID}/asks/{ask}/answer"),"operation":"answer","accessProfile":"writer","ifMatch":"\"condition\"","availability":{"available":true,"observedRevision":2}}}}]);
+    let promoted = fixture.proposal(prior.clone()).await;
+    let key = BRegIdempotencyKey::parse("answer-once").unwrap();
+    let tokens = fixture.token.0.load(Ordering::SeqCst);
+    let requests = fixture.requests.load(Ordering::SeqCst);
+    for body in [
+        json!({}),
+        json!({"text":" "}),
+        json!({"text":"explanation","additions":["not-a-uuid"]}),
+    ] {
+        let body: BRegProposalAnswerRequest = serde_json::from_value(body).unwrap();
+        assert_eq!(
+            fixture
+                .client
+                .answer_proposal_ask(&promoted, ask, &body, &key)
+                .await
+                .unwrap_err()
+                .kind(),
+            "invalid-request"
+        );
+    }
+    assert_eq!(fixture.token.0.load(Ordering::SeqCst), tokens);
+    assert_eq!(fixture.requests.load(Ordering::SeqCst), requests);
+    let body = BRegProposalAnswerRequest {
+        text: Some("explanation".into()),
+        additions: vec![],
+    };
+    let mut receipt = prior;
+    receipt["revision"] = json!(3);
+    receipt["asks"][0]["state"] = json!("answered");
+    receipt["asks"][0]["answer"] =
+        json!({"text":"explanation","additions":[],"answeredAt":"2026-11-27T01:00:00Z"});
+    receipt["asks"][0]["links"]["answer"]["availability"] = json!({"available":false,"observedRevision":3,"reason":"ask-answered","recovery":"receipt-only"});
+    fixture.answer(receipt.clone());
+    assert_eq!(
+        fixture
+            .client
+            .answer_proposal_ask(&promoted, ask, &body, &key)
+            .await
+            .unwrap()
+            .value
+            .asks()[0]
+            .answer
+            .as_ref()
+            .unwrap()
+            .text
+            .as_deref(),
+        Some("explanation")
+    );
+    for mutation in 0..6 {
+        let mut invalid = receipt.clone();
+        match mutation {
+            0 => invalid["submissionVersion"] = json!(2),
+            1 => invalid["asks"][0]["answer"]["text"] = json!("another answer"),
+            2 => {
+                invalid["asks"][0]["links"]["answer"]["path"] =
+                    json!("https://other.example.test/answer")
+            }
+            3 => invalid["asks"][0]["links"]["answer"]["accessProfile"] = json!("other"),
+            4 => {
+                invalid["revision"] = json!(4);
+                invalid["asks"][0]["links"]["answer"]["availability"]["observedRevision"] =
+                    json!(4);
+            }
+            _ => invalid["effectDigest"] = json!(format!("sha256:{}", "b".repeat(64))),
+        }
+        fixture.answer(invalid);
+        assert_eq!(
+            fixture
+                .client
+                .answer_proposal_ask(&promoted, ask, &body, &key)
+                .await
+                .unwrap_err()
+                .kind(),
+            "protocol",
+            "mutation {mutation}"
+        );
+    }
+    let inert = BRegProposal::from_slice(&serde_json::to_vec(&receipt).unwrap()).unwrap();
+    let tokens = fixture.token.0.load(Ordering::SeqCst);
+    assert!(fixture
+        .client
+        .answer_proposal_ask(&inert, ask, &body, &key)
+        .await
+        .is_err());
+    assert_eq!(fixture.token.0.load(Ordering::SeqCst), tokens);
 }

@@ -1382,6 +1382,7 @@ impl BaseRegistryClient {
         let url = self.url_with_query(&segments, &pairs)?;
         let method = match link.method() {
             "GET" => Method::GET,
+            "POST" => Method::POST,
             "PATCH" => Method::PATCH,
             "DELETE" => Method::DELETE,
             _ => {
@@ -1450,14 +1451,32 @@ impl BaseRegistryClient {
         &self,
         link: &BRegProposalLink,
     ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
-        if link.method() != "GET" || link.operation() != "get-review-status" {
+        self.proposal_review_include_exchange(link, "get-review-status", "progress")
+            .await
+    }
+
+    pub(crate) async fn proposal_review_answers_exchange(
+        &self,
+        link: &BRegProposalLink,
+    ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
+        self.proposal_review_include_exchange(link, "get-review-context", "answers")
+            .await
+    }
+
+    async fn proposal_review_include_exchange(
+        &self,
+        link: &BRegProposalLink,
+        operation: &str,
+        include: &str,
+    ) -> Result<BRegComplete<BRegRawDocument>, BaseRegistryClientError> {
+        if link.method() != "GET" || link.operation() != operation {
             return Err(BaseRegistryClientError::invalid_request(
-                "the selected Base Registry Engine Proposal review status link is invalid",
+                "the selected Base Registry Engine Proposal review link is invalid",
             ));
         }
         let segments = fixed_operation_segments(link.path())?;
         let mut pairs = access_profile_query(Some(link.access_profile()))?;
-        pairs.push(("include".to_owned(), "progress".to_owned()));
+        pairs.push(("include".to_owned(), include.to_owned()));
         let url = self.url_with_query(&segments, &pairs)?;
         let builder = self
             .authorize(
@@ -2883,6 +2902,12 @@ async fn breg_problem(response: Response, transport: &Transport) -> BaseRegistry
         || extensions.reason_code.is_some()
             != (code == BRegProblemCode::StatisticalDatasetVersionWithdrawn)
         || extensions.guard_reason.is_some() && code != BRegProblemCode::ActionGuardFailed
+        || matches!(
+            code,
+            BRegProblemCode::AttachmentRequired
+                | BRegProblemCode::AttachmentVerificationPending
+                | BRegProblemCode::AttachmentVerificationRejected
+        ) && extensions.field_path.is_none()
         || code == BRegProblemCode::ActionRefused
             && !crate::error::bounded_refusal_label(&document.detail)
         || (code == BRegProblemCode::StatisticalDatasetReleaseRefused
@@ -2950,6 +2975,7 @@ fn valid_statistics_reason_code(value: &str) -> bool {
 /// The closed forms a Base Registry Engine problem location takes.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum BRegProblemPath {
+    AttachmentSlot,
     EvidenceAlias,
     ActionInputField,
     ActionRequest,
@@ -2969,6 +2995,12 @@ enum BRegProblemPath {
 impl BRegProblemPath {
     fn permits(self, code: BRegProblemCode) -> bool {
         match self {
+            Self::AttachmentSlot => matches!(
+                code,
+                BRegProblemCode::AttachmentRequired
+                    | BRegProblemCode::AttachmentVerificationPending
+                    | BRegProblemCode::AttachmentVerificationRejected
+            ),
             Self::EvidenceAlias => code == BRegProblemCode::ActionEvidenceFailed,
             Self::ActionInputField => matches!(
                 code,
@@ -3144,6 +3176,19 @@ fn parse_constraint_violation(
 }
 
 fn breg_problem_path(path: &str) -> Option<BRegProblemPath> {
+    if path.strip_prefix("/attachments/").is_some_and(|slot| {
+        !slot.is_empty()
+            && slot.len() <= 64
+            && slot
+                .bytes()
+                .next()
+                .is_some_and(|byte| byte.is_ascii_lowercase())
+            && slot.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+            })
+    }) {
+        return Some(BRegProblemPath::AttachmentSlot);
+    }
     if valid_evidence_problem_path(path) {
         return Some(BRegProblemPath::EvidenceAlias);
     }
@@ -3282,7 +3327,10 @@ fn valid_action_input_problem_path(path: &str) -> bool {
 }
 
 fn valid_action_request_problem_path(path: &str) -> bool {
-    if matches!(path, "" | "/input" | "/preconditions") {
+    if matches!(
+        path,
+        "" | "/input" | "/preconditions" | "/text" | "/additions"
+    ) {
         return true;
     }
     let Some(remainder) = path.strip_prefix("/preconditions/") else {
@@ -3323,4 +3371,16 @@ fn problem_failure(status: StatusCode, trace_id: TraceId) -> BaseRegistryClientE
         BRegProtocolFailure::Problem,
         Some(trace_id),
     )
+}
+
+#[cfg(test)]
+mod ask_field_paths {
+    #[test]
+    fn answer_problem_locations_name_only_the_fixed_body_members() {
+        assert!(super::valid_action_request_problem_path("/text"));
+        assert!(super::valid_action_request_problem_path("/additions"));
+        assert!(!super::valid_action_request_problem_path(
+            "/additions/private-file"
+        ));
+    }
 }

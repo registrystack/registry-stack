@@ -375,7 +375,7 @@
       "glob": "products/breg/contracts/explain/LifecycleExplanation.schema.json",
       "owner": "breg",
       "status": "active",
-      "compatibilityLine": "v1alpha8",
+      "compatibilityLine": "v1alpha9",
       "description": "Base Registry Engine bregctl explain output JSON Schemas, written by hand and held to bregctl's output by its contract test."
     },
     {

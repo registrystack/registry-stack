@@ -173,14 +173,18 @@ pub(crate) fn sample(
                 Transition::Edited => ("draft", "draft", "party"),
                 Transition::Submitted => ("draft", "submitted", "official"),
                 Transition::Revised | Transition::Rebased => ("submitted", "draft", "party"),
-                Transition::Retried => ("submitted", "submitted", "official"),
+                Transition::Retried | Transition::Added | Transition::Answered => {
+                    ("submitted", "submitted", "official")
+                }
                 Transition::Cancelled => ("draft", "cancelled", "nobody"),
                 Transition::Applied => ("submitted", "applied", "nobody"),
                 Transition::Rejected => ("submitted", "rejected", "nobody"),
-                Transition::ReviewReturned => ("submitted", "submitted", "party"),
+                Transition::ReviewReturned | Transition::Asked => {
+                    ("submitted", "submitted", "party")
+                }
             };
             let authority_kind = match transition {
-                Transition::Rejected | Transition::ReviewReturned => "review",
+                Transition::Rejected | Transition::ReviewReturned | Transition::Asked => "review",
                 _ => "caller",
             };
             (

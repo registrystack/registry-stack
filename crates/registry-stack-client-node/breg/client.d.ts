@@ -1004,6 +1004,9 @@ export declare class BaseRegistryClient {
   executeRecoveredAction(binding: BRegActionBinding, recovered: BRegRecoveredAction): Promise<CompleteOutcome<BRegActionReceipt>>
   executeRecoveredProposalStart(binding: BRegActionBinding, recovered: BRegRecoveredAction): Promise<BRegProposal>
   downloadProposalAttachment(proposal: BRegProposal, slot: string): Promise<RawOutcome>
+  answerProposalAsk(proposal: BRegProposal, askId: string, body: BRegProposalAnswerRequest, key: string): Promise<BRegProposal>
+  downloadProposalAddition(proposal: BRegProposal, addition: string): Promise<RawOutcome>
+  addProposalAddition(proposal: BRegProposal, slot: string, contentType: string, bytes: Buffer, key: string): Promise<BRegProposal>
   readProposalReviewStatus(proposal: BRegProposal, request?: ReadRequestOptions): Promise<CompleteOutcome<BRegProposalReviewDocument>>
   readProposalReviewStatusWithProgress(proposal: BRegProposal, request?: ReadRequestOptions): Promise<CompleteOutcome<BRegProposalReviewDocument>>
   readProposalReviewContext(proposal: BRegProposal, request?: ReadRequestOptions): Promise<CompleteOutcome<BRegProposalReviewDocument>>
@@ -1050,7 +1053,7 @@ export declare class BaseRegistryClient {
 }
 
 export type BRegProposalTransition = 'edit' | 'submit' | 'revise' | 'rebase' | 'retry' | 'cancel' | 'apply'
-export type BRegAvailabilityReason = 'pending-review' | 'review-rejected' | 'review-changes-requested' | 'review-ended' | 'stale-revision' | 'package-changed' | 'dependency-outage' | 'invalid-input' | 'already-applied'
+export type BRegAvailabilityReason = 'pending-review' | 'review-rejected' | 'review-changes-requested' | 'review-ended' | 'stale-revision' | 'package-changed' | 'dependency-outage' | 'invalid-input' | 'already-applied' | 'limit-reached' | 'application-pending' | 'attachment-required' | 'attachment-pending' | 'ask-answered' | 'ask-closed' | 'ask-due-passed'
 export type BRegRecoveryHint = 'refresh' | 'revise' | 'retry' | 'rebase' | 'correct-input' | 'receipt-only'
 export type BRegAvailability =
   | { readonly available: true; readonly observedRevision: number }
@@ -1062,6 +1065,16 @@ export interface BRegProposalAttachment {
   readonly links: Readonly<Partial<Record<'download' | 'upload' | 'remove', Omit<BRegProposalLink, 'method'> & {readonly method: 'GET' | 'PATCH' | 'DELETE'}>>>
   readonly value?: {readonly submissionVersion: number; readonly sha256: string; readonly contentType: string; readonly byteSize: number; readonly uploadedAt?: string; readonly verificationStatus: 'notRequired' | 'pending' | 'approved' | 'rejected'}
 }
+export interface BRegProposalAddition {
+  readonly id: string; readonly submissionVersion: number; readonly sha256: string; readonly byteSize: number
+  readonly contentType: string; readonly addedAt: string; readonly verificationStatus: 'notRequired' | 'pending' | 'approved' | 'rejected'
+  readonly links: Readonly<Partial<Record<'download', BRegProposalLink>>>
+}
+export interface BRegProposalAdditionSlot {
+  readonly id: string; readonly maximumBytes: number; readonly maximumCount: number
+  readonly contentTypes: ReadonlyArray<string>; readonly classification: 'public' | 'internal' | 'restricted'
+  readonly items: ReadonlyArray<BRegProposalAddition>; readonly links: Readonly<Partial<Record<'add', BRegProposalLink>>>
+}
 export interface BRegProposalApplication {
   readonly applicationId: string; readonly submissionVersion: number; readonly effectDigest: string
   readonly appliedBy?: string; readonly appliedAt?: string
@@ -1071,14 +1084,14 @@ export interface BRegProposalApplicationStatus {
   readonly state: 'awaiting-review' | 'pending' | 'applying' | 'blocked' | 'applied' | 'cancelled' | 'rejected'
   readonly mode: 'automatic' | 'manual'
   readonly reason?: 'package-changed' | 'dependency-outage' | 'lease-expired' | 'application-refused' | 'attempts-exhausted'
-  readonly recovery?: 'retry' | 'rebase' | 'correct-input'
+  readonly recovery?: 'retry' | 'rebase' | 'revise' | 'correct-input'
   readonly automaticRetry?: {readonly scheduled: boolean; readonly attempts: number; readonly maximumAttempts: number}
 }
 export interface BRegProposalReviewDocument {
   readonly id: string; readonly actionId: string; readonly actionRevision: string
   readonly submissionVersion: number; readonly revision: number; readonly effectDigest: string; readonly reviewable: boolean
   readonly subject: {readonly source: string; readonly subjectType: 'proposal'; readonly id: string; readonly version: string; readonly digest: string}
-  readonly context: {readonly reference: string; readonly contract?: {readonly id: string; readonly revision: string; readonly schemaDigest: string}; readonly fields?: Readonly<Record<string, JsonValue>>}
+  readonly context: {readonly reference: string; readonly contract?: {readonly id: string; readonly revision: string; readonly schemaDigest: string}; readonly fields?: Readonly<Record<string, JsonValue>>; readonly asks?: ReadonlyArray<BRegProposalReviewAsk>}
   readonly requestId?: string
   /** Present only on an explicit progress status read while the accepted request remains pending. */
   readonly progressCode?: string
@@ -1089,6 +1102,7 @@ export interface BRegProposalReviewDocument {
 }
 /** Who is expected to act next, derived by BReg. */
 export type BRegProposalTurn = 'party' | 'official' | 'nobody'
+export type BRegProposalStatus = 'draft' | 'awaiting-party' | 'in-review' | 'approved' | 'processing' | 'applied' | 'rejected' | 'cancelled'
 /** The review decision on one submission. The public reason is the only reviewer text BReg serves. */
 export interface BRegProposalDecision { readonly status: 'approved' | 'rejected' | 'changes-requested' | 'answered'; readonly decidedAt: string; readonly publicReason?: string }
 /** Why the review authority refused to take a submission. BReg names only these codes and never the authority's own text. */
@@ -1100,7 +1114,7 @@ export interface BRegProposalSubmission {
   readonly decision?: BRegProposalDecision
   readonly handoffRefusal?: BRegProposalHandoffRefusal
 }
-export interface BRegProposalDocument { readonly id: string; readonly actionId: string; readonly actionRevision: string; readonly submissionVersion: number; readonly revision: number; readonly state: 'draft' | 'submitted' | 'cancelled' | 'applied' | 'rejected'; readonly createdAt?: string; readonly turn?: BRegProposalTurn; readonly decision?: BRegProposalDecision; readonly handoffRefusal?: BRegProposalHandoffRefusal; readonly title?: string; readonly input?: JsonObject; readonly blockedReason?: 'package-changed'; readonly effectDigest?: string; readonly application?: BRegProposalApplication; readonly applicationStatus?: BRegProposalApplicationStatus; readonly links: Readonly<Partial<Record<BRegProposalTransition | 'self' | 'reviewContext' | 'reviewStatus', BRegProposalLink>>>; readonly attachments?: Readonly<Record<string, BRegProposalAttachment>> }
+export interface BRegProposalDocument { readonly id: string; readonly actionId: string; readonly actionRevision: string; readonly submissionVersion: number; readonly revision: number; readonly state: 'draft' | 'submitted' | 'cancelled' | 'applied' | 'rejected'; readonly createdAt?: string; readonly turn?: BRegProposalTurn; readonly status?: BRegProposalStatus; readonly decision?: BRegProposalDecision; readonly handoffRefusal?: BRegProposalHandoffRefusal; readonly title?: string; readonly input?: JsonObject; readonly blockedReason?: 'package-changed'; readonly effectDigest?: string; readonly application?: BRegProposalApplication; readonly applicationStatus?: BRegProposalApplicationStatus; readonly links: Readonly<Partial<Record<BRegProposalTransition | 'self' | 'reviewContext' | 'reviewStatus', BRegProposalLink>>>; readonly attachments?: Readonly<Record<string, BRegProposalAttachment>>; readonly additions?: Readonly<Record<string, BRegProposalAdditionSlot>>; readonly asks?: ReadonlyArray<BRegProposalAsk> }
 export declare class BRegProposal { private constructor(); private readonly __opaque: void; readonly responseEtag: string | null; readonly identifier: string; readonly actionIdentifier: string; readonly documentJson: string; readonly inputJson?: string | null }
 export declare class BRegProposalGetBinding { private constructor(); private readonly __opaque: void }
 export declare class BRegProposalReviewBinding { private constructor(); private readonly __opaque: void }
@@ -1123,3 +1137,20 @@ export declare class BRegProposalCollection { private constructor(); private rea
 export interface BRegProposalPage { readonly items: ReadonlyArray<BRegProposal>; readonly nextCursor?: string }
 export declare class BRegPreparedProposal { private constructor(); private readonly __opaque: void; static fromBytes(bytes: Buffer): BRegPreparedProposal; toBytes(): Buffer }
 
+
+export type BRegProposalAskState = 'open' | 'answered' | 'expired' | 'closed'
+export type BRegProposalAskWant = {readonly kind: 'answer'} | {readonly kind: 'document'}
+export interface BRegProposalAnswerRequest {readonly text?: string; readonly additions?: ReadonlyArray<string>}
+export interface BRegProposalAskAnswer {readonly text?: string; readonly additions: ReadonlyArray<string>; readonly answeredAt: string}
+export interface BRegProposalAsk {
+  readonly id: string; readonly text: string; readonly wants: ReadonlyArray<BRegProposalAskWant>
+  readonly askedAt: string; readonly dueAt?: string; readonly state: BRegProposalAskState
+  readonly answer?: BRegProposalAskAnswer; readonly links: Readonly<Partial<Record<'answer', BRegProposalLink>>>
+}
+export interface BRegProposalReviewAnswerDownload {readonly method: 'GET'; readonly operation: 'get-review-context'; readonly accessProfile: string; readonly path: string}
+export interface BRegProposalReviewAnswerDocument {
+  readonly id: string; readonly sha256: string; readonly contentType: string; readonly byteSize: number
+  readonly verificationStatus: 'notRequired' | 'pending' | 'approved' | 'rejected'; readonly download?: BRegProposalReviewAnswerDownload
+}
+export interface BRegProposalReviewAnswer {readonly text?: string; readonly documents: ReadonlyArray<BRegProposalReviewAnswerDocument>; readonly answeredAt: string}
+export interface BRegProposalReviewAsk extends Omit<BRegProposalAsk, 'answer' | 'links'> {readonly answer?: BRegProposalReviewAnswer}

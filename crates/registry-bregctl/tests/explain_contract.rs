@@ -59,7 +59,7 @@ fn envelope(contract: &str) -> (&'static str, &'static str) {
             "BRegEventsExplanation",
         ),
         "LifecycleExplanation" => (
-            "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha8",
+            "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha9",
             "BRegLifecycleExplanation",
         ),
         _ => panic!("unknown contract {contract}"),
@@ -651,6 +651,12 @@ fn explain_events_matches_contract() {
 #[test]
 fn explain_lifecycle_matches_contract() {
     let report = explain_lifecycle_report();
+    assert_eq!(
+        report["explanation"]["apiVersion"],
+        "id.registrystack.org/formats/breg/lifecycle-explanation/v1alpha9"
+    );
+    let submitted = &report["explanation"]["lifecycles"][0]["states"][1];
+    assert_eq!(submitted["statuses"].as_array().unwrap().len(), 4);
     assert_matches_contract("lifecycle", "LifecycleExplanation", &report["explanation"]);
 }
 

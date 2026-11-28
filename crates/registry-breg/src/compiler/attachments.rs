@@ -35,6 +35,45 @@ pub(crate) fn validate_slots(
     validate_shapes(&shapes, "a Proposal", field_names, base, errors);
 }
 
+pub(crate) fn validate_additions(
+    slot: &crate::contract::AdditionSlotSource,
+    attachments: &[AttachmentSlotSource],
+    field_names: &BTreeSet<String>,
+    base: &str,
+    errors: &mut Vec<Diagnostic>,
+) {
+    let mut names = field_names.clone();
+    names.extend(attachments.iter().map(|attachment| attachment.id.clone()));
+    let mut diagnostics = Vec::new();
+    validate_slots(
+        &[AttachmentSlotSource {
+            id: slot.id.clone(),
+            required: false,
+            maximum_bytes: slot.maximum_bytes,
+            content_types: slot.content_types.clone(),
+            classification: slot.classification,
+        }],
+        &names,
+        base,
+        &mut diagnostics,
+    );
+    for mut diagnostic in diagnostics {
+        diagnostic.code = diagnostic
+            .code
+            .replace("breg.attachment.", "breg.addition.");
+        diagnostic.path = diagnostic.path.replace(&format!("{base}[0]"), base);
+        diagnostic.message = diagnostic.message.replace("attachment", "addition");
+        errors.push(diagnostic);
+    }
+    if !(1..=32).contains(&slot.maximum_count) {
+        errors.push(Diagnostic::error(
+            "breg.addition.maximum-count-bounds-invalid",
+            format!("{base}.maximumCount"),
+            "addition maximumCount must be between 1 and 32",
+        ));
+    }
+}
+
 /// Validates a record type's slots. Each must also declare `writeOnce: true`,
 /// the only mode a record slot has.
 pub(crate) fn validate_record_slots(

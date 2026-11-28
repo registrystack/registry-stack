@@ -307,6 +307,8 @@ payload!(ExplainStage {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     outcomes: Vec<String>,
     negative_decisions: registry_casework_core::ReviewNegativeDecisionMode,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    asks: bool,
     exclude_initiator: bool,
     exclude_previous_stage_reviewers: bool
 });
@@ -328,6 +330,7 @@ impl ExplainStage {
                 .map(|outcome| outcome.id.clone())
                 .collect(),
             negative_decisions: stage.negative_decisions,
+            asks: stage.asks.is_some(),
             exclude_initiator: stage.exclude_initiator,
             exclude_previous_stage_reviewers: stage.exclude_previous_stage_reviewers,
         }

@@ -147,6 +147,13 @@ export type KnownCaseworkProblemCode =
   | 'request.unprocessable'
   | 'request.unsupported-media-type'
   | 'review.distinct-approver-required'
+  | 'review.ask-already-open'
+  | 'review.ask-answer-time-invalid'
+  | 'review.ask-limit-reached'
+  | 'review.ask-not-offered'
+  | 'review.ask-not-open'
+  | 'review.ask-producer-unsupported'
+  | 'review.ask-task-inactive'
   | 'review.initiator-excluded'
   | 'review.initiator-required'
   | 'review.query-too-broad'
@@ -269,7 +276,8 @@ export type ReviewCancelResponse =
 export interface ReviewPageQuery { cursor?: Uuid; limit?: SafeInteger }
 export type ReviewTaskOwnership = 'assigned-to-me' | 'unclaimed'
 export type ReviewTaskSort = 'due' | 'subject' | 'reference'
-export interface ReviewStaffingPageQuery { queue?: string; ownership?: ReviewTaskOwnership; reference?: string; sort?: ReviewTaskSort; cursor?: Uuid; limit?: SafeInteger }
+export type ReviewTaskMarker = 'waiting' | 'answered' | 'expired'
+export interface ReviewStaffingPageQuery { queue?: string; ownership?: ReviewTaskOwnership; marker?: ReviewTaskMarker; reference?: string; sort?: ReviewTaskSort; cursor?: Uuid; limit?: SafeInteger }
 /** A subject selector is absent or names every component of its immutable binding. */
 export type ReviewStaffingQuery = ReviewStaffingPageQuery & (
   | { subjectSource?: never; subjectType?: never; subjectId?: never; subjectVersion?: never; subjectDigest?: never }
@@ -311,6 +319,7 @@ export interface ReviewTask {
   staffingDiagnostic?: StaffingDiagnostic
   decidedByCaller?: boolean
   decisionReceipt?: ReviewDecisionReceipt
+  marker?: ReviewTaskMarker
 }
 export interface ReviewTaskPage { items: ReadonlyArray<ReviewTask>; nextCursor?: Uuid; status: PageStatus }
 export type SupervisoryReviewTaskState = 'open' | 'held' | 'decided'
@@ -329,6 +338,52 @@ export interface ReviewSourceProjection { binding: SubjectBinding; displayRefere
 export type ReviewTaskContextData =
   | { mode: 'submitted'; snapshot: Readonly<Record<string, JsonValue>> }
   | { mode: 'current-source'; reference: string; bindingStatus: ReviewSourceBindingStatus; projection?: ReviewSourceProjection }
+export type ReviewAskWant = { kind: 'answer' } | { kind: 'document' }
+export type ReviewAskState = 'open' | 'answered' | 'expired' | 'closed'
+export interface ReviewTaskAskRequest { text: string; wants: ReadonlyArray<ReviewAskWant> }
+export interface ReviewAsk {
+  askId: Uuid
+  requestId: Uuid
+  subject: SubjectBinding
+  text: string
+  wants: ReadonlyArray<ReviewAskWant>
+  askedAt: string
+  dueAt?: string
+  state: ReviewAskState
+  answeredAt?: string
+  closedAt?: string
+}
+export interface ReviewTaskAsked { task: ReviewTask; ask: ReviewAsk }
+export interface ReviewAnswerDownload {
+  method: 'GET'
+  operation: string
+  accessProfile: string
+  path: string
+}
+export interface ReviewAnswerDocument {
+  id: string
+  sha256: string
+  contentType: string
+  byteSize: number
+  verificationStatus?: string
+  download?: ReviewAnswerDownload
+}
+export interface ReviewContextAnswer {
+  text?: string
+  documents: ReadonlyArray<ReviewAnswerDocument>
+  answeredAt: string
+}
+export interface ReviewContextAsk {
+  askId: Uuid
+  taskId: Uuid
+  text: string
+  wants: ReadonlyArray<ReviewAskWant>
+  askedAt: string
+  dueAt?: string
+  state: ReviewAskState
+  answeredAt?: string
+  answer?: ReviewContextAnswer
+}
 export interface ReviewTaskContext {
   taskId: Uuid
   requestId: Uuid
@@ -338,6 +393,7 @@ export interface ReviewTaskContext {
   policyClosure: ReviewPolicyClosure
   resultConstraints?: JsonObject
   context: ReviewTaskContextData
+  asks?: ReadonlyArray<ReviewContextAsk>
 }
 export type ReviewClockCorrelation =
   | { scope: 'subject'; source: string; subjectType: string; id: string }
@@ -347,7 +403,7 @@ export interface ReviewClockOccurrence {
   clockId: string
   requestId: Uuid
   correlation: ReviewClockCorrelation
-  state: 'running' | 'completed' | 'cancelled' | 'source-facts-missing'
+  state: 'running' | 'paused' | 'completed' | 'cancelled' | 'source-facts-missing'
   policyDigest: ContentDigest
   anchorAt: string
   dueAt?: string
@@ -371,14 +427,16 @@ export interface ReviewAccountabilityRecord {
   occurredAt: string; retainedUntil: string
   decisionReceipt?: ReviewDecisionReceipt
 }
-export interface ReviewStagePolicy { id: string; label?: string; publicProgressCode?: string; queue: string; decidingProfiles: ReadonlyArray<string>; requiredApprovals: SafeInteger; outcomes?: ReadonlyArray<string>; negativeDecisions?: 'settle' | 'advise'; excludeInitiator?: boolean; excludePreviousStageReviewers?: boolean }
+export interface ReviewStageAsksPolicy { answerWithin?: ElapsedDuration; onDue?: 'return-to-reviewer'; pauseClocks?: boolean }
+export interface ReviewStagePolicy { id: string; label?: string; publicProgressCode?: string; queue: string; decidingProfiles: ReadonlyArray<string>; requiredApprovals: SafeInteger; outcomes?: ReadonlyArray<string>; negativeDecisions?: 'settle' | 'advise'; asks?: ReviewStageAsksPolicy; excludeInitiator?: boolean; excludePreviousStageReviewers?: boolean }
 export interface ReviewRetentionPolicy { terminalRetentionDays: SafeInteger; accountabilityRetentionDays: SafeInteger }
 export interface ReviewContextContract { id: string; revision: ContentDigest; schemaDigest: ContentDigest }
 export type ReviewContextPolicy = { mode: 'submitted' } | { mode: 'current-source'; provider: string; contract: ReviewContextContract }
 export type ReviewContextCapability = 'human-display' | 'service-status' | 'task-grant-context' | 'routing-context'
 export interface ReviewContextProviderPolicy { id: string; capabilities: ReadonlyArray<ReviewContextCapability>; sourceNamespace: string; deploymentRef: string; serviceProfiles?: Partial<Record<ReviewContextCapability, string>> }
-export interface ReviewPolicy { id: string; label?: string; version: string; purpose: 'approval' | 'answer'; context: ReviewContextPolicy; routing?: ReadonlyArray<RoutingRule>; stages: ReadonlyArray<ReviewStagePolicy>; clocks?: ReadonlyArray<string>; retention: ReviewRetentionPolicy; displaySchema: JsonValue; resultSchema?: JsonValue; outcomes?: ReadonlyArray<{ id: string; label: string; settlement: 'approved' | 'rejected' | 'changes-requested' | 'answered'; reasonRequired: boolean; publicReason: 'required' | 'optional' | 'none'; resultRequired?: boolean }> }
+export interface ReviewPolicy { id: string; label?: string; version: string; purpose: 'approval' | 'answer'; resubmission?: 'first-stage' | 'resume-at-returning-stage'; context: ReviewContextPolicy; routing?: ReadonlyArray<RoutingRule>; stages: ReadonlyArray<ReviewStagePolicy>; clocks?: ReadonlyArray<string>; retention: ReviewRetentionPolicy; displaySchema: JsonValue; resultSchema?: JsonValue; outcomes?: ReadonlyArray<{ id: string; label: string; settlement: 'approved' | 'rejected' | 'changes-requested' | 'answered'; reasonRequired: boolean; publicReason: 'required' | 'optional' | 'none'; resultRequired?: boolean }> }
 export interface ReviewPolicyClosure {
+  resubmission?: 'first-stage' | 'resume-at-returning-stage'
   identity: PolicyBinding
   label?: string
   purpose: 'approval' | 'answer'
@@ -424,6 +482,7 @@ export class CaseworkClient {
   reviewTaskDraft(token: string, profile: string, taskId: Uuid, sourceProfile?: string, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<ReviewTaskDraft | null>>
   saveReviewTaskDraft(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string, draft: ReviewTaskDraftInput, sourceProfile?: string, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<ReviewTaskDraft>>
   deleteReviewTaskDraft(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string, sourceProfile?: string, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<null>>
+  askApplicant(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string, ask: ReviewTaskAskRequest, sourceProfile?: string | null, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<ReviewTaskAsked>>
   decideReviewTask(token: string, profile: string, taskId: Uuid, expectedRevision: SafeInteger, idempotencyKey: string, decision: ReviewTaskDecisionRequest, sourceProfile?: string | null, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<null>>
   reviewHistory(token: string, profile: string, requestId: Uuid, query?: ReviewPageQuery | null, sourceProfile?: string | null, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<ReviewHistoryPage>>
   addReviewNote(token: string, profile: string, requestId: Uuid, idempotencyKey: string, note: ReviewNoteRequest, sourceProfile?: string | null, sourceCredential?: HumanSourceCredential | null): Promise<CaseworkOutcome<ReviewHistoryEntry>>

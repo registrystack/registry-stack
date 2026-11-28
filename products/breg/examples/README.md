@@ -1,6 +1,9 @@
 # Standalone BReg examples
 
 `minimal/` is a directory project with one Record type and generated CRUD.
+[`required-attachment/`](required-attachment/README.md) adds a manual name
+correction whose Submit requires a supporting text file. It includes a
+reproducible OpenAPI document with the attachment problem responses.
 `reviewed-change/registry.yaml` adds one fixed-plan name correction to one Record
 type. It requires an external review authority and uses the omitted automatic
 application default. Its explicit profile grants record creation and reading,

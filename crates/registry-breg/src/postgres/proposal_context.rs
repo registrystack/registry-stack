@@ -29,6 +29,10 @@ pub(crate) struct ProposalAuthority {
     pub(crate) targets: BTreeMap<String, Vec<RowBoundaryContext>>,
     pub(crate) task_grant: Option<crate::task_grant::TaskGrantBinding>,
     pub(crate) proposal_scope: Option<BTreeSet<Uuid>>,
+    /// Whether this caller may receive applicant answers to review asks and
+    /// download the files they cite. Only Proposal admission of a verified
+    /// human caller sets it; every other authority is built without it.
+    pub(crate) receives_review_answers: bool,
     system: Option<SystemApplyAuthority>,
 }
 
@@ -123,6 +127,7 @@ impl ProposalAuthority {
             targets,
             task_grant: None,
             proposal_scope: None,
+            receives_review_answers: false,
             system: None,
         })
     }
@@ -247,6 +252,7 @@ impl ProposalAuthority {
             targets,
             task_grant: None,
             proposal_scope: Some(BTreeSet::from([proposal_id])),
+            receives_review_answers: false,
             system: Some(SystemApplyAuthority {
                 grant: grant.clone(),
                 proposal_id,
@@ -430,6 +436,8 @@ impl ProposalAuthority {
                 ProposalAuthorityOperation::Lifecycle(ProposalOperation::Get) => "get",
                 ProposalAuthorityOperation::Lifecycle(ProposalOperation::List) => "list",
                 ProposalAuthorityOperation::Lifecycle(ProposalOperation::Edit) => "edit",
+                ProposalAuthorityOperation::Lifecycle(ProposalOperation::Add) => "add",
+        ProposalAuthorityOperation::Lifecycle(ProposalOperation::Answer) => "answer",
                 ProposalAuthorityOperation::Lifecycle(ProposalOperation::Submit) => "submit",
                 ProposalAuthorityOperation::Lifecycle(ProposalOperation::Revise) => "revise",
                 ProposalAuthorityOperation::Lifecycle(ProposalOperation::Cancel) => "cancel",

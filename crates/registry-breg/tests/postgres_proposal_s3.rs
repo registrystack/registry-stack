@@ -82,7 +82,7 @@ fn registry_source(automatic: bool) -> Value {
                 "actions":[{"action":"correct-name","operations":["start"],"targets":[{"recordType":"target",
                     "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}],
                 "proposals":[{"action":"correct-name","operations":["get","list","edit","submit","revise","rebase","retry","cancel","apply"],
-                    "ownership":"caller","readableAttachments":["support"],"writableAttachments":["support"],"targets":[{"recordType":"target",
+                    "ownership":"caller","readableInputs":["target","value"],"readableAttachments":["support"],"writableAttachments":["support"],"targets":[{"recordType":"target",
                     "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]}]}}}});
     source
 }
@@ -877,6 +877,10 @@ async fn review_document_binding_refusals_precede_s3_and_revise_never_follows_su
         .unwrap()
         .remove("writableFields");
     reviewer["permissions"]["proposals"][0]["operations"] = json!(["get-review-context"]);
+    reviewer["permissions"]["proposals"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("readableInputs");
     reviewer["permissions"]["proposals"][0]["readableContextFields"] =
         json!(["document", "changes"]);
     reviewer["permissions"]["proposals"][0]

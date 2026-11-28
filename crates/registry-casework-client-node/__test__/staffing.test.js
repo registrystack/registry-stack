@@ -65,6 +65,30 @@ test('partial selectors, duplicate clock tasks, and invalid preview IDs fail bef
   ]) await assert.rejects(call, error => error.kind === 'invalid-request' && !error.message.includes('private-canary'));
   assert.equal(requests.length, 0);
 });
+test('askApplicant sends the ask under the revision and checks the waiting task', async t => {
+  const waiting = { ...task, state: { held: { holder: { issuer: 'https://issuer.example', subject: 'staff-1' } } }, revision: 3, marker: 'waiting' };
+  const ask = { askId: previewId, requestId: previewId, subject, text: 'Send the signed form.', wants: [{ kind: 'answer' }], askedAt: '2026-10-14T00:00:00Z', state: 'open' };
+  const { client, requests } = await fixture(t, () => ({ task: waiting, ask }));
+  const body = { text: 'Send the signed form.', wants: [{ kind: 'answer' }] };
+  const asked = await client.askApplicant('staff-token', 'staff', id, 2, 'ask-1', body);
+  assert.equal(asked.value.task.marker, 'waiting');
+  assert.equal(asked.value.ask.state, 'open');
+  assert.equal(requests[0].path, `/tenant/v1/review-tasks/${id}/asks`);
+  assert.equal(requests[0].headers['if-match'], '"2"');
+  assert.equal(requests[0].headers['idempotency-key'], 'ask-1');
+  assert.deepEqual(requests[0].body, body);
+  for (const call of [
+    () => client.askApplicant('staff-token', 'staff', id, 2, 'ask-2', { text: '', wants: [] }),
+    () => client.askApplicant('staff-token', 'staff', id, 2, 'ask-3', { text: 'x', wants: [{ kind: 'answer' }, { kind: 'answer' }] }),
+    () => client.askApplicant('staff-token', 'staff', id, 2, 'ask-4', { text: 'x', wants: [], extra: true }),
+  ]) await assert.rejects(call, error => error.kind === 'invalid-request');
+  assert.equal(requests.length, 1);
+});
+test('askApplicant refuses a response that did not mark the task waiting', async t => {
+  const ask = { askId: previewId, requestId: previewId, subject, text: 'x', wants: [], askedAt: '2026-10-14T00:00:00Z', state: 'open' };
+  const { client } = await fixture(t, () => ({ task: { ...task, revision: 3 }, ask }));
+  await assert.rejects(() => client.askApplicant('staff-token', 'staff', id, 2, 'ask-1', { text: 'x', wants: [] }), error => error.kind === 'protocol');
+});
 test('staffing responses cannot substitute another subject or reference', async t => {
   const { client } = await fixture(t, () => task);
   await assert.rejects(() => client.nextReviewTask('staff-token', 'staff', { subjectSource: subject.source, subjectType: subject.type, subjectId: 'another', subjectVersion: subject.version, subjectDigest: subject.digest }), error => error.kind === 'protocol');

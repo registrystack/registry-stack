@@ -1167,7 +1167,7 @@ Own-decisions and supervision lists still require current source disclosure.
     crates/registry-casework/tests/review_postgres.rs,
     decided_review_state_stays_readable_after_the_source_conceals_context */}
 
-`ReviewStaffingQuery` supports queue, ownership, visible reference, and either all five exact
+`ReviewStaffingQuery` supports queue, ownership, the task `marker` (`waiting` or `answered`), visible reference, and either all five exact
 subject selectors or none. Sort by `due`, `subject`, or `reference`. `next_review_task` is
 due-ordered and returns one task or no task; holdings return a bounded page.
 Caseload and clock apply calls send the reviewed preview ID and caller's key. The runtime
@@ -1201,6 +1201,17 @@ remain available for a selected subset, with independent revisions and outcomes.
     own_review_decisions, review_accountability;
     crates/registry-casework-client/tests/http_boundary.rs;
     crates/registry-casework-client-node/client.d.ts, ReviewDecisionReceipt, SupervisoryReviewTask */}
+
+Ask the applicant with `ask_applicant` (`askApplicant` in Node), which takes the task UUID, the
+displayed revision, a key and a `{text, wants}` body, and returns the task with its `waiting`
+marker and the open ask. The client refuses a response that is for another task, does not advance
+the revision by one, leaves no `waiting` marker or carries an ask that is not open. The task
+context lists the request's `asks`. The producer-side ask calls are not wrapped here: a producer
+reads and answers asks through the review client.
+
+{/* Evidence: crates/registry-casework-client/src/client.rs, ask_applicant;
+    crates/registry-casework-client/tests/http_boundary.rs,
+    ask_applicant_refuses_a_response_that_breaks_its_postconditions */}
 
 ### Casework outcomes
 

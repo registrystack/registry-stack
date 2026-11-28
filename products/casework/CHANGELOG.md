@@ -71,6 +71,46 @@
 - The runtime schema declares no empty default for an issuer entry's
   `assertionIssuers`. Omitting the member still means no assertion-issuer rule
   applies.
+- Fix a pre-existing application/database clock mismatch that could delay
+  immediately due review completion deliveries when the host clock ran ahead.
+- Resubmission considers only the latest matching round and records only
+  `stageId` in its resume history, without a link to the earlier request.
+- Clock recomputation preserves accumulated ask pauses. Pausing requires
+  `answerWithin` on the same stage.
+- An older ask's answer preserves a newer ask's waiting marker. Closing
+  preserves already expired asks. Task contexts expose each ask's `dueAt`.
+- Stages can set `asks.answerWithin` and `asks.onDue: return-to-reviewer`.
+  Casework expires overdue asks and marks their tasks `expired`. Answers are
+  judged by `answeredAt`, including on-time answers delivered after expiry.
+- Stages can set `asks.pauseClocks: true`. Clocks read as `paused` until the
+  ask is answered, expires, or closes. Pending instants move by the wall-clock
+  pause duration for both elapsed-time and working-day clocks. History and
+  audit record pause and resume.
+- Policies can set `resubmission: resume-at-returning-stage`. New requests
+  start at the latest returning stage for the same producer, subject, and
+  policy, using the settling decision within result retention, with fresh
+  clocks and no carried approvals. Later resubmissions start at the first
+  stage. Omission keeps the
+  first-stage default and the policy digest. Earlier-round reviewers, up to and
+  including the returning stage, stay excluded from the stages above the one
+  they decided where a stage sets `excludePreviousStageReviewers`, also after
+  the earlier request is erased. A later round erased first stops an older
+  round from resuming. Resumption also needs the same stage ids, in the same
+  order, up to and including the returning stage.
+
+- A reviewer who holds a task can ask the applicant. A stage opts in with
+  `asks: {}` (approval policies only), and a producer declares
+  `readsAsks: true`. `POST /v1/review-tasks/{task_id}/asks` opens the ask. The
+  producer reads `GET /v1/review-asks` and
+  `GET /v1/review-requests/{request_id}/asks/{ask_id}`, and reports the answer
+  with `POST /v1/review-requests/{request_id}/asks/{ask_id}/answer`, which
+  carries no text. Tasks carry a `marker` (`waiting` or `answered`), the task
+  context lists the request's `asks`, and `GET /v1/review-tasks` takes a
+  `marker` filter. A migration adds the ask tables and the task marker. New
+  problem codes: `review.ask-already-open`, `review.ask-answer-time-invalid`,
+  `review.ask-not-offered`, `review.ask-not-open`,
+  `review.ask-producer-unsupported` and `review.ask-task-inactive`. A policy
+  without `asks` keeps its bytes and digest.
 
 - BREAKING: review completion wakes use Standard Webhooks. Casework signs
   `webhook-id`, `webhook-timestamp` and the exact JSON bytes with

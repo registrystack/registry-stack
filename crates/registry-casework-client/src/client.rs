@@ -6,15 +6,15 @@ use registry_casework_core::{
     AbsenceInput, AbsenceList, AbsenceRecord, AbsencesQuery, AssignmentRequest,
     BootstrapDirectoryRequest, DelegateRequest, Description, DirectoryResponse,
     DirectoryTargetPage, DirectoryTargetsQuery, HolidaySetDocument, HolidaySetRevisionInput,
-    OwnReviewDecisionPage, PageStatus, ReviewAccountabilityRecord, ReviewCancelRequest,
-    ReviewCancelResponse, ReviewCaseloadApplyRequest, ReviewCaseloadMoveRequest,
-    ReviewCaseloadPreview, ReviewCaseloadResult, ReviewClockOccurrence,
+    OwnReviewDecisionPage, PageStatus, ReviewAccountabilityRecord, ReviewAskState,
+    ReviewCancelRequest, ReviewCancelResponse, ReviewCaseloadApplyRequest,
+    ReviewCaseloadMoveRequest, ReviewCaseloadPreview, ReviewCaseloadResult, ReviewClockOccurrence,
     ReviewClockRecomputeApplyRequest, ReviewClockRecomputePreview, ReviewClockRecomputeRequest,
     ReviewClockRecomputeResult, ReviewContextPolicy, ReviewCreateRequest, ReviewHistoryAudience,
     ReviewHistoryEntry, ReviewHistoryPage, ReviewNoteRequest, ReviewPolicyClosure,
     ReviewRequestAccepted, ReviewRequestView, ReviewResultFeedPage, ReviewSourceBindingStatus,
     ReviewStaffingQuery, ReviewTask, ReviewTaskContext, ReviewTaskContextData, ReviewTaskDraft,
-    ReviewTaskDraftInput, ReviewTaskPage, ReviewTaskState, ReviewValidationError,
+    ReviewTaskDraftInput, ReviewTaskMarker, ReviewTaskPage, ReviewTaskState, ReviewValidationError,
     ReviewValidationReason, SupervisoryReviewTaskPage, CASEWORK_PROBLEM_TYPE_BASE,
     CASEWORK_PROFILE_HEADER, DIRECTORY_TARGETS_PATH, IDEMPOTENCY_KEY_HEADER,
     MAXIMUM_CASEWORK_IDEMPOTENCY_KEY_BYTES, MAXIMUM_CASEWORK_PROFILE_BYTES, SOURCE_PROFILE_HEADER,
@@ -44,7 +44,8 @@ use uuid::Uuid;
 use crate::{
     wire::ClientResponse, CaseworkAuth, CaseworkClientConfig, CaseworkClientError,
     CaseworkComplete, CaseworkProblemCode, CaseworkProtocolFailure, DelegatedStaffReadAuth,
-    ReviewPageQuery, ReviewResultResponse, ReviewTaskDecisionRequest, SupervisoryReviewTaskQuery,
+    ReviewPageQuery, ReviewResultResponse, ReviewTaskAskRequest, ReviewTaskAsked,
+    ReviewTaskDecisionRequest, SupervisoryReviewTaskQuery,
 };
 
 const JSON_MEDIA_TYPE: &str = "application/json";
@@ -826,6 +827,49 @@ impl CaseworkClient {
             idempotency_key,
         )?;
         self.send_keyed_empty(request, StatusCode::NO_CONTENT).await
+    }
+
+    /// Ask the applicant for more. The holder names the task revision it read.
+    /// The response is checked to be the same task, one revision later and
+    /// waiting, with an open ask of the same request.
+    pub async fn ask_applicant(
+        &self,
+        auth: CaseworkAuth<'_>,
+        task_id: Uuid,
+        expected_revision: i64,
+        idempotency_key: &str,
+        ask: &ReviewTaskAskRequest,
+    ) -> Result<CaseworkComplete<ReviewTaskAsked>, CaseworkClientError> {
+        ask.check()
+            .map_err(|_| CaseworkClientError::invalid_request("the ask is invalid"))?;
+        validate_mutation(expected_revision, idempotency_key)?;
+        let request = self.mutation_headers(
+            self.authorized(
+                self.http
+                    .post(self.url(&["v1", "review-tasks", &task_id.to_string(), "asks"])?)
+                    .json(ask),
+                &auth,
+            )?,
+            expected_revision,
+            idempotency_key,
+        )?;
+        let complete: CaseworkComplete<ReviewTaskAsked> =
+            self.send_keyed_json(request, StatusCode::OK).await?;
+        let asked = &complete.value;
+        if asked.task.task_id != task_id
+            || expected_revision.checked_add(1) != Some(asked.task.revision)
+            || asked.task.marker != Some(ReviewTaskMarker::Waiting)
+            || asked.ask.request_id != asked.task.request_id
+            || asked.ask.state != ReviewAskState::Open
+            || asked.ask.check().is_err()
+        {
+            return Err(protocol(
+                StatusCode::OK,
+                CaseworkProtocolFailure::Body,
+                Some(complete.trace_id),
+            ));
+        }
+        Ok(complete)
     }
 
     pub async fn review_history(

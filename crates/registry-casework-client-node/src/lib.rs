@@ -15,8 +15,8 @@ use registry_casework_client::{
     ReviewCancelRequest, ReviewCaseloadApplyRequest, ReviewCaseloadMoveRequest,
     ReviewClockRecomputeApplyRequest, ReviewClockRecomputeRequest, ReviewCreateRequest,
     ReviewNoteRequest, ReviewPageQuery, ReviewRequestAccepted, ReviewResultResponse,
-    ReviewStaffingQuery, ReviewTaskDecisionRequest, ReviewTaskDraftInput, SubmissionDigest,
-    SupervisoryReviewTaskQuery,
+    ReviewStaffingQuery, ReviewTaskAskRequest, ReviewTaskDecisionRequest, ReviewTaskDraftInput,
+    SubmissionDigest, SupervisoryReviewTaskQuery,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -831,6 +831,45 @@ impl CaseworkClient {
                     uuid(&task_id)?,
                     expected_revision,
                     &idempotency_key,
+                )
+                .await,
+        )
+    }
+
+    #[napi]
+    #[allow(clippy::too_many_arguments)]
+    pub async fn ask_applicant(
+        &self,
+        token: String,
+        profile: String,
+        task_id: String,
+        expected_revision: i64,
+        idempotency_key: String,
+        ask: Value,
+        source_profile: Option<String>,
+        source_credential: Option<HumanSourceCredential>,
+    ) -> Result<CaseworkOutcome> {
+        safe_revision(expected_revision)?;
+        let token = bearer(token)?;
+        let source_token = source_credential
+            .as_ref()
+            .map(|source| bearer(source.token.clone()))
+            .transpose()?;
+        let ask: ReviewTaskAskRequest = input(ask)?;
+        outcome(
+            self.inner
+                .ask_applicant(
+                    optional_source_auth(
+                        &token,
+                        &profile,
+                        source_profile.as_deref(),
+                        source_credential.as_ref(),
+                        source_token.as_ref(),
+                    ),
+                    uuid(&task_id)?,
+                    expected_revision,
+                    &idempotency_key,
+                    &ask,
                 )
                 .await,
         )

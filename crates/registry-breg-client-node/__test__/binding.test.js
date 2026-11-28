@@ -294,6 +294,7 @@ test('a write boundary refusal uses the core problem projection without detail l
   });
 });
 
+
 test('unknown problem codes fall back to HTTP status semantics', async () => {
   const client = new BaseRegistryClient({ baseUrl });
   for (const [recordId, status] of UNKNOWN_PROBLEM_STATUSES) {

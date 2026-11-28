@@ -155,8 +155,14 @@ outcome whose settlement is `approved` (`answered` for an answer policy).
 `caseworkctl explain` always
 reports the effective outcomes for each stage, including the all-policy default.
 A `changes-requested` result ends that review version. A resubmission is a new
-version that starts at the policy's first stage; it does not resume the earlier
-review in place.
+request at the first stage by default. With
+`resubmission: resume-at-returning-stage`, Casework starts at the stage that
+returned the same producer's latest round for that subject and policy, only if
+that round settled changes-requested. A later approved, rejected, cancelled or
+still-open round starts at the first stage. Casework reads the stage of the settling decision. Casework resumes
+within the earlier request's result retention, and starts later resubmissions
+at the first stage. A removed stage also falls back to the first stage. Earlier approvals
+are not carried over, and the subject clock starts fresh.
 
 The same producer reads `GET /v1/review-requests/{requestId}/result` or its
 resumable result feed. A `ReviewResult` repeats the subject, policy, and

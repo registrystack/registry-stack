@@ -1445,6 +1445,7 @@ impl CaseworkProject {
                 }
             }
             let mut exclusion_reported = producer.trusted_initiator_issuer.is_some();
+            let mut asks_reported = producer.reads_asks;
             for (policy_index, policy_id) in producer.review_policies.iter().enumerate() {
                 let Some(policy) = self
                     .review_policies
@@ -1477,6 +1478,25 @@ impl CaseworkProject {
                             "terminalRetentionDays is written here",
                         ),
                     );
+                }
+                if !asks_reported {
+                    if let Some(stage_index) =
+                        policy.stages.iter().position(|stage| stage.asks.is_some())
+                    {
+                        findings.add(
+                            ConfigFinding::new(
+                                "casework.review-producer.asks-not-read",
+                                format!("{at}/readsAsks"),
+                                "a review policy this producer submits lets a stage ask the applicant, and this producer does not read asks",
+                                "Write readsAsks: true on the producer, or remove asks from the stage.",
+                            )
+                            .with_related(
+                                format!("{}/stages/{stage_index}/asks", keyed("reviewPolicies", &policy.id)),
+                                "asks is written here",
+                            ),
+                        );
+                        asks_reported = true;
+                    }
                 }
                 if !exclusion_reported {
                     if let Some(stage_index) = policy
@@ -1955,6 +1975,12 @@ pub struct ReviewProducerPolicy {
     pub retention: ProducerRetention,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub completion: Option<ReviewCompletionDestinationPolicy>,
+    /// Whether this producer reads reviewer asks through the ask feed and
+    /// answers them. A review policy whose stage declares `asks` needs it
+    /// on every producer that submits to the policy.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(feature = "schema", schemars(extend("default" = false)))]
+    pub reads_asks: bool,
 }
 
 /// How long Casework keeps what a producer needs to recover a submission.

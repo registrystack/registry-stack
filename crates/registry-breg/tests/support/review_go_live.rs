@@ -26,6 +26,15 @@ async fn reviewed_fixture_with_recovery(
     automatic: bool,
     recovery_contract: bool,
 ) -> (client_http::ClientFixture, Value) {
+    reviewed_fixture_options(authority, automatic, recovery_contract, false).await
+}
+
+async fn reviewed_fixture_options(
+    authority: &Authority,
+    automatic: bool,
+    recovery_contract: bool,
+    competing_action: bool,
+) -> (client_http::ClientFixture, Value) {
     let mut source = registry_source(json!(policy()));
     source["actions"]["correct-name"]["execution"]["proposal"]["application"] =
         json!({"mode":if automatic { "automatic" } else { "manual" }});
@@ -58,6 +67,21 @@ async fn reviewed_fixture_with_recovery(
             .as_array_mut()
             .unwrap()
             .push(json!("apply"));
+    }
+    if competing_action {
+        let mut competing = source["actions"]["correct-name"].clone();
+        competing["execution"]["proposal"]["review"] = json!({"type":"none"});
+        competing["execution"]["proposal"]["application"] = json!({"mode":"manual"});
+        source["actions"]["competing-name"] = competing;
+        let permissions = &mut source["accessProfiles"]["clerk"]["permissions"];
+        for member in ["actions", "proposals"] {
+            let mut grant = permissions[member][0].clone();
+            grant["action"] = json!("competing-name");
+            if member == "proposals" {
+                grant["operations"] = json!(["get", "submit", "apply"]);
+            }
+            permissions[member].as_array_mut().unwrap().push(grant);
+        }
     }
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
@@ -156,13 +180,21 @@ async fn approve(
 }
 
 async fn reconcile(fixture: &client_http::ClientFixture, accepted: &ReviewRequestAccepted) {
+    reconcile_with_result_id(fixture, accepted, Uuid::new_v4()).await;
+}
+
+async fn reconcile_with_result_id(
+    fixture: &client_http::ClientFixture,
+    accepted: &ReviewRequestAccepted,
+    result_id: Uuid,
+) {
     let mut client = fixture.pool.get_for_test().await.unwrap();
     let tx = client.transaction().await.unwrap();
     reconcile_result(
         &tx,
         AUTHORITY,
         accepted,
-        &result(accepted, Uuid::new_v4(), ReviewResultStatus::Approved),
+        &result(accepted, result_id, ReviewResultStatus::Approved),
         &fixture.mutations,
     )
     .await
@@ -604,6 +636,10 @@ async fn rollback_does_not_revive_cancelled_review_or_application() {
     successor["actions"]["correct-name"]["inputs"].as_array_mut().unwrap().push(
         json!({"id":"review-note","type":"string","maximumLength":32,"required":false,"classification":"internal"}),
     );
+    successor["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("review-note"));
     let (package, active) = proposal_activation::activate_with_compatibility(
         &fixture,
         &fixture.registry,
@@ -706,6 +742,10 @@ async fn late_approval_after_rollback(finish_cancellation: bool, automatic: bool
     successor["actions"]["correct-name"]["inputs"].as_array_mut().unwrap().push(
         json!({"id":"review-note","type":"string","maximumLength":32,"required":false,"classification":"internal"}),
     );
+    successor["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("review-note"));
     let (package, active) = proposal_activation::activate_with_compatibility(
         &fixture,
         &fixture.registry,
@@ -1166,6 +1206,10 @@ async fn failed_review_stays_withdrawn_after_rollback(accepted: bool) {
     successor["actions"]["correct-name"]["inputs"].as_array_mut().unwrap().push(
         json!({"id":"review-note","type":"string","maximumLength":32,"required":false,"classification":"internal"}),
     );
+    successor["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("review-note"));
     let (package, active) = proposal_activation::activate_with_compatibility(
         &fixture,
         &fixture.registry,
@@ -1352,6 +1396,10 @@ async fn activated_automatic_proposal_preserves_requester_recovery(rollback: boo
     successor["actions"]["correct-name"]["inputs"].as_array_mut().unwrap().push(
         json!({"id":"review-note","type":"string","maximumLength":32,"required":false,"classification":"internal"}),
     );
+    successor["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("review-note"));
     let (mut package, mut active) = proposal_activation::activate_with_compatibility(
         &fixture,
         &fixture.registry,
@@ -1610,8 +1658,71 @@ async fn activation_work_snapshot(client: &impl tokio_postgres::GenericClient) -
 }
 
 async fn activation_statement_counts(extra_pending: usize) -> Vec<(String, i64)> {
-    let authority = Authority::start(false, true).await;
-    let (fixture, source) = automatic_fixture(&authority).await;
+    let authority = Authority::start_with_results(false, true, [ResultReply::Approved; 2]).await;
+    let (fixture, source) = reviewed_fixture_options(&authority, true, false, true).await;
+    // A competing, approved application changes the frozen target through the
+    // public workflow before the older submission reaches its executor.
+    let versioned_proposal = submitted_proposal(&fixture, "batch-versioned-canary").await;
+    let client = &fixture.http.client;
+    let metadata = client.registry_contract(Some("clerk")).await.unwrap().value;
+    let action = metadata.select_action("competing-name", "clerk").unwrap();
+    let mut input = versioned_proposal.input().unwrap().clone();
+    input.insert("value".into(), json!("Competing"));
+    let competing = client
+        .start_proposal(
+            &action,
+            &BRegActionInvocationRequest::new(&action, input, None).unwrap(),
+            &BRegIdempotencyKey::parse("batch-competing-start").unwrap(),
+        )
+        .await
+        .unwrap()
+        .value;
+    let competing = client
+        .execute_proposal(
+            &client
+                .prepare_proposal(
+                    &competing,
+                    "submit",
+                    json!({}),
+                    &BRegIdempotencyKey::parse("batch-competing-submit").unwrap(),
+                )
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+        .value;
+    let applied = client.execute_proposal(&client.prepare_proposal(&competing,"apply",
+        json!({"submissionVersion":competing.submission_version(),"effectDigest":competing.effect_digest().unwrap()}),
+        &BRegIdempotencyKey::parse("batch-competing-apply").unwrap()).unwrap()).await.unwrap().value;
+    assert_eq!(
+        applied.state(),
+        registry_breg_client::BRegProposalState::Applied
+    );
+    let versioned = Uuid::parse_str(versioned_proposal.id()).unwrap();
+    let accepted = retained_binding(&fixture, versioned).await;
+    accept(&fixture, versioned, &accepted).await;
+    *authority.state.accepted.lock().unwrap() = Some(accepted.clone());
+    reconcile_with_result_id(&fixture, &accepted, authority.state.result_id).await;
+    assert!(fixture
+        .mutations
+        .run_automatic_proposal_once_for_test()
+        .await
+        .unwrap());
+    let blocked = client
+        .read_proposal(&versioned_proposal)
+        .await
+        .unwrap()
+        .value;
+    assert_eq!(
+        blocked.status(),
+        Some(registry_breg_client::BRegProposalStatus::AwaitingParty),
+        "application observation: {}",
+        serde_json::to_value(&blocked).unwrap()["applicationStatus"]
+    );
+    assert_eq!(
+        serde_json::to_value(&blocked).unwrap()["applicationStatus"]["recovery"],
+        "rebase"
+    );
     // Bound and unbound rounds exercise the same cases as ordinary withdrawal.
     // The counters are fixture-only; the native activation tests above separately
     // exercise the closed-catalog gate that intentionally refuses these triggers.
@@ -1677,10 +1788,6 @@ async fn activation_statement_counts(extra_pending: usize) -> Vec<(String, i64)>
 
     // A fresh second submission leaves an older round and job behind. Only the
     // current round may be withdrawn, but every unfinished application must close.
-    let versioned = submitted(&fixture, "batch-versioned-canary").await;
-    let accepted = retained_binding(&fixture, versioned).await;
-    accept(&fixture, versioned, &accepted).await;
-    reconcile(&fixture, &accepted).await;
     let proposal = fixture
         .http
         .client
@@ -1723,6 +1830,8 @@ async fn activation_statement_counts(extra_pending: usize) -> Vec<(String, i64)>
         .unwrap()
         .value;
     assert_eq!(current.submission_version(), 2);
+    // No public command revives an old job or review: forge orphaned history
+    // only to exercise activation's set-based cleanup of every version.
     fixture
         .database
         .admin
@@ -1744,6 +1853,10 @@ async fn activation_statement_counts(extra_pending: usize) -> Vec<(String, i64)>
     successor["actions"]["correct-name"]["inputs"].as_array_mut().unwrap().push(
         json!({"id":"review-note","type":"string","maximumLength":32,"required":false,"classification":"internal"}),
     );
+    successor["accessProfiles"]["clerk"]["permissions"]["proposals"][0]["readableInputs"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!("review-note"));
     let project = parse_project_json(&serde_json::to_vec(&successor).unwrap()).unwrap();
     let candidate = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
     let (mut admin, task) = fixture.database.connect_admin().await;

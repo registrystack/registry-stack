@@ -120,6 +120,7 @@ fn registry(automatic: bool, reviewed: bool) -> registry_breg::CompiledRegistry 
                         "action":"correct-name",
                         "operations":["get","edit","submit","retry","cancel","apply"],
                         "ownership":"caller",
+                        "readableInputs":["target","value"],
                         "targets":[{"recordType":"target","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]
                     }]
                 }
@@ -141,6 +142,7 @@ fn registry(automatic: bool, reviewed: bool) -> registry_breg::CompiledRegistry 
                         "action":"correct-name",
                         "operations":["get","edit","submit","cancel"],
                         "ownership":"caller",
+                        "readableInputs":["target","value"],
                         "targets":[{"recordType":"target","rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]}]
                     }]
                 }
@@ -992,5 +994,118 @@ async fn completed_apply_receipt_and_owner_cancel_do_not_require_retained_status
     assert_eq!(cancel_status, StatusCode::OK, "{cancelled}");
     assert_eq!(cancelled["state"], "cancelled");
     assert_eq!(status.calls.load(Ordering::SeqCst), calls_before_exceptions);
+    fixture.finish().await;
+}
+
+/// A task grant that scopes `cancel` but not `get` on the Proposal runs the
+/// command, and the response withholds what only Get may read: the decision
+/// and the inputs. The same profile under a grant that holds `get` reads both.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn cancel_only_task_grant_gets_no_decision_or_input_on_its_response() {
+    let status = status();
+    let checker = status.clone();
+    let review = Arc::new(ApprovedReview {
+        calls: AtomicUsize::new(0),
+        result_id: uuid::Uuid::new_v4(),
+    });
+    let review_source = review.clone();
+    let fixture = client_http::ClientFixture::start_with_mutations(
+        registry(false, true),
+        clerk(),
+        move |service| {
+            service
+                .with_task_status(checker)
+                .with_proposal_review_substitute_for_test(review_binding(), review_source)
+        },
+    )
+    .await;
+    let target = create_target(&fixture, "cancel-only").await;
+    let idp = MockIdp::start().await;
+    let auth = authenticator(&fixture.registry, &idp).await;
+    let (proposal_id, _, _) = submit_with_task(&fixture, &auth, &idp, &target, "cancel-only").await;
+    let accepted = accept_review(&fixture, &proposal_id).await;
+    let now = chrono::Utc::now();
+    let result = registry_review_client::ReviewResult {
+        result_id: uuid::Uuid::new_v4(),
+        request_id: accepted.request_id,
+        subject: accepted.subject.clone(),
+        policy: accepted.policy.clone(),
+        submission_digest: accepted.submission_digest.clone(),
+        status: registry_review_client::ReviewResultStatus::ChangesRequested,
+        outcome: Some("changes-requested".to_owned()),
+        public_reason: Some("Task reason canary".to_owned()),
+        result: None,
+        completed_at: now - chrono::Duration::seconds(1),
+        available_until: now + chrono::Duration::minutes(5),
+    };
+    let (mut migration, task) = fixture.database.connect_migration().await;
+    let tx = migration.transaction().await.unwrap();
+    registry_breg::review_store::reconcile_result(
+        &tx,
+        "local-review",
+        &accepted,
+        &result,
+        &fixture.mutations,
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    drop(migration);
+    task.abort();
+
+    let reader = fixture
+        .client_for(
+            auth.authenticate(&idp.mint_token(token(
+                2,
+                json!([{
+                    "collection":format!("proposal:{proposal_id}"),
+                    "operations":["get","edit","submit","cancel"]
+                }]),
+            )))
+            .await
+            .unwrap(),
+        )
+        .await;
+    let (read_status, read, etag) = send(
+        &reader,
+        Method::GET,
+        &format!("/v1/proposals/{proposal_id}?accessProfile=task-agent"),
+        Value::Null,
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(read_status, StatusCode::OK, "{read}");
+    assert_eq!(read["decision"]["publicReason"], "Task reason canary");
+    assert_eq!(read["input"]["value"], "After");
+
+    let canceller = fixture
+        .client_for(
+            auth.authenticate(&idp.mint_token(token(
+                3,
+                json!([{
+                    "collection":format!("proposal:{proposal_id}"),
+                    "operations":["cancel"]
+                }]),
+            )))
+            .await
+            .unwrap(),
+        )
+        .await;
+    let (cancel_status, cancelled, _) = send(
+        &canceller,
+        Method::POST,
+        &format!("/v1/proposals/{proposal_id}/cancel?accessProfile=task-agent"),
+        json!({}),
+        Some("cancel-only-cancel"),
+        etag.as_deref(),
+    )
+    .await;
+    assert_eq!(cancel_status, StatusCode::OK, "{cancelled}");
+    assert_eq!(cancelled["state"], "cancelled", "{cancelled}");
+    for member in ["decision", "input"] {
+        assert!(cancelled.get(member).is_none(), "{member}: {cancelled}");
+    }
+    assert!(!cancelled.to_string().contains("Task reason canary"));
     fixture.finish().await;
 }

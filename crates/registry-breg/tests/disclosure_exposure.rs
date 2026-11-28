@@ -214,7 +214,8 @@ fn acting(bound_by: Option<&str>) -> Value {
         {"action": "propose-person-phone", "operations": ["start"], "targets": targets}]);
     registrar["permissions"]["proposals"] = json!([
         {"action": "propose-person-phone", "ownership": "caller",
-         "operations": ["get", "list", "edit", "submit", "cancel", "apply"], "targets": targets}]);
+         "operations": ["get", "list", "edit", "submit", "cancel", "apply"],
+         "readableInputs": ["person", "phone"], "targets": targets}]);
     value
 }
 

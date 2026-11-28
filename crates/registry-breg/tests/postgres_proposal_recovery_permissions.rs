@@ -109,7 +109,7 @@ fn registry_source() -> Value {
                 "proposals":[{
                     "action":"correct-name",
                     "operations":["get","list","edit","submit","revise","rebase","retry","cancel","apply"],
-                    "ownership":"caller",
+                    "ownership":"caller","readableInputs":["target","value"],
                     "targets":[{
                         "recordType":"target",
                         "rowBoundaries":[{"field":"jurisdiction","claim":"jurisdiction","operator":"equals"}]
@@ -127,6 +127,16 @@ fn compile(source: &Value) -> registry_breg::CompiledRegistry {
 }
 
 fn set_operations(profile: &mut Value, operations: Value) {
+    // Reading inputs needs Get, so a grant without it reads none.
+    if !operations
+        .as_array()
+        .is_some_and(|operations| operations.contains(&json!("get")))
+    {
+        profile["permissions"]["proposals"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("readableInputs");
+    }
     profile["permissions"]["proposals"][0]["operations"] = operations;
 }
 

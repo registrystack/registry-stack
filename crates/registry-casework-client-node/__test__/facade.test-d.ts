@@ -1,6 +1,7 @@
+import './ask-timing.test-d'
 import { CaseworkClient, CaseworkClientError, submissionDigest, type ContentDigest, type SubjectBinding,
   type PolicyBinding, type ReviewCreateRequest, type ReviewRequestAccepted,
-  type ReviewTask, type SupervisoryReviewTask, type StaffingDiagnostic, type ReviewTaskDecisionRequest, type ReviewStaffingQuery,
+  type ReviewTask, type SupervisoryReviewTask, type StaffingDiagnostic, type ReviewTaskDecisionRequest, type ReviewStaffingQuery, type ReviewTaskMarker,
   type ReviewCaseloadMoveRequest, type ReviewClockRecomputeRequest, type ReviewPolicyClosure,
   type ReviewStagePolicy, type RoutingRule } from '../client'
 const client = new CaseworkClient({ baseUrl: 'https://casework.example.test/', attemptTimeoutMilliseconds: 1500, maximumResponseBytes: 1500, maximumMutationRetries: 0 })
@@ -58,6 +59,7 @@ const decision: ReviewTaskDecisionRequest = { decision: { type: 'approve', outco
 const bareApproval: ReviewTaskDecisionRequest = { decision: { type: 'approve' } }
 void bareApproval
 void client.decideReviewTask(token, profile, id, 2, 'decision-1', decision)
+void client.askApplicant(token, profile, id, 2, 'ask-1', { text: 'Send the signed form.', wants: [{ kind: 'answer' }] }).then(({ value }) => { const marker: ReviewTaskMarker | undefined = value.task.marker; void marker })
 void client.reviewHistory(token, profile, id, { limit: 25 })
 void client.ownReviewDecisions(token, profile, { limit: 25 })
 void client.supervisoryReviewTasks(token, 'supervisor', { requestId: id, limit: 25 })
@@ -120,3 +122,6 @@ void client.previewReviewTaskTemplates(token, profile, { taskId: id, sourceCrede
 void client.reviewTasks(token, profile, undefined, undefined, { token: 'source' })
 // @ts-expect-error credentials are opaque strings, not decoded claim objects
 void client.reviewTasks(token, profile, undefined, undefined, { sourceProfile: 'source-reader', token: { sub: 'person' } })
+
+const liveAnswer: import("../client").ReviewContextAnswer = { text: "Why", documents: [], answeredAt: "2026-11-27T00:00:00Z" }
+void liveAnswer

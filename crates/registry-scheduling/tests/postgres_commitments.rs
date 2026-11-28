@@ -5463,6 +5463,82 @@ async fn a_failing_reminder_intent_waits_out_its_back_off() {
     );
 }
 
+#[tokio::test]
+async fn immediate_outbox_intents_are_claimable_when_the_application_clock_is_ahead() {
+    let fx = fixture().await;
+    let database_now: DateTime<Utc> = fx
+        .admin
+        .query_one("SELECT transaction_timestamp()", &[])
+        .await
+        .expect("read database clock")
+        .get(0);
+    assert!(
+        pinned_now() > database_now,
+        "fixture application clock must run ahead of the database clock"
+    );
+
+    let (appointment_id, revision) = booked(&fx, 360, 480, "outbox-clock-skew-book").await;
+    let confirmation = claim_due_intent_for_test(&fx.store)
+        .await
+        .expect("the delivery claim runs")
+        .expect(
+            "immediate confirmation uses the database clock despite an application clock ahead",
+        );
+    assert_eq!(confirmation.purpose(), "confirmation");
+    assert_eq!(confirmation.claim_id().to_string(), appointment_id);
+    finish_intent_for_test(&fx.store, &confirmation, true)
+        .await
+        .expect("confirmation delivered");
+
+    let new_slot = first_slot(&fx, OFFERING, 540, 660).await;
+    let (status, moved) = fx
+        .post(
+            &format!("/v1/appointments/{appointment_id}/reschedule"),
+            &fx.agent,
+            "outbox-clock-skew-move",
+            json!({
+                "observedRevision": revision,
+                "admission": admission(&fx, OFFERING, new_slot),
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{moved}");
+    let moved_revision = moved["revision"].as_u64().unwrap();
+    let change = claim_due_intent_for_test(&fx.store)
+        .await
+        .expect("the delivery claim runs")
+        .expect(
+            "immediate change notice uses the database clock despite an application clock ahead",
+        );
+    assert_eq!(change.purpose(), "change");
+    assert_eq!(change.claim_id().to_string(), appointment_id);
+    finish_intent_for_test(&fx.store, &change, true)
+        .await
+        .expect("change notice delivered");
+
+    let (status, cancelled) = fx
+        .post(
+            &format!("/v1/appointments/{appointment_id}/cancel"),
+            &fx.agent,
+            "outbox-clock-skew-cancel",
+            json!({
+                "observedRevision": moved_revision,
+                "reason": "clock-skew regression",
+            }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::OK, "{cancelled}");
+    let cancellation = claim_due_intent_for_test(&fx.store)
+        .await
+        .expect("the delivery claim runs")
+        .expect("immediate cancellation notice uses the database clock despite an application clock ahead");
+    assert_eq!(cancellation.purpose(), "cancellation");
+    assert_eq!(cancellation.claim_id().to_string(), appointment_id);
+    finish_intent_for_test(&fx.store, &cancellation, true)
+        .await
+        .expect("cancellation notice delivered");
+}
+
 /// Make every intent not yet attempted that falls due by `instant`, on the
 /// store's pinned clock, due now on the database clock the dispatch claim
 /// reads. Intents due later keep their own instant.
@@ -6932,7 +7008,16 @@ async fn the_intents_nobody_will_deliver_are_readable_by_an_operator() {
     let confirmation = intent_of(&fx, &appointment_id, "confirmation").await;
 
     // A deployment that declares no destination sets its reminder aside
-    // locally rather than pretending a delivery happened.
+    // locally rather than pretending a delivery happened. Hold the immediate
+    // confirmation back until the retry-exhaustion step below.
+    fx.admin
+        .execute(
+            "UPDATE scheduling_outbox SET next_attempt_at = transaction_timestamp() + interval '1 day' \
+             WHERE outbox_id = $1",
+            &[&confirmation],
+        )
+        .await
+        .expect("defer confirmation for the exhaustion step");
     make_intent_due(&fx, reminder).await;
     dispatch_due_intents(&fx.store, SCHEDULING_ID, None)
         .await
@@ -10060,6 +10145,14 @@ async fn a_records_swap_refuses_a_commitment_resolving_the_old_facts() {
 async fn a_claimed_intent_is_leased_and_its_outcome_is_fenced_by_the_lease() {
     let fx = fixture().await;
     let (appointment, _) = booked(&fx, 90, 200, "lease-1").await;
+    fx.admin
+        .execute(
+            "UPDATE scheduling_outbox SET next_attempt_at = transaction_timestamp() + interval '1 day' \
+             WHERE purpose <> 'reminder'",
+            &[],
+        )
+        .await
+        .expect("leave the immediate confirmation out of the way");
     let reminder = intent_of(&fx, &appointment, "reminder").await;
     make_intent_due(&fx, reminder).await;
     let first = claim_due_intent_for_test(&fx.store)
@@ -10123,6 +10216,14 @@ async fn a_claimed_intent_is_leased_and_its_outcome_is_fenced_by_the_lease() {
 async fn a_lapsed_final_attempt_is_set_aside_for_an_operator() {
     let fx = fixture().await;
     let (appointment, _) = booked(&fx, 90, 200, "lapsed-final").await;
+    fx.admin
+        .execute(
+            "UPDATE scheduling_outbox SET next_attempt_at = transaction_timestamp() + interval '1 day' \
+             WHERE purpose <> 'reminder'",
+            &[],
+        )
+        .await
+        .expect("leave the immediate confirmation out of the way");
     let reminder = intent_of(&fx, &appointment, "reminder").await;
     fx.admin
         .execute(
@@ -12768,16 +12869,21 @@ mod queue_depth {
             .await;
         assert_eq!(status, StatusCode::CREATED, "{appointment}");
         let claim = Uuid::parse_str(appointment["appointmentId"].as_str().unwrap()).unwrap();
-        let earliest: DateTime<Utc> = fx
+        let now: DateTime<Utc> = fx
             .admin
-            .query_one(
-                "SELECT min(due_at) FROM scheduling_outbox WHERE state='pending'",
-                &[],
-            )
+            .query_one("SELECT transaction_timestamp()", &[])
             .await
             .unwrap()
             .get(0);
-        let now = earliest + TimeDelta::seconds(120);
+        let earliest = now - TimeDelta::seconds(120);
+        fx.admin
+            .execute(
+                "UPDATE scheduling_outbox SET next_attempt_at=$2 \
+                 WHERE claim_id=$1 AND purpose='confirmation'",
+                &[&claim, &earliest],
+            )
+            .await
+            .unwrap();
         fx.admin
             .execute(
                 "INSERT INTO scheduling_outbox
@@ -12833,7 +12939,7 @@ mod queue_depth {
             .unwrap();
         let outbox = fx
             .store
-            .outbox_depth(now, deadline())
+            .outbox_depth(deadline())
             .await
             .expect("sample the outbox");
         let count = |state: &str| {
@@ -12845,7 +12951,11 @@ mod queue_depth {
         };
         assert_eq!(count("dead-lettered"), 1);
         assert!(count("pending") >= 1);
-        assert_eq!(outbox.oldest_pending_age_seconds, 120);
+        assert!(
+            (120..=125).contains(&outbox.oldest_pending_age_seconds),
+            "expected ~120s oldest pending age, got {}",
+            outbox.oldest_pending_age_seconds
+        );
 
         let hooks = fx
             .store
@@ -13027,5 +13137,109 @@ mod queue_depth {
             .await
             .unwrap();
         assert_eq!(other.status(), StatusCode::NOT_FOUND);
+    }
+
+    fn gauge_value(exposition: &str, metric: &str) -> i64 {
+        let prefix = format!("{metric} ");
+        exposition
+            .lines()
+            .find_map(|line| line.strip_prefix(&prefix))
+            .unwrap_or_else(|| panic!("missing gauge {metric} in:\n{exposition}"))
+            .parse::<i64>()
+            .unwrap_or_else(|error| panic!("invalid gauge {metric}: {error}"))
+    }
+
+    #[tokio::test]
+    async fn outbox_depth_uses_the_database_clock_regardless_of_application_clock_skew() {
+        let fx = hook_fixture().await;
+        let database_now: DateTime<Utc> = fx
+            .admin
+            .query_one("SELECT transaction_timestamp()", &[])
+            .await
+            .expect("read database clock")
+            .get(0);
+        assert!(
+            pinned_now() > database_now,
+            "fixture application clock must run ahead of the database clock"
+        );
+
+        let slot = first_slot(&fx, OFFERING, 90, 200).await;
+        let booking = json!({"hold": null, "admission": admission(&fx, OFFERING, slot)});
+        let (status, appointment) = fx
+            .post(
+                "/v1/appointments",
+                &fx.agent,
+                "queue-depth-clock-skew",
+                booking,
+            )
+            .await;
+        assert_eq!(status, StatusCode::CREATED, "{appointment}");
+        let claim = Uuid::parse_str(appointment["appointmentId"].as_str().unwrap()).unwrap();
+
+        let metrics = registry_scheduling::metrics::Metrics::default();
+
+        // Application clock deliberately behind database time: a pending intent
+        // already due on the database clock is still counted and aged on the
+        // database clock rather than hidden by the filter.
+        fx.admin
+            .execute(
+                "UPDATE scheduling_outbox \
+                 SET next_attempt_at = transaction_timestamp() - interval '90 seconds' \
+                 WHERE claim_id = $1 AND purpose = 'confirmation'",
+                &[&claim],
+            )
+            .await
+            .unwrap();
+        let behind = database_now - TimeDelta::hours(1);
+        fx.store.pin_clock(Arc::new(move || behind));
+        let behind_text =
+            registry_scheduling::metrics::scrape(&metrics, &fx.store, deadline()).await;
+        let behind_age = gauge_value(&behind_text, "scheduling_outbox_oldest_pending_age_seconds");
+        assert!(
+            (90..=105).contains(&behind_age),
+            "expected ~90s age on database clock when application clock is behind, got {behind_age}s:\n{behind_text}"
+        );
+
+        // Application clock ahead of database time: a freshly due immediate
+        // intent is not inflated by the skew.
+        fx.store.pin_clock(Arc::new(pinned_now));
+        fx.admin
+            .execute(
+                "UPDATE scheduling_outbox \
+                 SET next_attempt_at = transaction_timestamp() \
+                 WHERE claim_id = $1 AND purpose = 'confirmation'",
+                &[&claim],
+            )
+            .await
+            .unwrap();
+        let ahead_text =
+            registry_scheduling::metrics::scrape(&metrics, &fx.store, deadline()).await;
+        let ahead_age = gauge_value(&ahead_text, "scheduling_outbox_oldest_pending_age_seconds");
+        assert!(
+            (0..=10).contains(&ahead_age),
+            "expected ~0s age for immediate intent when application clock is ahead, got {ahead_age}s:\n{ahead_text}"
+        );
+
+        // An intent still waiting out retry back-off on the database clock is
+        // excluded even when the application clock has already passed it.
+        fx.admin
+            .execute(
+                "UPDATE scheduling_outbox \
+                 SET next_attempt_at = transaction_timestamp() + interval '1 hour' \
+                 WHERE claim_id = $1 AND purpose = 'confirmation'",
+                &[&claim],
+            )
+            .await
+            .unwrap();
+        let backoff_text =
+            registry_scheduling::metrics::scrape(&metrics, &fx.store, deadline()).await;
+        let backoff_age = gauge_value(
+            &backoff_text,
+            "scheduling_outbox_oldest_pending_age_seconds",
+        );
+        assert_eq!(
+            backoff_age, 0,
+            "expected future back-off intent to be excluded despite application clock ahead:\n{backoff_text}"
+        );
     }
 }

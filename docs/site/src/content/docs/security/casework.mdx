@@ -53,6 +53,17 @@ grants in [Registry Casework task grants](../../reference/casework-task-grants/)
   {/* Evidence: crates/registry-review-client/tests/http_boundary.rs,
       request_progress_rejects_each_substituted_binding_member;
       crates/registry-casework/tests/review_http.rs, producer_progress_omits_an_unmapped_active_stage. */}
+- Applicant answer disclosure: displayed task context reads validated source answers live and joins them only to known ask IDs.
+  Claim, ask and decide preflight, and inbox hydration, request no answers.
+  The BReg provider adds `include=answers` only for displayed context, under the reviewer's own bearer.
+  Delegated institutional reads receive neither asks nor answers nor task markers.
+  Casework stores no source answer text or file descriptors (`CASEWORK-SEC-46`, `CASEWORK-SEC-48`).
+  {/* Evidence: crates/registry-casework/tests/support/source_ask_answers.rs,
+      source_answers_join_known_asks_live_without_entering_the_display_schema_or_store;
+      crates/registry-casework/tests/review_http.rs,
+      delegated_institutional_reads_carry_neither_asks_nor_markers;
+      crates/registry-casework-breg/tests/context_provider.rs,
+      preflight_omits_answers_and_only_display_opts_in_under_the_same_human_bearer. */}
 - Private reason versus public reason: every decision names an outcome declared by the pinned
   policy and offered at the current stage.
   The reviewer's private reason stays in the accountability record.
@@ -234,6 +245,13 @@ The residuals refer to these obligations by number.
        crates/registry-casework/tests/review_postgres.rs, at_least_once_completion_durably_deduplicates_after_lost_ack_and_exhausts_bounded_retries;
        crates/registry-casework/src/http.rs, review_result_feed. */}
 7. Treat reviewer-written public reasons as released text (`CASEWORK-RES-06`).
+   An ask of the applicant is released text too: its text goes to the producer, which shows it to
+   the applicant. The history row and audit record of an ask name only its identifier, and the
+   producer's answer call carries a subject binding and a time and no applicant text.
+   {/* Evidence: crates/registry-casework/tests/review_postgres.rs,
+       the_holder_asks_the_applicant_and_the_producer_reads_the_ask;
+       the_producer_answer_marks_the_task_answered_and_obeys_its_rules. */}
+
    {/* Evidence: crates/registry-review-protocol/src/lib.rs, check_public_reason. */}
 8. Use an HTTPS issuer and list the admitted OAuth clients. Production refuses `allowInsecureHttp: true` and `allowedClients: unrestricted` in any issuer entry.
    Declare only issuer and JWKS addresses you intend Casework to reach (`CASEWORK-RES-08`).

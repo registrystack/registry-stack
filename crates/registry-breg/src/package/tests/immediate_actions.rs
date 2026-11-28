@@ -919,12 +919,53 @@ fn proposal_writable_inputs_accept_start_only_or_fully_writable_grants() {
     assert!(proposal_permission(&compile(&start_only))
         .writable_inputs
         .is_some());
-    let mut edit_without_get = proposal_source(&["edit", "submit"], &[]);
-    edit_without_get["accessProfiles"]["operator"]["permissions"]["proposals"][0]
-        ["writableInputs"] = json!(["item", "label"]);
-    assert!(proposal_permission(&compile(&edit_without_get))
+    let mut edit_with_get = proposal_source(&["get", "edit", "submit"], &["item", "label"]);
+    edit_with_get["accessProfiles"]["operator"]["permissions"]["proposals"][0]["writableInputs"] =
+        json!(["item", "label"]);
+    assert!(proposal_permission(&compile(&edit_with_get))
         .writable_inputs
         .is_some());
+}
+
+#[test]
+fn proposal_write_grants_must_read_every_input_they_may_write() {
+    for operation in ["edit", "revise", "rebase"] {
+        // writableInputs absent: every declared input may be written, so every one must be readable.
+        let value = proposal_source(&["get", operation], &["label"]);
+        let diagnostics = compile_diagnostics(&value);
+        assert!(
+            diagnostics.contains("breg.proposal.input-write-unreadable")
+                && diagnostics.contains("operator")
+                && diagnostics.contains("rename-item")
+                && diagnostics.contains("item")
+                && diagnostics.contains(
+                    "accessProfiles[id=operator].permissions.proposals[action=rename-item].readableInputs"
+                ),
+            "{operation}: {diagnostics}"
+        );
+        // The fixed-input rule keeps every input outside writableInputs readable, so
+        // narrowing writableInputs never resolves this refusal.
+        assert!(
+            !diagnostics.contains("narrow writableInputs"),
+            "{operation}: {diagnostics}"
+        );
+        // writableInputs present: only the writable inputs must be readable.
+        let mut narrowed = proposal_source(&["get", operation], &["label"]);
+        narrowed["accessProfiles"]["operator"]["permissions"]["proposals"][0]["writableInputs"] =
+            json!(["item", "label"]);
+        let diagnostics = compile_diagnostics(&narrowed);
+        assert!(
+            diagnostics.contains("breg.proposal.input-write-unreadable"),
+            "{operation}: {diagnostics}"
+        );
+        let accepted = proposal_source(&["get", operation], &["item", "label"]);
+        compile(&accepted);
+    }
+}
+
+#[test]
+fn proposal_grants_without_write_authority_need_no_readable_inputs() {
+    compile(&proposal_source(&["get", "submit"], &[]));
 }
 
 fn evidence_contract_asset() -> ModuleAssetSource {
@@ -1212,7 +1253,7 @@ fn reviewed_successor_installs_added_proposal_operation_policies() {
     let before = compile(&proposal_source(&["get", "cancel"], &[]));
     let after = compile(&proposal_source(
         &["get", "cancel", "edit", "submit", "apply"],
-        &[],
+        &["item", "label"],
     ));
     let plan = reviewed_plan(&before, &after);
     let before_sql = before

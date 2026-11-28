@@ -51,6 +51,24 @@ pub fn compile_schema_from_parts(
     let mut bindings = Map::new();
     for (name, projection) in &context.fields {
         let (schema, classification, binding) = match projection {
+            ProposalContextValueSource::Additions { slot } => {
+                let declared = proposal
+                    .additions
+                    .as_ref()
+                    .filter(|declared| &declared.id == slot)
+                    .ok_or_else(&invalid)?;
+                let mut item = document_schema(slot, true);
+                item["properties"]["download"]["properties"]["path"]["pattern"] = json!(
+                    r"^/v1/proposals/[0-9a-f-]{36}/additions/[0-9a-f-]{36}\?submissionVersion=[1-9][0-9]{0,9}&reviewContextField=[a-z][a-zA-Z0-9]{0,63}&effectDigest=sha256%3A[0-9a-f]{64}&contextSchemaDigest=sha256%3A[0-9a-f]{64}$"
+                );
+                (
+                    json!({"type":"array","maxItems":declared.maximum_count,"items":item}),
+                    declared.classification,
+                    json!({"kind":"live-additions","slot":slot,"classification":declared.classification,
+                        "contentTypes":declared.content_types,"maximumBytes":declared.maximum_bytes,
+                        "maximumCount":declared.maximum_count,"transport":"breg-review-context-document/v1"}),
+                )
+            }
             ProposalContextValueSource::Document { slot } => {
                 let declared = proposal.attachments.get(slot).ok_or_else(&invalid)?;
                 (

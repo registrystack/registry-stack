@@ -18,6 +18,23 @@ fn compile(source: &Value, assets: &[ModuleAssetSource]) -> registry_breg::Compi
 }
 
 #[test]
+fn additions_hooks_select_added_by_default_and_by_explicit_transition() {
+    use registry_breg::contract::ProposalEventTransition;
+    use std::collections::BTreeSet;
+    assert!(
+        registry_breg::proposal_hooks::matching_transitions(&BTreeSet::new())
+            .any(|transition| transition == ProposalEventTransition::Added)
+    );
+    assert_eq!(
+        registry_breg::proposal_hooks::matching_transitions(&BTreeSet::from([
+            ProposalEventTransition::Added
+        ]))
+        .collect::<Vec<_>>(),
+        vec![ProposalEventTransition::Added]
+    );
+}
+
+#[test]
 fn proposal_observers_compile_native_owners_fixed_schema_and_reviewed_handlers() {
     let script = b"fn handle(ctx) { #{answer: \"none\"} }";
     let registry = compile(
@@ -192,5 +209,25 @@ fn proposal_local_handlers_use_existing_abi_asset_and_build_admission() {
             compile_project_with_assets(&project, &[], &[], CompileProfile::Authoring).unwrap_err();
         assert!(format!("{error:?}").contains("breg.hook.handler-wasm-build-unsupported"));
         assert!(!format!("{error:?}").contains("asset-missing"));
+    }
+}
+
+#[test]
+fn ask_hooks_select_asked_and_answered_by_default_and_explicit_filter() {
+    use registry_breg::contract::ProposalEventTransition;
+    use std::collections::BTreeSet;
+    for transition in [
+        ProposalEventTransition::Asked,
+        ProposalEventTransition::Answered,
+    ] {
+        assert!(
+            registry_breg::proposal_hooks::matching_transitions(&BTreeSet::new())
+                .any(|item| item == transition)
+        );
+        assert_eq!(
+            registry_breg::proposal_hooks::matching_transitions(&BTreeSet::from([transition]))
+                .collect::<Vec<_>>(),
+            vec![transition]
+        );
     }
 }

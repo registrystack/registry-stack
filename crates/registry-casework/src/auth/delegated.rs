@@ -76,7 +76,14 @@ impl crate::CaseworkService {
                 Some(&reader.credential_context),
                 Some(&reader.policy_id),
             )
-            .await;
+            .await
+            .map(|mut page| {
+                // A delegated institutional read carries no ask state.
+                for task in &mut page.items {
+                    task.marker = None;
+                }
+                page
+            });
         let terminal = delegated_audit_outcome(&outcome);
         audit.conclude_without_change(terminal).await?;
         outcome

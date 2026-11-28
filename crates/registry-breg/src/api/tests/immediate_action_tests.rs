@@ -290,6 +290,7 @@ async fn proposal_task_scopes_and_standing_agent_draft_and_context_permissions_a
         "requiredScopes":["case.rename"],"requiredPurposes":["case-management"],"taskGrant":{"sourceIssuer":"https://casework.example"},
         "permissions":{"actions":[{"action":"propose-rename","operations":["start"],"targets":[{"recordType":"case","rowBoundaries":[{"field":"region","claim":"grantRegion","operator":"equals"}]}]}],
             "proposals":[{"action":"propose-rename","operations":["get","list","edit","submit","revise","cancel","apply","rebase","retry","get-review-status"],"ownership":"caller",
+                "readableInputs":["case-ref","case-label"],
                 "targets":[{"recordType":"case","rowBoundaries":[{"field":"region","claim":"grantRegion","operator":"equals"}]}]}]}});
     project
         .access_profiles
@@ -297,6 +298,10 @@ async fn proposal_task_scopes_and_standing_agent_draft_and_context_permissions_a
     task_profile["id"] = json!("standing-proposer");
     task_profile.as_object_mut().unwrap().remove("taskGrant");
     task_profile["permissions"]["proposals"][0]["operations"] = json!(["edit"]);
+    task_profile["permissions"]["proposals"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("readableInputs");
     project
         .access_profiles
         .push(serde_json::from_value(task_profile).unwrap());

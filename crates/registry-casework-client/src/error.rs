@@ -60,6 +60,13 @@ pub enum CaseworkProblemCode {
     RequestNotFound,
     RequestUnprocessable,
     RequestUnsupportedMediaType,
+    ReviewAskAlreadyOpen,
+    ReviewAskAnswerTimeInvalid,
+    ReviewAskLimitReached,
+    ReviewAskNotOffered,
+    ReviewAskNotOpen,
+    ReviewAskProducerUnsupported,
+    ReviewAskTaskInactive,
     ReviewDistinctApproverRequired,
     ReviewInitiatorExcluded,
     ReviewInitiatorRequired,
@@ -84,7 +91,7 @@ impl CaseworkProblemCode {
     ///
     /// `Unknown` is absent: it carries whatever a newer Casework service
     /// answered, so it names no registered code.
-    pub const ALL: [Self; 37] = [
+    pub const ALL: [Self; 44] = [
         Self::AbsenceCoverCycle,
         Self::AbsenceInvalidPeriod,
         Self::AbsenceOverlap,
@@ -107,6 +114,13 @@ impl CaseworkProblemCode {
         Self::RequestNotFound,
         Self::RequestUnprocessable,
         Self::RequestUnsupportedMediaType,
+        Self::ReviewAskAlreadyOpen,
+        Self::ReviewAskAnswerTimeInvalid,
+        Self::ReviewAskLimitReached,
+        Self::ReviewAskNotOffered,
+        Self::ReviewAskNotOpen,
+        Self::ReviewAskProducerUnsupported,
+        Self::ReviewAskTaskInactive,
         Self::ReviewDistinctApproverRequired,
         Self::ReviewInitiatorExcluded,
         Self::ReviewInitiatorRequired,
@@ -152,6 +166,13 @@ impl CaseworkProblemCode {
             Self::ReviewQueryTooBroad => REVIEW_QUERY_TOO_BROAD_PROBLEM,
             Self::ReviewPolicyMismatch => REVIEW_POLICY_MISMATCH_PROBLEM,
             Self::ReviewResultExpired => REVIEW_RESULT_EXPIRED_PROBLEM,
+            Self::ReviewAskAlreadyOpen => "review.ask-already-open",
+            Self::ReviewAskLimitReached => "review.ask-limit-reached",
+            Self::ReviewAskAnswerTimeInvalid => "review.ask-answer-time-invalid",
+            Self::ReviewAskNotOffered => "review.ask-not-offered",
+            Self::ReviewAskNotOpen => "review.ask-not-open",
+            Self::ReviewAskProducerUnsupported => "review.ask-producer-unsupported",
+            Self::ReviewAskTaskInactive => "review.ask-task-inactive",
             Self::ReviewDistinctApproverRequired => "review.distinct-approver-required",
             Self::ReviewInitiatorExcluded => REVIEW_INITIATOR_EXCLUDED_PROBLEM,
             Self::ReviewInitiatorRequired => REVIEW_INITIATOR_REQUIRED_PROBLEM,
@@ -195,6 +216,13 @@ impl CaseworkProblemCode {
             REVIEW_QUERY_TOO_BROAD_PROBLEM => Self::ReviewQueryTooBroad,
             REVIEW_POLICY_MISMATCH_PROBLEM => Self::ReviewPolicyMismatch,
             REVIEW_RESULT_EXPIRED_PROBLEM => Self::ReviewResultExpired,
+            "review.ask-already-open" => Self::ReviewAskAlreadyOpen,
+            "review.ask-limit-reached" => Self::ReviewAskLimitReached,
+            "review.ask-answer-time-invalid" => Self::ReviewAskAnswerTimeInvalid,
+            "review.ask-not-offered" => Self::ReviewAskNotOffered,
+            "review.ask-not-open" => Self::ReviewAskNotOpen,
+            "review.ask-producer-unsupported" => Self::ReviewAskProducerUnsupported,
+            "review.ask-task-inactive" => Self::ReviewAskTaskInactive,
             "review.distinct-approver-required" => Self::ReviewDistinctApproverRequired,
             REVIEW_INITIATOR_EXCLUDED_PROBLEM => Self::ReviewInitiatorExcluded,
             REVIEW_INITIATOR_REQUIRED_PROBLEM => Self::ReviewInitiatorRequired,
@@ -238,13 +266,21 @@ impl CaseworkProblemCode {
             Self::RequestNotFound => 404,
             Self::RequestMethodNotAllowed => 405,
             Self::IdempotencyKeyReused
+            | Self::ReviewAskAlreadyOpen
+            | Self::ReviewAskLimitReached
+            | Self::ReviewAskNotOffered
+            | Self::ReviewAskNotOpen
+            | Self::ReviewAskProducerUnsupported
+            | Self::ReviewAskTaskInactive
             | Self::ReviewPolicyMismatch
             | Self::ReviewSubmissionConflict
             | Self::ReviewTaskNotHeld => 409,
             Self::PreconditionFailed => 412,
             Self::RequestBodyTooLarge => 413,
             Self::RequestUnsupportedMediaType => 415,
-            Self::RequestUnprocessable | Self::ReviewInitiatorRequired => 422,
+            Self::RequestUnprocessable
+            | Self::ReviewAskAnswerTimeInvalid
+            | Self::ReviewInitiatorRequired => 422,
             Self::ReviewQueryTooBroad => 422,
             Self::PreconditionRequired => 428,
             Self::SourceVersionMismatch => 502,
@@ -336,6 +372,34 @@ impl CaseworkProblemCode {
             Self::RequestUnsupportedMediaType => (
                 "Unsupported media type",
                 "Send a JSON request body with Content-Type application/json.",
+            ),
+            Self::ReviewAskLimitReached => (
+                "Review ask limit reached",
+                "This review request has reached its limit of 50 asks. Continue the review without opening another ask.",
+            ),
+            Self::ReviewAskAlreadyOpen => (
+                "Review ask already open",
+                "Wait for the open ask on this request to be answered or closed before asking again.",
+            ),
+            Self::ReviewAskAnswerTimeInvalid => (
+                "Review ask answer time invalid",
+                "Report the time the applicant's answer was committed: not before the ask was made and no more than five minutes ahead of Casework's clock.",
+            ),
+            Self::ReviewAskNotOffered => (
+                "Review ask not offered",
+                "The active stage of this review policy does not let a reviewer ask the applicant.",
+            ),
+            Self::ReviewAskNotOpen => (
+                "Review ask not open",
+                "This ask was already answered or closed, or the applicant answered after its due date.",
+            ),
+            Self::ReviewAskProducerUnsupported => (
+                "Review ask producer unsupported",
+                "The producer of this request does not read asks, so the reviewer cannot ask the applicant.",
+            ),
+            Self::ReviewAskTaskInactive => (
+                "Review ask task inactive",
+                "Ask from a task at the active stage of a request that is still under review.",
             ),
             Self::ReviewDistinctApproverRequired => ("Distinct approver required", "Each approval in this stage must be supplied by a different reviewer."),
             Self::ReviewInitiatorExcluded => (
@@ -821,6 +885,23 @@ mod tests {
     }
 
     #[test]
+    fn the_ask_limit_problem_is_registered_under_conflict() {
+        let code = CaseworkProblemCode::ALL
+            .iter()
+            .find(|code| code.code() == "review.ask-limit-reached");
+        assert!(
+            code.is_some(),
+            "the canonical client must recognise the ask-limit refusal"
+        );
+        assert_eq!(code.unwrap().expected_status(), Some(409));
+        assert_eq!(
+            CaseworkProblemCode::parse("review.ask-limit-reached"),
+            *code.unwrap()
+        );
+        assert_eq!(code.unwrap().expected_text(),Some(("Review ask limit reached","This review request has reached its limit of 50 asks. Continue the review without opening another ask.")));
+    }
+
+    #[test]
     fn review_lifecycle_problems_have_exact_recovery_contracts() {
         for (value, expected, status, title, detail) in [
             (
@@ -850,6 +931,48 @@ mod tests {
                 409,
                 "Review submission conflict",
                 "The same producer, source subject, version, and policy were already submitted with different canonical content.",
+            ),
+            (
+                "review.ask-already-open",
+                CaseworkProblemCode::ReviewAskAlreadyOpen,
+                409,
+                "Review ask already open",
+                "Wait for the open ask on this request to be answered or closed before asking again.",
+            ),
+            (
+                "review.ask-answer-time-invalid",
+                CaseworkProblemCode::ReviewAskAnswerTimeInvalid,
+                422,
+                "Review ask answer time invalid",
+                "Report the time the applicant's answer was committed: not before the ask was made and no more than five minutes ahead of Casework's clock.",
+            ),
+            (
+                "review.ask-not-offered",
+                CaseworkProblemCode::ReviewAskNotOffered,
+                409,
+                "Review ask not offered",
+                "The active stage of this review policy does not let a reviewer ask the applicant.",
+            ),
+            (
+                "review.ask-not-open",
+                CaseworkProblemCode::ReviewAskNotOpen,
+                409,
+                "Review ask not open",
+                "This ask was already answered or closed, or the applicant answered after its due date.",
+            ),
+            (
+                "review.ask-producer-unsupported",
+                CaseworkProblemCode::ReviewAskProducerUnsupported,
+                409,
+                "Review ask producer unsupported",
+                "The producer of this request does not read asks, so the reviewer cannot ask the applicant.",
+            ),
+            (
+                "review.ask-task-inactive",
+                CaseworkProblemCode::ReviewAskTaskInactive,
+                409,
+                "Review ask task inactive",
+                "Ask from a task at the active stage of a request that is still under review.",
             ),
             (
                 "review.task-not-held",

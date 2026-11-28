@@ -1,5 +1,8 @@
 #![cfg(feature = "postgres-test")]
 
+#[path = "support/ask_limit_http.rs"]
+mod ask_limit_http;
+
 use registry_platform_config::{DeclaredPosture, Posture, PostureReport, PostureSource};
 use std::{
     collections::BTreeMap,
@@ -42,6 +45,7 @@ use uuid::Uuid;
 
 #[derive(Default)]
 struct DelegatedSourceBarrier {
+    answers: Mutex<BTreeMap<Uuid, ReviewContextAnswer>>,
     entered: tokio::sync::Notify,
     release: tokio::sync::Notify,
 }
@@ -123,6 +127,11 @@ impl ReviewContextProvider for ReviewSource {
             identity.subject.version = "2".into();
         }
         Ok(HumanDisplayObservation {
+            answers: self
+                .delegated_barrier
+                .as_ref()
+                .map(|barrier| barrier.answers.lock().unwrap().clone())
+                .unwrap_or_default(),
             identity,
             reviewable: matches!(
                 *self.source_state.lock().unwrap(),
@@ -143,6 +152,7 @@ impl ReviewContextProvider for ReviewSource {
         barrier.entered.notify_one();
         barrier.release.notified().await;
         self.human_display(HumanDisplayRequest {
+            include_answers: true,
             identity: request.identity,
             source_profile_id: request.source_profile_id,
             credential: request.credential,
@@ -169,6 +179,7 @@ impl ReviewContextProvider for ReviewSource {
         for identity in identities {
             observations.push(
                 self.human_display(HumanDisplayRequest {
+                    include_answers: true,
                     identity,
                     source_profile_id,
                     credential: EphemeralCredential::new(credential),
@@ -242,6 +253,7 @@ fn project(issuer: &str) -> CaseworkProject {
         teams: vec![serde_json::from_value(json!({"id":"review-team","label":"Review team","serves":["review"],"memberProfiles":["staff"],"supervisorProfiles":["supervisor"]})).unwrap()],
         review_policies: vec![
             ReviewPolicy {
+                resubmission: ReviewResubmissionPolicy::default(),
                 id: "registry-correction".to_owned(),
                 label: None,
                 version: "1".to_owned(),
@@ -259,6 +271,7 @@ fn project(issuer: &str) -> CaseworkProject {
                     required_approvals: 1,
                     outcomes: None,
                     negative_decisions: ReviewNegativeDecisionMode::Settle,
+                    asks: None,
                     exclude_initiator: true,
                     exclude_previous_stage_reviewers: true,
                 }],
@@ -284,6 +297,7 @@ fn project(issuer: &str) -> CaseworkProject {
                     }],
             },
             ReviewPolicy {
+                resubmission: ReviewResubmissionPolicy::default(),
                 id: "registry-answer".to_owned(),
                 label: None,
                 version: "1".to_owned(),
@@ -299,6 +313,7 @@ fn project(issuer: &str) -> CaseworkProject {
                     required_approvals: 1,
                     outcomes: None,
                     negative_decisions: ReviewNegativeDecisionMode::Settle,
+                    asks: None,
                     exclude_initiator: true,
                     exclude_previous_stage_reviewers: true,
                 }],
@@ -336,6 +351,7 @@ fn project(issuer: &str) -> CaseworkProject {
                 subject: "registry-service".to_owned(),
                 trusted_initiator_issuer: Some(issuer.to_owned()),
                 initiator_profile: Some("initiator".to_owned()),
+                reads_asks: false,
                 source_namespaces: vec!["registry".to_owned()],
                 review_policies: vec![
                     "registry-correction".to_owned(),
@@ -353,6 +369,7 @@ fn project(issuer: &str) -> CaseworkProject {
                 subject: "registry-service".to_owned(),
                 trusted_initiator_issuer: Some(issuer.to_owned()),
                 initiator_profile: None,
+                reads_asks: false,
                 source_namespaces: vec!["registry".to_owned()],
                 review_policies: vec![
                     "registry-correction".to_owned(),
@@ -5897,6 +5914,7 @@ impl ReviewContextProvider for SeparateHumanSource {
             return Err(ReviewContextError::Concealed);
         }
         Ok(HumanDisplayObservation {
+            answers: Default::default(),
             identity: request.identity.clone(),
             reviewable: true,
             display_reference: None,
@@ -7001,4 +7019,445 @@ async fn a_subject_from_one_issuer_does_not_reach_records_of_the_same_subject_fr
     assert_eq!(problem["code"], "precondition.failed", "{problem}");
     idp.stop().await;
     other.stop().await;
+}
+
+fn asks_http_project(idp: &MockIdp) -> CaseworkProject {
+    let mut asking = project(&idp.issuer());
+    asking.review_policies[0].context = ReviewContextPolicy::Submitted;
+    asking.review_policies[0].stages[0].asks = Some(ReviewStageAsksPolicy::default());
+    asking.trusted_producers[0].reads_asks = true;
+    asking.trusted_producers[1].reads_asks = true;
+    asking.check().expect("asking project");
+    asking
+}
+
+async fn http_json(
+    app: &axum::Router,
+    method: &str,
+    uri: String,
+    headers: &[(&str, String)],
+    body: Option<Value>,
+) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
+    let mut request = Request::builder().method(method).uri(uri);
+    for (name, value) in headers {
+        request = request.header(*name, value);
+    }
+    let request = match body {
+        Some(body) => request
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(serde_json::to_vec(&body).unwrap())),
+        None => request.body(Body::empty()),
+    }
+    .expect("request");
+    let response = app.clone().oneshot(request).await.expect("response");
+    let status = response.status();
+    let response_headers = response.headers().clone();
+    let bytes = to_bytes(response.into_body(), 64 * 1024)
+        .await
+        .expect("bounded body")
+        .to_vec();
+    (status, response_headers, bytes)
+}
+
+#[tokio::test]
+async fn c2_due_pause_expiry_and_delivery_lag_follow_the_http_contract() {
+    let idp = MockIdp::start().await;
+    let mut project = asks_http_project(&idp);
+    project.review_policies[0].stages[0].asks = Some(ReviewStageAsksPolicy {
+        answer_within: Some(ElapsedDuration::Hours(1)),
+        pause_clocks: true,
+        ..Default::default()
+    });
+    project.clocks.push(ClockPolicy::Subject {
+        id: "subject-budget".into(),
+        anchor: SubjectClockAnchor {
+            kind: SubjectClockAnchorType::RequestAccepted,
+        },
+        after: ElapsedDuration::Days(5),
+    });
+    project.review_policies[0]
+        .clocks
+        .push("subject-budget".into());
+    let (app, service, _, _, _, _, database) = app_with_project(&idp, project).await;
+    let mut input = review_request_for_subject("ask-due-http", "ask-due-http-ref", &idp.issuer());
+    input.context = ReviewContext::Submitted {
+        snapshot: json!({"summary": "Timed ask"}),
+    };
+    let (created, task) = create_task(&app, &database, &idp, &input).await;
+    let reviewer = reviewer_token(&idp);
+    claim_task_over_http(&app, task, &reviewer, "claim").await;
+    let staff = vec![
+        ("authorization", format!("Bearer {reviewer}")),
+        (CASEWORK_PROFILE_HEADER, "staff".into()),
+    ];
+    let mut mutation = staff.clone();
+    mutation.extend([
+        ("if-match", "\"2\"".into()),
+        ("idempotency-key", "ask".into()),
+    ]);
+    let (status, _, body) = http_json(
+        &app,
+        "POST",
+        format!("/v1/review-tasks/{task}/asks"),
+        &mutation,
+        Some(json!({"text":"Why?","wants":[{"kind":"answer"}]})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let asked: ReviewTaskAsked = serde_json::from_slice(&body).unwrap();
+    assert_eq!(
+        asked.ask.due_at,
+        Some(asked.ask.asked_at + chrono::TimeDelta::hours(1))
+    );
+    let clock_uri = format!("/v1/review-requests/{}/clocks", created.request_id);
+    let (status, _, body) = http_json(&app, "GET", clock_uri.clone(), &staff, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()[0]["state"],
+        "paused"
+    );
+    let due = chrono::Utc::now() - chrono::TimeDelta::minutes(1);
+    let due = chrono::DateTime::parse_from_rfc3339(
+        &due.to_rfc3339_opts(chrono::SecondsFormat::Micros, true),
+    )
+    .unwrap()
+    .with_timezone(&chrono::Utc);
+    database
+        .execute(
+            "UPDATE casework_review_asks SET asked_at=$2,due_at=$3 WHERE ask_id=$1",
+            &[
+                &asked.ask.ask_id,
+                &(due - chrono::TimeDelta::hours(1)),
+                &due,
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!(service.process_due_review_clocks(100).await.unwrap(), 1);
+    let (status, _, body) = http_json(
+        &app,
+        "GET",
+        "/v1/review-tasks?marker=expired".into(),
+        &staff,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let page: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(page["items"].as_array().unwrap().len(), 1);
+    assert_eq!(page["items"][0]["marker"], "expired");
+    let producer = vec![
+        ("authorization", format!("Bearer {}", token(&idp))),
+        (REVIEW_PROFILE_HEADER, "producer".into()),
+        ("idempotency-key", "answer-late".into()),
+    ];
+    let answer_uri = format!(
+        "/v1/review-requests/{}/asks/{}/answer",
+        created.request_id, asked.ask.ask_id
+    );
+    let (status, _, body) = http_json(
+        &app,
+        "POST",
+        answer_uri.clone(),
+        &producer,
+        Some(json!({"subject":input.subject,"answeredAt":due+chrono::TimeDelta::microseconds(1)})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["code"],
+        "review.ask-not-open"
+    );
+    let mut producer = producer;
+    producer[2].1 = "answer-on-time".into();
+    let (status, _, body) = http_json(
+        &app,
+        "POST",
+        answer_uri,
+        &producer,
+        Some(json!({"subject":input.subject,"answeredAt":due})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["state"],
+        "answered"
+    );
+    let (_, _, body) = http_json(&app, "GET", clock_uri, &staff, None).await;
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()[0]["state"],
+        "running"
+    );
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn the_ask_command_and_the_producer_ask_routes_follow_the_contract_over_http() {
+    let idp = MockIdp::start().await;
+    let (app, _, _, _, _, _, database) = app_with_project(&idp, asks_http_project(&idp)).await;
+    let mut created_request = review_request_for_subject("ask-http", "ask-http-ref", &idp.issuer());
+    created_request.context = ReviewContext::Submitted {
+        snapshot: json!({"summary": "Ask over HTTP"}),
+    };
+    let (created, task) = create_task(&app, &database, &idp, &created_request).await;
+    let request_id = created.request_id;
+    let reviewer = reviewer_token(&idp);
+    claim_task_over_http(&app, task, &reviewer, "claim-ask-http").await;
+    let staff_headers = |key: &str, revision: &str| {
+        vec![
+            ("authorization", format!("Bearer {reviewer}")),
+            (CASEWORK_PROFILE_HEADER, "staff".to_owned()),
+            ("if-match", format!("\"{revision}\"")),
+            ("idempotency-key", key.to_owned()),
+        ]
+    };
+    let ask_body = json!({"text": "Send the signed form.", "wants": [{"kind": "answer"}]});
+    let uri = format!("/v1/review-tasks/{task}/asks");
+
+    // A stale revision is refused before anything changes.
+    let (status, _, _) = http_json(
+        &app,
+        "POST",
+        uri.clone(),
+        &staff_headers("ask-stale", "1"),
+        Some(ask_body.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PRECONDITION_FAILED);
+
+    let (status, _, body) = http_json(
+        &app,
+        "POST",
+        uri.clone(),
+        &staff_headers("ask-1", "2"),
+        Some(ask_body.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let asked: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(asked["task"]["marker"], "waiting");
+    assert_eq!(asked["task"]["revision"], 3);
+    assert_eq!(asked["ask"]["state"], "open");
+    let ask_id = asked["ask"]["askId"].as_str().unwrap().to_owned();
+
+    // A second open ask is its own problem.
+    let (status, _, body) = http_json(
+        &app,
+        "POST",
+        uri.clone(),
+        &staff_headers("ask-2", "3"),
+        Some(ask_body.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["code"],
+        "review.ask-already-open"
+    );
+
+    let producer = vec![
+        ("authorization", format!("Bearer {}", token(&idp))),
+        (REVIEW_PROFILE_HEADER, "producer".to_owned()),
+    ];
+    let other = vec![
+        (
+            "authorization",
+            format!("Bearer {}", alternate_producer_token(&idp)),
+        ),
+        (REVIEW_PROFILE_HEADER, "producer-alternate".to_owned()),
+    ];
+    let (status, _, body) = http_json(
+        &app,
+        "GET",
+        "/v1/review-asks?limit=10".to_owned(),
+        &producer,
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let feed: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(feed["items"].as_array().unwrap().len(), 1);
+    assert_eq!(feed["items"][0]["askId"], ask_id.as_str());
+    let (_, _, body) = http_json(&app, "GET", "/v1/review-asks".to_owned(), &other, None).await;
+    assert!(serde_json::from_slice::<Value>(&body).unwrap()["items"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+
+    let ask_uri = format!("/v1/review-requests/{request_id}/asks/{ask_id}");
+    let (status, _, body) = http_json(&app, "GET", ask_uri.clone(), &producer, None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["text"],
+        "Send the signed form."
+    );
+    // Another producer's read is a bare empty 404 with no content type.
+    let (status, headers, body) = http_json(&app, "GET", ask_uri.clone(), &other, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(body.is_empty());
+    assert!(headers.get(CONTENT_TYPE).is_none());
+
+    let subject = serde_json::to_value(&created_request.subject).unwrap();
+    let answered_at = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Micros, true);
+    let answer_uri = format!("{ask_uri}/answer");
+    let answer_headers = |key: &str, mut base: Vec<(&'static str, String)>| {
+        base.push(("idempotency-key", key.to_owned()));
+        base
+    };
+    let answer = json!({"subject": subject, "answeredAt": answered_at});
+
+    // The answer carries no text: an extra member is refused.
+    let mut with_text = answer.clone();
+    with_text["text"] = json!("my answer");
+    let (status, _, _) = http_json(
+        &app,
+        "POST",
+        answer_uri.clone(),
+        &answer_headers("answer-text", producer.clone()),
+        Some(with_text),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    // Another producer: concealed.
+    let (status, headers, body) = http_json(
+        &app,
+        "POST",
+        answer_uri.clone(),
+        &answer_headers("answer-other", other.clone()),
+        Some(answer.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(body.is_empty() && headers.get(CONTENT_TYPE).is_none());
+
+    let (status, _, body) = http_json(
+        &app,
+        "POST",
+        answer_uri.clone(),
+        &answer_headers("answer-1", producer.clone()),
+        Some(answer.clone()),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
+    let answered: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(answered["state"], "answered");
+    // Compare instants: the wire form may spell the same time differently.
+    assert_eq!(
+        chrono::DateTime::parse_from_rfc3339(answered["answeredAt"].as_str().unwrap()).unwrap(),
+        chrono::DateTime::parse_from_rfc3339(&answered_at).unwrap(),
+    );
+    // A second answer under another key is the not-open problem.
+    let (status, _, body) = http_json(
+        &app,
+        "POST",
+        answer_uri,
+        &answer_headers("answer-2", producer),
+        Some(answer),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        serde_json::from_slice::<Value>(&body).unwrap()["code"],
+        "review.ask-not-open"
+    );
+
+    // The reviewer's task read carries the answered marker.
+    let task_json = read_task_json(&app, task, &reviewer).await;
+    assert_eq!(task_json["marker"], "answered");
+    idp.stop().await;
+}
+
+#[tokio::test]
+async fn delegated_institutional_reads_carry_neither_asks_nor_markers() {
+    let idp = MockIdp::start().await;
+    let barrier = Arc::new(DelegatedSourceBarrier::default());
+    let mut project = asks_http_project(&idp);
+    project.review_policies[0].context = ReviewContextPolicy::CurrentSource {
+        provider: "registry".into(),
+        contract: context_contract(),
+    };
+    let (app, _, _, _, _, _, database) =
+        app_with_project_options(&idp, project, Some(barrier.clone()), true, None, None).await;
+    let (client, server) = native_review_client(app.clone()).await;
+    let created_request =
+        review_request_for_subject("ask-delegated", "ask-delegated-ref", &idp.issuer());
+    let (_, task_id) = create_task(&app, &database, &idp, &created_request).await;
+    let reviewer = human_token(&idp, "reviewer", "staff");
+    client
+        .claim_review_task(
+            CaseworkAuth::new(&reviewer, "staff").with_source_profile("reviewer-source"),
+            task_id,
+            1,
+            "claim",
+        )
+        .await
+        .expect("claim");
+    let asked = client
+        .ask_applicant(
+            CaseworkAuth::new(&reviewer, "staff").with_source_profile("reviewer-source"),
+            task_id,
+            2,
+            "ask",
+            &registry_casework_client::ReviewTaskAskRequest {
+                text: "Send the signed form.".to_owned(),
+                wants: vec![registry_casework_client::ReviewAskWant::Answer {}],
+            },
+        )
+        .await
+        .expect("ask")
+        .value;
+    assert_eq!(
+        asked.task.marker,
+        Some(registry_casework_client::ReviewTaskMarker::Waiting)
+    );
+    barrier.answers.lock().unwrap().insert(
+        asked.ask.ask_id,
+        ReviewContextAnswer {
+            text: Some("source answer excluded from institutional delegation".into()),
+            documents: vec![],
+            answered_at: asked.ask.asked_at,
+        },
+    );
+    // The reviewer sees the ask, its live answer and the marker.
+    let own = client
+        .review_task_context(
+            CaseworkAuth::new(&reviewer, "staff").with_source_profile("reviewer-source"),
+            task_id,
+        )
+        .await
+        .expect("reviewer context")
+        .value;
+    assert_eq!(own.asks.len(), 1);
+    assert!(own.asks[0].answer.is_some());
+    barrier.release.notify_one();
+
+    let delegated = delegated_staff_read_token(&idp, "reviewer");
+    let context = client
+        .delegated_review_task_context(
+            DelegatedStaffReadAuth::new(&delegated, "assistant-reader")
+                .with_source_profile("reviewer-source"),
+            task_id,
+        )
+        .await
+        .expect("delegated context")
+        .value;
+    assert!(context.asks.is_empty());
+    assert!(!serde_json::to_string(&context)
+        .unwrap()
+        .contains("source answer excluded"));
+    barrier.release.notify_one();
+    let list = client
+        .delegated_review_tasks(
+            DelegatedStaffReadAuth::new(&delegated, "assistant-reader")
+                .with_source_profile("reviewer-source"),
+            None,
+            25,
+        )
+        .await
+        .expect("delegated list")
+        .value;
+    assert_eq!(list.items.len(), 1);
+    assert_eq!(list.items[0].marker, None);
+    server.abort();
+    idp.stop().await;
 }

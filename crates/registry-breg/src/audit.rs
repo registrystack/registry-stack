@@ -648,6 +648,8 @@ fn proposal_pre_io_record(
         HttpMethod::Post => matches!(
             operation,
             "start"
+                | "add"
+                | "answer"
                 | "edit"
                 | "submit"
                 | "revise"

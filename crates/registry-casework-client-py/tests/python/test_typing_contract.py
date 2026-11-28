@@ -12,6 +12,24 @@ STUB = (
 
 
 class TypingContractTests(unittest.TestCase):
+    def test_ask_timing_and_resubmission_types_match_the_wire(self) -> None:
+        module = ast.parse(STUB.read_text(encoding="utf-8"))
+        classes = {node.name: node for node in module.body if isinstance(node, ast.ClassDef)}
+        aliases = {node.target.id: ast.unparse(node.value) for node in module.body if isinstance(node, ast.AnnAssign) and node.value is not None}
+        self.assertEqual(aliases["ReviewTaskMarker"], "Literal['waiting', 'answered', 'expired']")
+        fields = lambda name: {node.target.id: ast.unparse(node.annotation) for node in classes[name].body if isinstance(node, ast.AnnAssign)}
+        self.assertEqual(fields("ReviewClockOccurrence")["state"], "Literal['running', 'paused', 'completed', 'cancelled', 'source-facts-missing']")
+        self.assertEqual(fields("ReviewStagePolicy")["asks"], "NotRequired[ReviewStageAsksPolicy]")
+        self.assertEqual(fields("ReviewStageAsksPolicy"), {
+            "answerWithin": "ElapsedDuration",
+            "onDue": "Literal['return-to-reviewer']",
+            "pauseClocks": "bool",
+        })
+        self.assertEqual(fields("_ReviewPolicyOptional")["resubmission"], "Literal['first-stage', 'resume-at-returning-stage']")
+        self.assertEqual(fields("_ReviewContextAskOptional")["dueAt"], "str")
+        self.assertEqual(fields("_ReviewContextAskOptional")["answer"], "ReviewContextAnswer")
+        self.assertEqual(fields("ReviewContextAnswer")["documents"], "list[ReviewAnswerDocument]")
+
     def test_client_configuration_uses_the_canonical_authored_names(self) -> None:
         module = ast.parse(STUB.read_text(encoding="utf-8"))
         client = next(
@@ -163,7 +181,7 @@ class TypingContractTests(unittest.TestCase):
         }
         self.assertEqual(
             optional_task_fields,
-            {"decidedByCaller": "bool", "decisionReceipt": "ReviewDecisionReceipt", "deadlineAt": "str | None", "displayReference": "str", "staffingDiagnostic": "StaffingDiagnostic"},
+            {"decidedByCaller": "bool", "decisionReceipt": "ReviewDecisionReceipt", "deadlineAt": "str | None", "displayReference": "str", "marker": "ReviewTaskMarker", "staffingDiagnostic": "StaffingDiagnostic"},
         )
         self.assertEqual(
             ast.unparse(aliases["ReviewTaskOwnership"].value),
@@ -248,6 +266,7 @@ class TypingContractTests(unittest.TestCase):
             "save_review_task_draft",
             "delete_review_task_draft",
             "decide_review_task",
+            "ask_applicant",
         ):
             method_arguments = {
                 argument.arg: ast.unparse(argument.annotation)
