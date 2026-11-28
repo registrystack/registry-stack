@@ -1117,11 +1117,11 @@ impl CaseworkService {
         } else {
             self.store.review_context_asks(record.request_id).await?
         };
-        let unknown_answers = source_answers::join(&mut asks, live_answers, delegated.is_some())?;
-        if unknown_answers != 0 {
+        let dropped_answers = source_answers::join(&mut asks, live_answers, delegated.is_some())?;
+        if dropped_answers != 0 {
             tracing::warn!(
-                unknown_answers,
-                "Casework dropped source answers for unknown asks"
+                dropped_answers,
+                "Casework dropped unknown or inconsistent source answers"
             );
         }
         Ok(ReviewTaskContext {

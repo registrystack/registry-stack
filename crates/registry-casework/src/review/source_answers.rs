@@ -11,11 +11,12 @@ pub(super) fn join(
         asks.clear();
         return Ok(0);
     }
+    let mut inconsistent = 0;
     for ask in asks {
         ask.answer = None;
         if let Some(answer) = answers.remove(&ask.ask_id) {
-            validate(&answer)?;
-            if answer.answered_at < ask.asked_at
+            if validate(&answer).is_err()
+                || answer.answered_at < ask.asked_at
                 || ask
                     .wants
                     .iter()
@@ -27,12 +28,13 @@ pub(super) fn join(
                     .any(|want| matches!(want, ReviewAskWant::Document {}))
                     && answer.documents.is_empty()
             {
-                return Err(ReviewRuntimeError::SourceInvalid);
+                inconsistent += 1;
+                continue;
             }
             ask.answer = Some(answer);
         }
     }
-    Ok(answers.len())
+    Ok(answers.len() + inconsistent)
 }
 
 fn bounded(value: &str, maximum: usize) -> bool {
@@ -99,6 +101,33 @@ mod tests {
     }
     fn answer() -> ReviewContextAnswer {
         serde_json::from_value(json!({"text":"Private source answer","documents":[],"answeredAt":"2026-11-27T01:00:00Z"})).unwrap()
+    }
+
+    #[test]
+    fn an_inconsistent_answer_is_counted_without_hiding_other_answers_or_fields() {
+        for malformed in [0, 1, 2] {
+            let mut asks = vec![ask(), ask()];
+            let mut invalid = answer();
+            match malformed {
+                0 => invalid.answered_at = asks[0].asked_at - chrono::Duration::seconds(1),
+                1 => invalid.text = None,
+                _ => invalid.text = Some(" ".into()),
+            }
+            let ids = [asks[0].ask_id, asks[1].ask_id];
+            let dropped = join(
+                &mut asks,
+                BTreeMap::from([(ids[0], invalid), (ids[1], answer())]),
+                false,
+            );
+            assert!(
+                dropped.is_ok(),
+                "one inconsistent source answer must not fail the context"
+            );
+            assert_eq!(dropped.unwrap(), 1);
+            assert!(asks[0].answer.is_none());
+            assert!(asks[1].answer.is_some());
+            assert_eq!(asks[0].text, "Why?");
+        }
     }
 
     #[test]

@@ -22,14 +22,20 @@ fn outcome(reply: Result<ReviewAskAnswerResponse, ReviewClientError>) -> Outcome
             Outcome::Refused("ask-concealed-or-unknown".into())
         }
         Err(ReviewClientError::Problem { status, problem })
-            if (400..500).contains(&status) && status != 429 =>
+            if (400..500).contains(&status) && !matches!(status, 408 | 429) =>
         {
             Outcome::Refused(problem.code.as_str().into())
         }
         Err(ReviewClientError::Protocol { status, .. })
-            if (400..500).contains(&status) && status != 429 =>
+            if (400..500).contains(&status) && !matches!(status, 408 | 429) =>
         {
             Outcome::Refused("answer-delivery-refused".into())
+        }
+        Err(ReviewClientError::Configuration { .. }) => {
+            Outcome::Refused("answer-delivery-configuration".into())
+        }
+        Err(ReviewClientError::InvalidRequest { .. }) => {
+            Outcome::Refused("answer-delivery-invalid-request".into())
         }
         Err(_) => Outcome::Retry,
     }
@@ -120,6 +126,34 @@ pub(crate) async fn deliver_one(
 mod tests {
     use super::*;
     use registry_review_client::{ReviewComplete, ReviewProtocolFailure};
+
+    #[test]
+    fn local_answer_errors_stop_but_request_timeouts_retry() {
+        for (error, expected) in [
+            (
+                ReviewClientError::Configuration {
+                    reason: "synthetic",
+                },
+                "answer-delivery-configuration",
+            ),
+            (
+                ReviewClientError::InvalidRequest {
+                    reason: "synthetic",
+                },
+                "answer-delivery-invalid-request",
+            ),
+        ] {
+            assert!(matches!(outcome(Err(error)), Outcome::Refused(code) if code==expected));
+        }
+        assert!(matches!(
+            outcome(Err(ReviewClientError::Protocol {
+                status: 408,
+                failure: ReviewProtocolFailure::Status,
+                trace_id: None
+            })),
+            Outcome::Retry
+        ));
+    }
 
     #[test]
     fn delivery_outcomes_separate_receipts_refusals_and_ambiguous_exchanges() {

@@ -697,7 +697,10 @@ impl ReviewAuthorityRegistry {
                 self.record_feed_outcome(&key, outcome.is_ok());
                 match outcome {
                     Ok(work) => changed |= work,
-                    Err(_) => unavailable = true,
+                    Err(_) => {
+                        crate::startup::OperationalEvent::ReviewResultLookupsUnavailable.emit();
+                        unavailable = true;
+                    }
                 }
             }
             match asks::deliver_one(client, authority).await {
@@ -1617,6 +1620,10 @@ pub(crate) async fn load_accepted_binding(
 }
 
 pub(crate) const REVIEW_TABLES: &[(&str, &[&str])] = &[
+    (
+        "registry_proposal_review_ask_announcements",
+        &["INSERT", "SELECT", "DELETE"],
+    ),
     (
         "registry_proposal_review_asks",
         &["INSERT", "SELECT", "UPDATE"],

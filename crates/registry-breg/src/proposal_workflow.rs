@@ -272,6 +272,16 @@ impl ProposalWorkflow {
         Ok(transition)
     }
 
+    /// Record a mirrored ask's state change without changing the submission.
+    pub fn record_ask_change(
+        self,
+        context: TrustedTransitionContext,
+    ) -> Result<WorkflowTransition, WorkflowError> {
+        let mut transition = self.record_addition(context)?;
+        transition.effect = TransitionEffect::AskChanged;
+        Ok(transition)
+    }
+
     /// Record the applicant's answer without changing the submission.
     pub fn record_answer(
         self,
@@ -1728,6 +1738,7 @@ impl WorkflowTransition {
 pub enum TransitionEffect {
     Added,
     Asked,
+    AskChanged,
     Answered,
     RetryScheduled,
     Submitted {
@@ -2361,6 +2372,7 @@ impl fmt::Debug for TransitionEffect {
         match self {
             Self::Added => formatter.write_str("Added"),
             Self::Asked => formatter.write_str("Asked"),
+            Self::AskChanged => formatter.write_str("AskChanged"),
             Self::Answered => formatter.write_str("Answered"),
             Self::RetryScheduled => formatter.write_str("RetryScheduled"),
             Self::Submitted { version, .. } => formatter
@@ -3241,6 +3253,29 @@ mod source_owned_review_tests {
     #[test]
     fn answer_changes_only_the_submitted_workflow_revision() {
         assert_ask_transition(true);
+    }
+
+    #[test]
+    fn an_ask_state_change_advances_only_the_submitted_revision() {
+        let now = context("authority", "2026-09-19T00:00:00Z");
+        assert_eq!(
+            workflow().record_ask_change(now.clone()).err(),
+            Some(WorkflowError::InvalidTransition)
+        );
+        let before = workflow()
+            .submit(now.clone(), proposal(required_review()))
+            .unwrap()
+            .into_workflow();
+        let transition = before.clone().record_ask_change(now).unwrap();
+        assert!(matches!(transition.effect(), TransitionEffect::AskChanged));
+        let after = transition.into_workflow();
+        assert_eq!(after.state(), before.state());
+        assert_eq!(after.current_version(), before.current_version());
+        assert_eq!(after.current_proposal(), before.current_proposal());
+        assert_eq!(
+            after.workflow_revision(),
+            before.workflow_revision().next().unwrap()
+        );
     }
 
     #[test]

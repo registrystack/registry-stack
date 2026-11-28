@@ -2516,6 +2516,8 @@ pub enum ConsentIssuerSource {
 
 /// A request may declare at most eight independently governed binary slots.
 pub const MAX_ATTACHMENT_SLOTS: usize = 8;
+/// Maximum intrinsic review questions retained for one frozen submission.
+pub const MAX_MIRRORED_REVIEW_ASKS: usize = 50;
 /// Bounds both database content and optional external storage operations.
 pub const MAX_ATTACHMENT_BYTES: u32 = 16 * 1024 * 1024;
 pub const MAX_ATTACHMENT_CONTENT_TYPES: usize = 16;

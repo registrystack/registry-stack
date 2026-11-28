@@ -230,7 +230,9 @@ pub(crate) fn append_proposal_openapi(
                 document["parameters"].as_array_mut().expect("parameters").push(json!({
                     "name":"ask_id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}));
                 document["requestBody"] = json!({"required":true,"content":{"application/json":{"schema":{
-                    "type":"object","additionalProperties":false,"properties":{
+                    "type":"object","additionalProperties":false,
+                    "anyOf":[{"required":["text"]},{"required":["additions"],"properties":{"additions":{"minItems":1}}}],
+                    "properties":{
                         "text":{"type":"string","minLength":1,"maxLength":2000},
                         "additions":{"type":"array","maxItems":32,"uniqueItems":true,"items":{"type":"string","format":"uuid"}}}}}}});
                 merge_operation(
@@ -446,7 +448,7 @@ pub(crate) fn append_proposal_openapi(
             "type":"object","additionalProperties":false,"required":["items"],"properties":{"items":{
                 "type":"array","minItems":1,"maxItems":100,"items":{"oneOf":[
                     {"type":"object","additionalProperties":false,"required":["id","status","context"],"properties":{
-                        "id":{"type":"string","format":"uuid"},"status":{"const":"visible"},"context":review_document_schema(true)}},
+                        "id":{"type":"string","format":"uuid"},"status":{"const":"visible"},"context":task_review_document_schema()}},
                     {"type":"object","additionalProperties":false,"required":["id","status"],"properties":{
                         "id":{"type":"string","format":"uuid"},"status":{"const":"concealed"}}}
                 ]}}}});

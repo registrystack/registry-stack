@@ -136,10 +136,32 @@ async fn source_answers_join_known_asks_live_without_entering_the_display_schema
     assert!(!value.to_string().contains("unknown-answer-must-not-appear"));
     let logs = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
     assert!(
-        logs.contains("\"unknown_answers\":1"),
+        logs.contains("\"dropped_answers\":1"),
         "unknown answers are counted without their content: {logs}"
     );
     assert!(!logs.contains("unknown-answer-must-not-appear"));
+    let mut inconsistent = answer.clone();
+    inconsistent["answeredAt"] = json!(asked.ask.asked_at - chrono::Duration::seconds(1));
+    *answers.lock().unwrap() = json!({(asked.ask.ask_id.to_string()):inconsistent});
+    let captured = CapturedLogs::default();
+    let subscriber = tracing_subscriber::fmt()
+        .json()
+        .with_writer(captured.clone())
+        .finish();
+    let partial = service
+        .review_task_context(&fixture.reviewer_a, task, Some("staff"), "human-token")
+        .with_subscriber(subscriber)
+        .await
+        .unwrap();
+    let partial = serde_json::to_value(partial).unwrap();
+    assert_eq!(
+        partial["context"], value["context"],
+        "one bad answer must not hide the authored fields"
+    );
+    assert!(partial["asks"][0].get("answer").is_none());
+    let logs = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+    assert!(logs.contains("\"dropped_answers\":1"), "{logs}");
+    assert!(!logs.contains("synthetic-answer-live-only"));
     for table in [
         "casework_review_requests",
         "casework_review_tasks",

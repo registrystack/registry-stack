@@ -37,6 +37,14 @@ test('answers use the promoted ask link, exact body, ETag and caller key', async
     const before = requests.length;
     await assert.rejects(client.answerProposalAsk(prior, ask, {text: ' '}, 'invalid'), error => error.kind === 'invalid-request');
     assert.equal(requests.length, before);
+    document.asks[0].wants = [];
+    const withoutWants = await client.getProposal(contract.selectProposalGet('author'), id);
+    const beforeEmpty = requests.length;
+    for (const body of [{}, {additions: []}]) {
+      await assert.rejects(client.answerProposalAsk(withoutWants, ask, body, 'empty'), error => error.kind === 'invalid-request');
+    }
+    assert.equal(requests.length, beforeEmpty);
+    document.asks[0].wants = [{kind: 'answer'}];
     const answered = await client.answerProposalAsk(prior, ask, {text: 'The explanation'}, 'answer-one');
     assert.equal(JSON.parse(answered.documentJson).asks[0].answer.text, 'The explanation');
     const wire = requests.at(-1);

@@ -10,6 +10,7 @@ async fn storage_installs_the_ask_mirror_answers_and_feed_checkpoint() {
         "registry_proposal_review_ask_answers",
         "registry_proposal_review_ask_feed_events",
         "registry_proposal_review_ask_feed_checkpoints",
+        "registry_proposal_review_ask_announcements",
     ] {
         let name = format!("registry_internal.{table}");
         let found: Option<String> = fixture
@@ -26,6 +27,9 @@ async fn storage_installs_the_ask_mirror_answers_and_feed_checkpoint() {
 
 #[derive(Default)]
 pub(super) struct FeedState {
+    feed_unavailable: bool,
+    gone_once: bool,
+    pause_answer: bool,
     answer_status: u16,
     deliveries: Vec<(String, Value)>,
     entries: Vec<Value>,
@@ -43,6 +47,12 @@ pub(super) async fn feed(
     let cursor = query.get("cursor").map(|id| Uuid::parse_str(id).unwrap());
     let mut asks = state.asks.lock().unwrap();
     asks.feed_cursors.push(cursor);
+    if asks.feed_unavailable {
+        return response(StatusCode::SERVICE_UNAVAILABLE, json!({}));
+    }
+    if cursor.is_some() && std::mem::take(&mut asks.gone_once) {
+        return (StatusCode::GONE,[("content-type","application/problem+json"),("traceparent",TRACE)],serde_json::to_vec(&json!({"type":"https://review.example.test/problems/cursor.expired","title":"Cursor expired","status":410,"detail":"Refresh the feed","code":"cursor.expired","traceId":"0123456789abcdef0123456789abcdef"})).unwrap()).into_response();
+    }
     let start = cursor
         .and_then(|cursor| {
             asks.entries
@@ -77,6 +87,227 @@ fn announce(authority: &Authority, binding: &ReviewRequestAccepted) -> (Uuid, Uu
         .push(json!({"eventId":event,"requestId":binding.request_id,"askId":ask,"changedAt":now}));
     state.replies.insert(ask,(StatusCode::OK,json!({"askId":ask,"requestId":binding.request_id,"subject":binding.subject,"text":"Synthetic question, never in events","wants":[{"kind":"answer"}],"askedAt":now,"state":"open"})));
     (ask, event)
+}
+
+#[tokio::test]
+async fn fix_announcement_before_acceptance_is_recovered_after_binding_without_another_event() {
+    let authority = Authority::start(false, true).await;
+    let fixture = answer_fixture(&authority).await;
+    let id = submitted(&fixture, "parked-ask").await;
+    let binding = retained_binding(&fixture, id).await;
+    fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET state='uncertain',next_attempt_at=transaction_timestamp()+interval '1 hour' WHERE proposal_id=$1",&[&id]).await.unwrap();
+    let (ask, _) = announce(&authority, &binding);
+    worker(&fixture, &authority).await.unwrap();
+    accept(&fixture, id, &binding).await;
+    worker(&fixture, &authority).await.unwrap();
+    let document = read_raw(&fixture, &format!("/v1/proposals/{id}")).await;
+    assert_eq!(document["asks"][0]["id"], ask.to_string());
+    assert_eq!(document["status"], "awaiting-party");
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn parked_announcements_expire_without_retaining_question_text_or_extending_the_deadline() {
+    let authority = Authority::start(false, true).await;
+    let fixture = answer_fixture(&authority).await;
+    let id = submitted(&fixture, "parked-expiry").await;
+    let binding = retained_binding(&fixture, id).await;
+    fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_submissions SET state='uncertain',next_attempt_at=transaction_timestamp()+interval '1 hour' WHERE proposal_id=$1",&[&id]).await.unwrap();
+    let (_, event) = announce(&authority, &binding);
+    worker(&fixture, &authority).await.unwrap();
+    let row=fixture.database.admin.query_one("SELECT announcement,expires_at<=(SELECT recovery_deadline FROM registry_internal.registry_proposal_review_submissions WHERE proposal_id=$1) FROM registry_internal.registry_proposal_review_ask_announcements",&[&id]).await.unwrap();
+    let announcement: Value = row.get(0);
+    assert_eq!(announcement.as_object().unwrap().len(), 4);
+    assert!(!announcement.to_string().contains("Synthetic question"));
+    assert!(row.get::<_, bool>(1));
+    fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_ask_announcements SET expires_at=transaction_timestamp()-interval '1 second'",&[]).await.unwrap();
+    authority.state.asks.lock().unwrap().feed_unavailable = true;
+    assert!(worker(&fixture, &authority).await.is_err());
+    assert_eq!(
+        fixture
+            .database
+            .admin
+            .query_one(
+                "SELECT count(*) FROM registry_internal.registry_proposal_review_ask_announcements",
+                &[]
+            )
+            .await
+            .unwrap()
+            .get::<_, i64>(0),
+        0
+    );
+    let row=fixture.database.admin.query_one("SELECT state,error_code FROM registry_internal.registry_proposal_review_ask_feed_events WHERE event_id=$1",&[&event]).await.unwrap();
+    assert_eq!(row.get::<_, String>(0), "unknown");
+    assert_eq!(row.get::<_, String>(1), "ask-request-unknown");
+    authority.state.asks.lock().unwrap().feed_unavailable = false;
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    accept(&fixture, id, &binding).await;
+    worker(&fixture, &authority).await.unwrap();
+    assert!(read_raw(&fixture, &format!("/v1/proposals/{id}"))
+        .await
+        .get("asks")
+        .is_none());
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn fix_ask_read_credentials_back_off_without_committing_the_page() {
+    for code in [StatusCode::UNAUTHORIZED, StatusCode::FORBIDDEN] {
+        let authority = Authority::start(false, true).await;
+        let fixture = answer_fixture(&authority).await;
+        let id = submitted(&fixture, "ask-auth-outage").await;
+        let binding = retained_binding(&fixture, id).await;
+        accept(&fixture, id, &binding).await;
+        let (ask, _) = announce(&authority, &binding);
+        let good = authority.state.asks.lock().unwrap().replies[&ask].clone();
+        authority
+            .state
+            .asks
+            .lock()
+            .unwrap()
+            .replies
+            .insert(ask, (code, json!({})));
+        assert!(
+            worker(&fixture, &authority).await.is_err(),
+            "credential failure is recoverable"
+        );
+        assert_eq!(fixture.database.admin.query_one("SELECT count(*) FROM registry_internal.registry_proposal_review_ask_feed_events",&[]).await.unwrap().get::<_,i64>(0),0);
+        let calls = authority.state.asks.lock().unwrap().feed_cursors.len();
+        let _ = worker(&fixture, &authority).await;
+        assert_eq!(
+            authority.state.asks.lock().unwrap().feed_cursors.len(),
+            calls,
+            "backoff suppresses immediate retry"
+        );
+        authority
+            .state
+            .asks
+            .lock()
+            .unwrap()
+            .replies
+            .insert(ask, good);
+        tokio::time::sleep(Duration::from_millis(1100)).await;
+        worker(&fixture, &authority).await.unwrap();
+        assert_eq!(
+            read_raw(&fixture, &format!("/v1/proposals/{id}")).await["asks"][0]["id"],
+            ask.to_string()
+        );
+        fixture.finish().await;
+    }
+}
+
+#[tokio::test]
+async fn fix_mirror_caps_distinct_asks_and_counts_excess_announcements() {
+    let authority = Authority::start(false, true).await;
+    let fixture = answer_fixture(&authority).await;
+    let id = submitted(&fixture, "ask-cap").await;
+    let binding = retained_binding(&fixture, id).await;
+    accept(&fixture, id, &binding).await;
+    for _ in 0..51 {
+        announce(&authority, &binding);
+    }
+    worker(&fixture, &authority).await.unwrap();
+    assert_eq!(
+        read_raw(&fixture, &format!("/v1/proposals/{id}")).await["asks"]
+            .as_array()
+            .unwrap()
+            .len(),
+        50
+    );
+    assert_eq!(fixture.database.admin.query_one("SELECT count(*) FROM registry_internal.registry_proposal_review_ask_feed_events WHERE error_code='ask-limit-reached'",&[]).await.unwrap().get::<_,i64>(0),1);
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn fix_duplicate_accepted_request_ids_do_not_stall_the_feed() {
+    let authority = Authority::start(false, true).await;
+    let fixture = answer_fixture(&authority).await;
+    let first = submitted(&fixture, "duplicate-request-a").await;
+    let second = submitted(&fixture, "duplicate-request-b").await;
+    let binding = retained_binding(&fixture, first).await;
+    accept(&fixture, first, &binding).await;
+    accept(&fixture, second, &binding).await;
+    announce(&authority, &binding);
+    assert!(
+        worker(&fixture, &authority).await.is_ok(),
+        "ambiguous binding must not stall other announcements"
+    );
+    assert_eq!(fixture.database.admin.query_one("SELECT count(*) FROM registry_internal.registry_proposal_review_ask_feed_events WHERE error_code='ask-request-ambiguous'",&[]).await.unwrap().get::<_,i64>(0),1);
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn fix_terminal_ask_feed_changes_the_etag_once_without_reopening() {
+    for terminal in ["closed", "expired"] {
+        let authority = Authority::start(false, true).await;
+        let fixture = answer_fixture(&authority).await;
+        let id = submitted(&fixture, "ask-terminal").await;
+        let binding = retained_binding(&fixture, id).await;
+        accept(&fixture, id, &binding).await;
+        let (ask, _) = announce(&authority, &binding);
+        worker(&fixture, &authority).await.unwrap();
+        let (_, headers, before) = request(
+            &fixture,
+            "GET",
+            &format!("/v1/proposals/{id}"),
+            None,
+            None,
+            Value::Null,
+        )
+        .await;
+        {
+            let mut feed = authority.state.asks.lock().unwrap();
+            let reply = &mut feed.replies.get_mut(&ask).unwrap().1;
+            reply["state"] = json!(terminal);
+            reply["closedAt"] = json!(chrono::Utc::now() + chrono::Duration::hours(2));
+            if terminal == "expired" {
+                reply["dueAt"] = json!(chrono::Utc::now() + chrono::Duration::hours(1));
+            }
+            feed.entries.push(json!({"eventId":Uuid::new_v4(),"requestId":binding.request_id,"askId":ask,"changedAt":chrono::Utc::now()}));
+        }
+        worker(&fixture, &authority).await.unwrap();
+        let (_, after_headers, after) = request(
+            &fixture,
+            "GET",
+            &format!("/v1/proposals/{id}"),
+            None,
+            None,
+            Value::Null,
+        )
+        .await;
+        assert_ne!(headers["etag"], after_headers["etag"]);
+        assert_eq!(
+            after["revision"].as_u64().unwrap(),
+            before["revision"].as_u64().unwrap() + 1
+        );
+        assert_eq!(after["asks"][0]["state"], terminal);
+        {
+            let mut feed = authority.state.asks.lock().unwrap();
+            let reply = &mut feed.replies.get_mut(&ask).unwrap().1;
+            reply["state"] = json!("open");
+            reply.as_object_mut().unwrap().remove("closedAt");
+            feed.entries.push(json!({"eventId":Uuid::new_v4(),"requestId":binding.request_id,"askId":ask,"changedAt":chrono::Utc::now()}));
+        }
+        worker(&fixture, &authority).await.unwrap();
+        let replay = read_raw(&fixture, &format!("/v1/proposals/{id}")).await;
+        assert_eq!(replay["revision"], after["revision"]);
+        assert_eq!(replay["asks"][0]["state"], terminal);
+        fixture.finish().await;
+    }
+}
+
+#[tokio::test]
+async fn fix_erased_submission_does_not_retain_late_question_text() {
+    let authority = Authority::start(false, true).await;
+    let fixture = answer_fixture(&authority).await;
+    let id = submitted(&fixture, "late-erased-ask").await;
+    let binding = retained_binding(&fixture, id).await;
+    accept(&fixture, id, &binding).await;
+    fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_submissions SET snapshot=NULL,erased_at=transaction_timestamp() WHERE proposal_id=$1",&[&id]).await.unwrap();
+    announce(&authority, &binding);
+    worker(&fixture, &authority).await.unwrap();
+    assert_eq!(fixture.database.admin.query_one("SELECT count(*) FROM registry_internal.registry_proposal_review_asks WHERE proposal_id=$1",&[&id]).await.unwrap().get::<_,i64>(0),0);
+    fixture.finish().await;
 }
 
 async fn worker(
@@ -215,12 +446,25 @@ async fn ask_feed_turn_uses_the_shared_awaiting_party_rule_and_lists_only_live_u
 }
 
 async fn answer_fixture(authority: &Authority) -> client_http::ClientFixture {
+    answer_fixture_with_verification(
+        authority,
+        registry_breg::attachment_verification::AttachmentVerification::Disabled,
+    )
+    .await
+}
+
+async fn answer_fixture_with_verification(
+    authority: &Authority,
+    verification: registry_breg::attachment_verification::AttachmentVerification,
+) -> client_http::ClientFixture {
     let source = answer_source();
     let project = parse_project_json(&serde_json::to_vec(&source).unwrap()).unwrap();
     let registry = compile_project(&project, &[], CompileProfile::Authoring).unwrap();
     let bindings = authority.registry.clone();
     client_http::ClientFixture::start_with_mutations(registry, claims(), move |service| {
-        service.with_review_result_source(bindings)
+        service
+            .with_review_result_source(bindings)
+            .with_attachment_verification(verification)
     })
     .await
 }
@@ -418,22 +662,30 @@ pub(super) async fn answer_remote(
             .collect::<Vec<_>>(),
         vec!["answeredAt", "subject"]
     );
-    let mut asks = state.asks.lock().unwrap();
-    asks.deliveries.push((
-        headers["idempotency-key"].to_str().unwrap().into(),
-        body.clone(),
-    ));
-    let status = StatusCode::from_u16(if asks.answer_status == 0 {
-        200
-    } else {
-        asks.answer_status
-    })
-    .unwrap();
+    let (status, mut reply, pause) = {
+        let mut asks = state.asks.lock().unwrap();
+        asks.deliveries.push((
+            headers["idempotency-key"].to_str().unwrap().into(),
+            body.clone(),
+        ));
+        (
+            StatusCode::from_u16(if asks.answer_status == 0 {
+                200
+            } else {
+                asks.answer_status
+            })
+            .unwrap(),
+            asks.replies[&ask].1.clone(),
+            std::mem::take(&mut asks.pause_answer),
+        )
+    };
+    if pause {
+        state.gates[0].pause().await;
+    }
     if status == StatusCode::NOT_FOUND {
         return (status, [("traceparent", TRACE)]).into_response();
     }
     if status == StatusCode::OK {
-        let mut reply = asks.replies[&ask].1.clone();
         reply["state"] = json!("answered");
         reply["answeredAt"] = body["answeredAt"].clone();
         reply.as_object_mut().unwrap().remove("closedAt");
@@ -481,6 +733,76 @@ async fn committed_answer(
 }
 async fn delivery(fixture: &client_http::ClientFixture, ask: Uuid) -> Value {
     fixture.database.admin.query_one("SELECT jsonb_build_object('state',delivery_state,'error',last_error_code,'attempts',attempt_count,'answeredAt',answered_at,'deadline',delivery_deadline) FROM registry_internal.registry_proposal_review_ask_answers WHERE ask_id=$1",&[&ask]).await.unwrap().get(0)
+}
+
+#[tokio::test]
+async fn cursor_expiry_resets_then_replays_without_duplicating_the_ask_or_revision() {
+    let authority = Authority::start(false, true).await;
+    let fixture = answer_fixture(&authority).await;
+    let id = submitted(&fixture, "ask-cursor-expiry").await;
+    let binding = retained_binding(&fixture, id).await;
+    accept(&fixture, id, &binding).await;
+    announce(&authority, &binding);
+    worker(&fixture, &authority).await.unwrap();
+    let before = read_raw(&fixture, &format!("/v1/proposals/{id}")).await;
+    authority.state.asks.lock().unwrap().gone_once = true;
+    worker(&fixture, &authority).await.unwrap();
+    let cursor: Option<Uuid> = fixture
+        .database
+        .admin
+        .query_one(
+            "SELECT cursor FROM registry_internal.registry_proposal_review_ask_feed_checkpoints",
+            &[],
+        )
+        .await
+        .unwrap()
+        .get(0);
+    assert!(cursor.is_none());
+    worker(&fixture, &authority).await.unwrap();
+    let after = read_raw(&fixture, &format!("/v1/proposals/{id}")).await;
+    assert_eq!(after["revision"], before["revision"]);
+    assert_eq!(after["asks"].as_array().unwrap().len(), 1);
+    assert!(authority
+        .state
+        .asks
+        .lock()
+        .unwrap()
+        .feed_cursors
+        .last()
+        .unwrap()
+        .is_none());
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn a_lost_answer_lease_cannot_settle_the_replacement_claim() {
+    let authority = Arc::new(Authority::start(false, true).await);
+    let (fixture, _, ask) = committed_answer(&authority, "answer-lost-lease").await;
+    authority.state.asks.lock().unwrap().pause_answer = true;
+    let pool = fixture.pool.clone();
+    let registry = authority.registry.clone();
+    let mutations = fixture.mutations.clone();
+    let in_flight = tokio::spawn(async move {
+        run_review_authority_once_for_test(&pool, &registry, &mutations).await
+    });
+    authority.state.gates[0].reached().await;
+    let replacement = Uuid::new_v4();
+    fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_ask_answers SET claim_token=$2,lease_until=transaction_timestamp()+interval '1 hour' WHERE ask_id=$1",&[&ask,&replacement]).await.unwrap();
+    authority.state.gates[0].release.notify_one();
+    in_flight.await.unwrap().unwrap();
+    let row=fixture.database.admin.query_one("SELECT delivery_state,claim_token FROM registry_internal.registry_proposal_review_ask_answers WHERE ask_id=$1",&[&ask]).await.unwrap();
+    assert_eq!(row.get::<_, String>(0), "pending");
+    assert_eq!(row.get::<_, Uuid>(1), replacement);
+    fixture.database.admin.execute("UPDATE registry_internal.registry_proposal_review_ask_answers SET lease_until=transaction_timestamp()-interval '1 second' WHERE ask_id=$1",&[&ask]).await.unwrap();
+    worker(&fixture, &authority).await.unwrap();
+    assert_eq!(delivery(&fixture, ask).await["state"], "delivered");
+    let calls = authority.state.asks.lock().unwrap().deliveries.clone();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(
+        calls[0], calls[1],
+        "a replacement retains the committed delivery key and answer time"
+    );
+    fixture.finish().await;
 }
 
 #[tokio::test]
@@ -965,6 +1287,151 @@ async fn ask_bound_file_download_discloses_only_cited_verified_files_of_this_rev
     let journal = serde_json::to_string(&fixture.audit_capture.entries()).unwrap();
     assert!(!journal.contains("The requested statement"));
     assert!(!journal.contains("cited bytes"));
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn pending_and_rejected_cited_files_have_no_review_link_and_refuse_a_guessed_download() {
+    use registry_breg::attachment_verification::AttachmentVerification;
+    use registry_platform_config::{AttachmentVerifierConfig, SecretProvider, SecretResolver};
+    use registry_platform_objectstore::{HttpVerifierSettings, VerifierNamespace};
+    let secrets = tempfile::tempdir().unwrap();
+    let credential = secrets.path().join("verifier");
+    std::fs::write(&credential, b"synthetic-verifier-token").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&credential, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let resolver = SecretResolver::new([SecretProvider::File], secrets.path()).unwrap();
+    let config:AttachmentVerifierConfig=serde_json::from_value(json!({"url":"http://127.0.0.1:1/verify","policyId":"synthetic-policy","authorizationRef":"secret:file/verifier","attemptTimeoutMilliseconds":2000})).unwrap();
+    let verification = AttachmentVerification::Http(Arc::new(
+        HttpVerifierSettings::from_config_without_peer_policy(&config)
+            .unwrap()
+            .activate(
+                VerifierNamespace {
+                    binding_domain: "breg-attachment-verification-http-v1",
+                    max_content_bytes: registry_breg::contract::MAX_ATTACHMENT_BYTES as u64,
+                },
+                &resolver,
+            )
+            .unwrap(),
+    ));
+    let policy = verification.binding_digest();
+    let authority = Authority::start(false, true).await;
+    let fixture = answer_fixture_with_verification(&authority, verification).await;
+    let id = submitted(&fixture, "quarantined-answer-file").await;
+    let binding = retained_binding(&fixture, id).await;
+    accept(&fixture, id, &binding).await;
+    let (ask, _) = announce(&authority, &binding);
+    worker(&fixture, &authority).await.unwrap();
+    let file = add_file(&fixture, id, "quarantined-file", b"quarantined cited bytes").await;
+    let (_, headers, _) = request(
+        &fixture,
+        "GET",
+        &format!("/v1/proposals/{id}"),
+        None,
+        None,
+        Value::Null,
+    )
+    .await;
+    let answered = request(
+        &fixture,
+        "POST",
+        &format!("/v1/proposals/{id}/asks/{ask}/answer"),
+        Some(headers["etag"].to_str().unwrap()),
+        Some("cite-quarantined-file"),
+        json!({"text":"Statement","additions":[file]}),
+    )
+    .await;
+    assert_eq!(answered.0, StatusCode::OK, "{}", answered.2);
+    let mut download = None;
+    // Establish the exact same binding's valid URL, then quarantine it again.
+    for verdict in ["approved", "pending", "rejected"] {
+        fixture.database.admin.execute("INSERT INTO registry_internal.registry_attachment_verification(sha256,policy_digest,content_type,verdict) SELECT sha256,$1,content_type,$2 FROM registry_internal.registry_proposal_additions WHERE addition_id=$3 ON CONFLICT(sha256,policy_digest,content_type) DO UPDATE SET verdict=EXCLUDED.verdict",&[&policy,&verdict,&file]).await.unwrap();
+        let context = reviewer_get(
+            &fixture,
+            &format!("/v1/proposals/{id}/review-context?accessProfile=reviewer"),
+            "zone-a",
+        )
+        .await;
+        assert_eq!(context.0, StatusCode::OK);
+        let value: Value = serde_json::from_slice(&context.2).unwrap();
+        let descriptor = &value["context"]["asks"][0]["answer"]["documents"][0];
+        assert_eq!(descriptor["verificationStatus"], verdict);
+        if verdict == "approved" {
+            download = Some(format!(
+                "{}&accessProfile=reviewer",
+                descriptor["download"]["path"].as_str().unwrap()
+            ));
+            assert_eq!(
+                reviewer_get(&fixture, download.as_deref().unwrap(), "zone-a")
+                    .await
+                    .0,
+                StatusCode::OK
+            );
+        } else {
+            assert!(descriptor.get("download").is_none());
+            let response = reviewer_get(&fixture, download.as_deref().unwrap(), "zone-a").await;
+            assert_eq!(response.0, StatusCode::NOT_FOUND);
+            assert!(!String::from_utf8_lossy(&response.2).contains("quarantined cited bytes"));
+        }
+    }
+    fixture.finish().await;
+}
+
+#[tokio::test]
+async fn an_empty_answer_to_an_ask_without_wants_is_invalid_without_changing_the_revision() {
+    let authority = Authority::start(false, true).await;
+    let fixture = answer_fixture(&authority).await;
+    let id = submitted(&fixture, "answer-without-wants").await;
+    let binding = retained_binding(&fixture, id).await;
+    accept(&fixture, id, &binding).await;
+    let (ask, _) = announce(&authority, &binding);
+    authority
+        .state
+        .asks
+        .lock()
+        .unwrap()
+        .replies
+        .get_mut(&ask)
+        .unwrap()
+        .1["wants"] = json!([]);
+    worker(&fixture, &authority).await.unwrap();
+    let (_, headers, before) = request(
+        &fixture,
+        "GET",
+        &format!("/v1/proposals/{id}"),
+        None,
+        None,
+        Value::Null,
+    )
+    .await;
+    for (index, body) in [json!({}), json!({"additions":[]})].into_iter().enumerate() {
+        let response = request(
+            &fixture,
+            "POST",
+            &format!("/v1/proposals/{id}/asks/{ask}/answer"),
+            Some(headers["etag"].to_str().unwrap()),
+            Some(&format!("empty-answer-{index}")),
+            body,
+        )
+        .await;
+        assert_eq!(response.0, StatusCode::BAD_REQUEST);
+        assert_eq!(response.2["code"], "request.invalid");
+        assert_eq!(response.2["fieldPath"], "/text");
+    }
+    let after = request(
+        &fixture,
+        "GET",
+        &format!("/v1/proposals/{id}"),
+        None,
+        None,
+        Value::Null,
+    )
+    .await;
+    assert_eq!(after.1["etag"], headers["etag"]);
+    assert_eq!(after.2["revision"], before["revision"]);
     fixture.finish().await;
 }
 

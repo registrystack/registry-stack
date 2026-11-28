@@ -58,6 +58,9 @@ impl fmt::Debug for BRegProposalReviewAnswer {
 }
 
 pub(super) fn valid(document: &BRegProposalReviewDocument) -> bool {
+    if document.context.asks.len() > 50 {
+        return false;
+    }
     let mut ids = std::collections::BTreeSet::new();
     for ask in &document.context.asks {
         let Some(asked) = proposal_instant(&ask.asked_at) else {
@@ -90,6 +93,7 @@ pub(super) fn valid(document: &BRegProposalReviewDocument) -> bool {
                     text.trim().is_empty() || text.len() > 2000 || text.contains('\0')
                 })
                 || (answer.text.is_none() && ask.wants.contains(&BRegProposalAskWant::Answer {}))
+                || (answer.text.is_none() && answer.documents.is_empty())
                 || answer.documents.len() > 32
                 || (answer.documents.is_empty()
                     && ask.wants.contains(&BRegProposalAskWant::Document {}))

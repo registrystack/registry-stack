@@ -315,6 +315,7 @@ impl MutationTransaction {
     /// of the current submission ends the Proposal in `rejected`; a
     /// changes-requested result leaves it submitted and revisable and records
     /// `review-returned`. A new open ask bumps the revision and records `asked`.
+    /// A mirrored ask state change bumps the revision without a lifecycle event.
     /// Any other result, or an observation for a submission that
     /// is no longer current, changes nothing. The caller holds the Proposal's
     /// state row lock.
@@ -330,6 +331,7 @@ impl MutationTransaction {
         status: &str,
     ) -> Result<(), MutationError> {
         let transition = match status {
+            "ask-state-changed" => "ask-state-changed",
             "asked" => "asked",
             "rejected" => "rejected",
             "changes-requested" => "review-returned",
@@ -343,11 +345,13 @@ impl MutationTransaction {
             return Ok(());
         }
         let mut workflow = proposal_store::load(tx, action_id, proposal_id, false).await?;
-        if matches!(transition, "rejected" | "asked") {
+        if matches!(transition, "rejected" | "asked" | "ask-state-changed") {
             let previous = i64::try_from(workflow.workflow_revision().get())
                 .map_err(|_| MutationError::Unavailable)?;
             let actor = self.proposal_actor(&format!("review-authority:{authority}"))?;
-            workflow = if transition == "asked" {
+            workflow = if transition == "ask-state-changed" {
+                workflow.record_ask_change(transition_context(&actor)?)
+            } else if transition == "asked" {
                 workflow.record_ask(transition_context(&actor)?)
             } else {
                 workflow.reject(transition_context(&actor)?)
@@ -355,6 +359,9 @@ impl MutationTransaction {
             .map_err(workflow_error)?
             .into_workflow();
             proposal_store::save(tx, action_id, proposal_id, previous, &workflow).await?;
+        }
+        if transition == "ask-state-changed" {
+            return Ok(());
         }
         let document =
             proposal_store::load_document(tx, proposal_id, proposal_store::DocumentLock::None)

@@ -799,6 +799,9 @@ Use the `added` hook transition to observe the value-free `proposal.added` event
 A reviewer can ask for an explanation, supporting files, or both while the review stays open.
 BReg learns of asks by polling the review authority within its configured worker cadence.
 The Proposal's `asks` array shows the current submission's questions newest first, with their wants, absolute `askedAt` and optional `dueAt`, state and answer link.
+Each submission version retains at most 50 asks. BReg skips and counts further distinct announcements.
+An announcement that arrives before BReg records acceptance waits as value-free identifiers and time until BReg can match the review request.
+It expires within the submission recovery window without retaining question text.
 Get authority controls question and answer disclosure, including on list items and command responses.
 An open, unanswered ask changes the same derived status and turn to `awaiting-party` and `party`.
 After the local answer commits, they return to `in-review` and `official` when review remains pending.
@@ -819,6 +822,7 @@ Idempotency-Key: <caller-chosen-key>
 `text` is required for an `answer` want, must be nonblank and is bounded to 2,000 UTF-8 bytes.
 A `document` want requires at least one addition ID from this submission, added at or after the ask and not cited by another answer.
 The list holds at most 32 distinct IDs. Unknown body members are refused.
+Every answer needs text or at least one cited file, even when the ask has no wants.
 Use `request.invalid` and its `fieldPath` to correct the body.
 The successful response is the full caller-filtered Proposal with a new ETag, unchanged submission version and unchanged frozen effects.
 Resending the same key and request returns the stored response. Changing the body with that key conflicts.
@@ -840,6 +844,8 @@ A file not cited by an answer still needs an authored additions context field.
 The answer link becomes unavailable with `ask-answered`, `ask-closed` or `ask-due-passed`, each with recovery `receipt-only`.
 Shared lifecycle refusals still apply. Availability is an observation, so refetch after a refusal.
 The due date is absolute from the provider's ask, not from when BReg polls it.
+Closing or expiring an ask through the feed advances the Proposal revision and ETag once.
+The clock passing `dueAt` changes answer-link availability without changing the ETag. Pages must check the link's current availability before answering.
 BReg refuses answers after that date by its own clock. The provider judges an answer by its stored `answeredAt`.
 An on-time answer can therefore be delivered after the provider has marked the ask expired.
 BReg rounds a higher-precision ask time up to a microsecond and uses the later of that instant and its own commit clock for `answeredAt`.

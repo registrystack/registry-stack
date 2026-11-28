@@ -60,6 +60,14 @@ class AskTests(unittest.TestCase):
             with self.assertRaises(BaseRegistryClientError):
                 client.answer_proposal_ask(prior, ask, {'text': ' '}, 'invalid')
             self.assertEqual(len(requests), before)
+            document['asks'][0]['wants'] = []
+            without_wants = client.get_proposal(contract.select_proposal_get('author'), proposal)
+            before_empty = len(requests)
+            for body in [{}, {'additions': []}]:
+                with self.assertRaises(BaseRegistryClientError):
+                    client.answer_proposal_ask(without_wants, ask, body, 'empty')
+            self.assertEqual(len(requests), before_empty)
+            document['asks'][0]['wants'] = [{'kind': 'answer'}]
             answered = client.answer_proposal_ask(prior, ask, {'text': 'The explanation'}, 'answer-one')
             self.assertEqual(answered.document['asks'][0]['answer']['text'], 'The explanation')
             wire = requests[-1]

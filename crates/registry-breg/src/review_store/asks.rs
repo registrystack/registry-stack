@@ -77,6 +77,22 @@ pub(super) async fn install(client: &impl GenericClient) -> Result<(), MutationE
                 REFERENCES registry_internal.registry_proposal_additions
                     (action_id,proposal_id,submission_version,addition_id)
         );
+        CREATE INDEX IF NOT EXISTS registry_proposal_review_submissions_request
+            ON registry_internal.registry_proposal_review_submissions
+                (authority, producer_id, (accepted_binding->>'requestId'))
+            WHERE accepted_binding IS NOT NULL;
+        CREATE TABLE IF NOT EXISTS registry_internal.registry_proposal_review_ask_announcements (
+            authority text NOT NULL CHECK (octet_length(authority) BETWEEN 1 AND 128),
+            producer_id text NOT NULL CHECK (octet_length(producer_id) BETWEEN 1 AND 128),
+            review_request_id uuid NOT NULL,
+            ask_id uuid NOT NULL,
+            event_id uuid NOT NULL,
+            announcement jsonb NOT NULL CHECK (jsonb_typeof(announcement)='object' AND octet_length(announcement::text)<=1024),
+            expires_at timestamptz NOT NULL,
+            PRIMARY KEY (authority,review_request_id,ask_id)
+        );
+        CREATE INDEX IF NOT EXISTS registry_proposal_review_ask_announcements_expiry
+            ON registry_internal.registry_proposal_review_ask_announcements(authority,expires_at);
         CREATE TABLE IF NOT EXISTS registry_internal.registry_proposal_review_ask_feed_checkpoints (
             authority text PRIMARY KEY CHECK (octet_length(authority) BETWEEN 1 AND 128),
             cursor uuid,
@@ -140,6 +156,9 @@ impl AnswerBody {
         {
             return Err("additions");
         }
+        if self.text.is_none() && self.additions.is_empty() {
+            return Err("text");
+        }
         Ok(())
     }
 }
@@ -197,6 +216,30 @@ mod tests {
     }
 
     #[test]
+    fn empty_wants_still_require_an_answer_content() {
+        assert_eq!(
+            AnswerBody {
+                text: None,
+                additions: vec![]
+            }
+            .validate(&[]),
+            Err("text")
+        );
+        assert!(AnswerBody {
+            text: Some("explanation".into()),
+            additions: vec![]
+        }
+        .validate(&[])
+        .is_ok());
+        assert!(AnswerBody {
+            text: None,
+            additions: vec![Uuid::new_v4()]
+        }
+        .validate(&[])
+        .is_ok());
+    }
+
+    #[test]
     fn document_answers_require_distinct_non_nil_addition_ids() {
         let wants = [ReviewAskWant::Document {}];
         let id = Uuid::new_v4();
@@ -229,7 +272,7 @@ mod tests {
                 additions: vec![]
             }
             .validate(&[]),
-            Ok(())
+            Err("text")
         );
     }
 

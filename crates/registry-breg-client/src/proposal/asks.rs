@@ -59,7 +59,10 @@ impl fmt::Debug for BRegProposalAnswerRequest {
 }
 
 fn valid_answer(text: Option<&str>, additions: &[String], wants: &[BRegProposalAskWant]) -> bool {
-    text.is_none_or(|text| !text.trim().is_empty() && text.len() <= 2000 && !text.contains('\0'))
+    (text.is_some() || !additions.is_empty())
+        && text.is_none_or(|text| {
+            !text.trim().is_empty() && text.len() <= 2000 && !text.contains('\0')
+        })
         && (text.is_some() || !wants.contains(&BRegProposalAskWant::Answer {}))
         && additions.len() <= 32
         && additions.iter().all(|id| canonical_proposal_id(id))
@@ -73,6 +76,9 @@ fn valid_answer(text: Option<&str>, additions: &[String], wants: &[BRegProposalA
 
 impl BRegProposal {
     pub(super) fn validate_asks(&self) -> Result<(), BaseRegistryClientError> {
+        if self.asks.len() > 50 {
+            return Err(refusal());
+        }
         let mut ids = std::collections::BTreeSet::new();
         for ask in &self.asks {
             let asked = proposal_instant(&ask.asked_at).ok_or_else(refusal)?;
@@ -216,5 +222,14 @@ impl BaseRegistryClient {
                 .map_err(|_| invalid())?,
             metadata: response.metadata,
         })
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn an_answer_without_wants_still_needs_content_before_io() {
+        assert!(!valid_answer(None, &[], &[]));
+        assert!(valid_answer(Some("explanation"), &[], &[]));
     }
 }

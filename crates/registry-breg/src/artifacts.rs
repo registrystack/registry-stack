@@ -1572,7 +1572,7 @@ pub(crate) fn proposal_asks_schema(review: bool) -> Value {
             "properties":{"method":{"const":"POST"},"operation":{"const":"answer"},"path":{"type":"string"},"accessProfile":{"type":"string"},"ifMatch":{"type":"string"},"availability":availability_schema()}}}});
     }
     properties["answer"] = answer;
-    json!({"type":"array","items":{"type":"object","additionalProperties":false,"required":required,"properties":properties}})
+    json!({"type":"array","maxItems":crate::contract::MAX_MIRRORED_REVIEW_ASKS,"items":{"type":"object","additionalProperties":false,"required":required,"properties":properties}})
 }
 
 pub(crate) fn proposal_schema_with_additions(enabled: bool) -> Value {
