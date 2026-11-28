@@ -443,11 +443,18 @@ pub(super) async fn dispatch(
                             FailedCheck::ActionGuard,
                         ),
                         // Visibility and the record may have changed since rollback.
-                        // Never turn the private cause into an existence oracle.
-                        _ => crate::correlation::note_refusal(
-                            precondition_failed(),
-                            FailedCheck::ActionGuard,
-                        ),
+                        // Never turn the private cause into an existence oracle:
+                        // count the guard refusal for the operator, and return the
+                        // bare generic 412 with no response RefusalNote so
+                        // development posture cannot distinguish it from an
+                        // unknown target.
+                        _ => {
+                            crate::correlation::record_refusal_check(
+                                FailedCheck::ActionGuard,
+                                &correlation,
+                            );
+                            precondition_failed()
+                        }
                     }
                 }
                 Err(error) => mutation_problem(error),

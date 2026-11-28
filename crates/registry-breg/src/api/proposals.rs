@@ -1177,7 +1177,7 @@ pub(super) async fn transition(
             "",
             service.field_encryption.as_deref(),
         ),
-        Err(MutationError::ProposalGuardFailed(failure)) => crate::correlation::note_refusal(
+        Err(MutationError::ProposalGuardFailed(failure)) => {
             guard_failure_response(
                 &service,
                 &authority,
@@ -1186,9 +1186,8 @@ pub(super) async fn transition(
                 &correlation,
                 *failure,
             )
-            .await,
-            FailedCheck::ActionGuard,
-        ),
+            .await
+        }
         Err(error) => proposal_problem(error),
     }
 }
@@ -1198,7 +1197,10 @@ pub(super) async fn transition(
 /// path and the guard still fails against that disclosed value, exactly the
 /// disclosure rule of an immediate Action. Every other case, including a Record
 /// that changed or moved out of the profile's boundaries since the transaction
-/// rolled back, keeps the generic precondition refusal.
+/// rolled back, keeps the generic precondition refusal without a response
+/// `RefusalNote` (while still counting under `action-guard` for the operator),
+/// so development posture cannot turn the concealed cause into an existence
+/// oracle.
 async fn guard_failure_response(
     service: &HttpService,
     authority: &ProposalAuthority,
@@ -1207,12 +1209,16 @@ async fn guard_failure_response(
     correlation: &RequestCorrelation,
     failure: crate::mutation::ProposalGuardFailure,
 ) -> Response {
+    let concealed_guard = || {
+        crate::correlation::record_refusal_check(FailedCheck::ActionGuard, correlation);
+        mutation_problem(MutationError::PreconditionFailed)
+    };
     let guard = &failure.guard;
     let (Some(entity), Some(boundaries)) = (
         service.registry.entities().get(&guard.entity_id),
         authority.targets.get(&guard.entity_id),
     ) else {
-        return mutation_problem(MutationError::PreconditionFailed);
+        return concealed_guard();
     };
     let observed = super::actions::availability::observe_target(
         service,
@@ -1227,7 +1233,7 @@ async fn guard_failure_response(
     )
     .await;
     let Ok(Some(observed)) = observed else {
-        return mutation_problem(MutationError::PreconditionFailed);
+        return concealed_guard();
     };
     let is_timestamp = entity.fields.get(&guard.field).is_some_and(|field| {
         matches!(
@@ -1243,9 +1249,12 @@ async fn guard_failure_response(
         time::OffsetDateTime::now_utc(),
         is_timestamp,
     ) {
-        return mutation_problem(MutationError::PreconditionFailed);
+        return concealed_guard();
     }
-    crate::correlation::action_guard_failure_response(guard.reason.clone(), guard.label.clone())
+    crate::correlation::note_refusal(
+        crate::correlation::action_guard_failure_response(guard.reason.clone(), guard.label.clone()),
+        FailedCheck::ActionGuard,
+    )
 }
 
 /// Batch transport only: every item retains the scalar context read's current
