@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { RegistryError, Transport, describeError, pageRequestHeader, type Operation } from '../core.ts'
+import { RegistryError, Transport, describeError, registryClientHeader, type Operation } from '../core.ts'
+import * as browser from '../browser.ts'
 import { Client as Minimal, createRegistryClient } from '../generated/breg-minimal.ts'
 import { Client as Documents } from '../generated/documents.ts'
 import { Client as Coordinator } from '../generated/coordinator.ts'
@@ -25,8 +26,9 @@ function recording(answer: () => Response = () => Response.json({})) {
   return { seen, fetch }
 }
 
-test('the page request header is one exported constant', () => {
-  assert.deepEqual(pageRequestHeader, { name: 'Registry-Client', value: 'page' })
+test('the Registry-Client header is one exported constant, also exported for browsers', () => {
+  assert.deepEqual(registryClientHeader, { name: 'Registry-Client', value: 'page' })
+  assert.equal(browser.registryClientHeader, registryClientHeader)
 })
 
 test('without a token the client sends no Authorization and same-origin cookies', async () => {

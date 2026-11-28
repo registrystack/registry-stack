@@ -106,12 +106,16 @@ function queryProfiles(operation: Node, pointer: string): QueryProfile[] | undef
     const sortable = listOf('sortableProperties', 'directions', new Set(['asc', 'desc'])) as QueryProfile['sortable']
     const profile: QueryProfile = { profile: value.profile, maximumPageSize: value.maximumPageSize, allowCount: value.allowCount,
       selectable, filterable, sortable }
-    if (value.requiredFilters !== undefined) {
+    const required = value.requiredFilters
+    if (required !== undefined) {
       const requiredAt = child(at, 'requiredFilters')
-      const required = value.requiredFilters
-      if (!Array.isArray(required) || !required.length || required.some((alternative: unknown) => !Array.isArray(alternative))) {
+      if (!Array.isArray(required) || required.some((alternative: unknown) => !Array.isArray(alternative))) {
         fail(requiredAt, 'expected a list of alternatives, each a list of property names')
       }
+    }
+    // BReg publishes an empty list for a profile that requires no filter.
+    if (Array.isArray(required) && required.length) {
+      const requiredAt = child(at, 'requiredFilters')
       profile.requiredFilters = required.map((alternative: unknown[], index: number) => {
         const alternativeAt = child(requiredAt, String(index))
         if (!alternative.length) fail(alternativeAt, 'expected at least one property')

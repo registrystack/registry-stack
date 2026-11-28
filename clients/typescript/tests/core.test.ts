@@ -46,7 +46,8 @@ test('plain http reaches only loopback, or a private or single-label host with a
     'http://[fe80::1]', 'http://[febf::1]', 'http://registry', 'http://breg:8080/prefix']
   const publicHosts = ['http://example.org', 'http://registry.example.org', 'http://8.8.8.8', 'http://172.32.0.1',
     'http://172.15.255.255', 'http://192.169.0.1', 'http://169.255.0.1', 'http://11.0.0.1', 'http://[2001:db8::1]',
-    'http://[fec0::1]', 'http://[::ffff:10.0.0.1]', 'http://registry.', 'http://4294967295']
+    'http://[fec0::1]', 'http://[::ffff:10.0.0.1]', 'http://registry.', 'http://4294967295',
+    'http://breg.internal', 'http://localhost.example']
   for (const baseUrl of privateHosts) {
     assert.throws(() => new Transport({ baseUrl, token }), /^TypeError: Invalid registry base URL$/u, baseUrl)
     new Transport({ baseUrl, token, allowInsecureHttp: true })

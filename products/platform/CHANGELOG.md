@@ -9,9 +9,10 @@
   generated module exports `createRegistryClient(options)`, and the client it
   returns is typed to that registry's operations. Code that talks to two
   registries renames one import. A base URL is HTTPS, or plain HTTP to a
-  loopback host, or with `allowInsecureHttp` to a private or link-local
-  address or a host name without a dot. Operations that declare `Idempotency-Key`
-  send the caller's key or a generated one. The Messaging and Scheduling
+  loopback host. With `allowInsecureHttp` it may also be plain HTTP to a
+  private or link-local address or to a host name without a dot. Operations
+  that declare `Idempotency-Key` send the caller's key or a generated one.
+  The Messaging and Scheduling
   receipt lookups, listed by contract and route, require the original key.
   A dispatched write whose outcome could not be established
   is marked `outcomeUnknown`. `describeError` returns a fixed sentence chosen by
@@ -28,9 +29,10 @@
   it a client sends no `Authorization` and sends cookies with
   `credentials: 'same-origin'`. With a token it sends `'omit'`. The client
   sends `Registry-Client: page` on every call, from the exported
-  `pageRequestHeader` constant, so a registry on another origin must allow
-  that header for CORS. In page mode any 401 is reason
-  `sign-in-expired` with `outcomeUnknown: false`. A 412 is reason `stale` in
+  `registryClientHeader` constant. Page mode works only on the page's own
+  origin, because no registry answers a cross-origin page call. In page mode
+  any 401 is reason `sign-in-expired` with `outcomeUnknown: false`. A 412 is
+  reason `stale` in
   both modes. Every call, page method, Action and byte transfer takes
   `{ signal }`.
 
@@ -404,6 +406,12 @@
   `localhost.` and `*.localhost` stay refused. A refused static key set
   now says why: `registry-mcp` names the refusal in its startup message, and
   `registry-breg-mcp` logs it, with its startup code unchanged.
+- BREAKING: `registry-platform-httpsec` no longer provides `CorsPolicy` or
+  `CorsValidationError`. No product answers a cross-origin request except the
+  Evidence public check route, which builds its own layer.
+  `products/platform/scripts/check-no-cross-origin.sh` enforces this in CI, and
+  also refuses any `Access-Control-Allow-Credentials`. The tower-http `cors`
+  feature is no longer on the workspace dependency, and Evidence enables it.
 
 ## 0.48.0 - 2026-11-23
 

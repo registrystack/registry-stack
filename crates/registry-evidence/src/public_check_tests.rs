@@ -1615,6 +1615,55 @@ async fn only_the_check_route_is_readable_cross_origin() {
     );
 }
 
+/// A credentialed cross-origin request is answered as the same request
+/// without credentials, and neither it nor its preflight is ever told that
+/// credentials are allowed.
+#[tokio::test]
+async fn a_credentialed_cross_origin_request_is_answered_without_credentials_allowed() {
+    let fixture = public_check_runtime(Authority::RelyingAndCheck).await;
+    fixture.mount_record(NUMBER, record("valid")).await;
+    let server = fixture.http();
+
+    for code in [CODE, "AAAAAAAAAAAAAAAAAAAAAAAA"] {
+        let plain = check(&server, NUMBER, code).await;
+        let credentialed = server
+            .post(PUBLIC_CHECK_ROUTE)
+            .add_header("origin", BROWSER_ORIGIN)
+            .add_header("cookie", "session=canary-cookie-value")
+            .add_header("authorization", "Bearer canary-authorization-value")
+            .json(&check_body(NUMBER, code))
+            .await;
+        assert_eq!(credentialed.status_code(), plain.status_code(), "{code}");
+        let (_, _, plain_body) = comparable(&plain);
+        let (_, _, credentialed_body) = comparable(&credentialed);
+        assert_eq!(credentialed_body, plain_body, "{code}");
+        assert_eq!(
+            header(&credentialed, "access-control-allow-credentials"),
+            None
+        );
+        assert_eq!(
+            header(&credentialed, "access-control-allow-origin"),
+            Some("*")
+        );
+    }
+
+    let preflight = server
+        .method(Method::OPTIONS, PUBLIC_CHECK_ROUTE)
+        .add_header("origin", BROWSER_ORIGIN)
+        .add_header("access-control-request-method", "POST")
+        .add_header(
+            "access-control-request-headers",
+            "content-type, authorization",
+        )
+        .add_header("cookie", "session=canary-cookie-value")
+        .await;
+    assert_eq!(header(&preflight, "access-control-allow-credentials"), None);
+    assert_eq!(
+        header(&preflight, "access-control-allow-headers"),
+        Some("content-type")
+    );
+}
+
 /// Test 19: the route reads no header but `Content-Type`. Canary values in
 /// every other header a browser or proxy sends change neither the answer nor
 /// the miss, reach neither the log nor the audit, and an inbound trace is

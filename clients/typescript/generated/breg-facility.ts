@@ -1,4 +1,4 @@
-// Source SHA-256 54599b2f4259ac113a87024377a9a5d01729837cfdc2a62a456466554de807d3
+// Source SHA-256 d2216ede609675ae3d6fadc656bb5a72454e9e05f20647a36d2051bc37ede48a
 // Unconstrained JSON /paths/~1v1~1records~1directory-entries~1{record_id}/patch/requestBody/content/application~1json-patch+json/schema/items/properties/value
 // Unconstrained JSON /paths/~1v1~1records~1operators~1{record_id}/patch/requestBody/content/application~1json-patch+json/schema/items/properties/value
 import { Transport, type Answer, type CallOptions, type ClientOptions, type JsonValue, type Operation, type Page, type RequestValues, type ResponseVariant, type WireBytes, type WireText } from "../core.ts"

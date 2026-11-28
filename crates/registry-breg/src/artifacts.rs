@@ -4794,6 +4794,7 @@ fn render_query_profile(
             })
         }).collect::<Vec<_>>(),
         "selectorProperties": api_field_names(entity, &operation.selector_fields),
+        "requiredFilters": operation.required_filter_api_names(entity),
         "temporal": operation.temporal.as_ref().map(|temporal| rendered_temporal(entity, temporal))
     });
     if let Some(bbox) = operation

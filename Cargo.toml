@@ -352,7 +352,7 @@ tower = { version = "0.5" }
 tower-lsp-server = { version = "0.23" }
 tree-sitter = { version = "0.27" }
 tree-sitter-yaml = { version = "0.7.2" }
-tower-http = { version = "0.7", features = ["cors", "limit", "request-id", "set-header", "timeout", "trace"] }
+tower-http = { version = "0.7", features = ["limit", "request-id", "set-header", "timeout", "trace"] }
 tracing = { version = "0.1" }
 tracing-subscriber = { version = "0.3", features = ["fmt", "json", "env-filter"] }
 # Typst library-mode rendering. Pinned minor: output bytes and world semantics

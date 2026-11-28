@@ -27,6 +27,16 @@ test('the generator types list options from each query profile', () => {
   assert.match(output, /"records\.site\.list": \(CallOptions & \{ accessProfile\?: never; where\?: \{ "siteCode"\?: /u)
 })
 
+test('an empty requiredFilters list, as BReg publishes for a profile without one, requires no filter', () => {
+  const doc = fixture()
+  const officer = doc.paths['/v1/records/licences'].get['x-registry-queryProfiles']['licence-officer']
+  assert.deepEqual(officer.requiredFilters, [])
+  const output = generate(JSON.stringify(doc), { breg: true })
+  assert.match(output, /accessProfile: "licence-officer"; where\?: \{/u)
+  assert.match(output, /\\"licence-officer\\":\{[^}]*\\"maximumPageSize\\":50/u)
+  assert.doesNotMatch(output, /\\"licence-officer\\":\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\\"requiredFilters\\"/u)
+})
+
 for (const [name, change, pointer] of [
   ['a required filter that is not an equality filter', (doc: any) => {
     doc.paths['/v1/records/licences'].get['x-registry-queryProfiles']['licence-officer'].requiredFilters = [['holderName']]

@@ -4,7 +4,7 @@ export type JsonValue = null | boolean | number | string | JsonValue[] | { [key:
  * The fixed header the client sends on every call, in both modes. The session part in front
  * of a page requires it on every route. Its name and value live only here.
  */
-export const pageRequestHeader = { name: 'Registry-Client', value: 'page' } as const
+export const registryClientHeader = { name: 'Registry-Client', value: 'page' } as const
 
 export interface ClientOptions {
   baseUrl: string | URL
@@ -394,7 +394,7 @@ export class Transport {
         if (['authorization', 'cookie', 'idempotency-key'].includes(key.toLowerCase())) continue
         if (value !== undefined) headers.set(key, String(value))
       }
-      headers.set(pageRequestHeader.name, pageRequestHeader.value)
+      headers.set(registryClientHeader.name, registryClientHeader.value)
       if (idempotencyKey !== undefined) headers.set('idempotency-key', idempotencyKey)
       if (values.accept) headers.set('accept', values.accept)
       let body: BodyInit | undefined

@@ -2527,6 +2527,8 @@ class CiChangesTest(unittest.TestCase):
             ".cargo/config.toml",
             "crates/registry-casework/.cargo/config",
             "products/platform/config-formats.yaml",
+            "products/platform/scripts/check-no-cross-origin.sh",
+            "products/platform/scripts/test_check_no_cross_origin.py",
             "products/platform/scripts/check-yaml-reader-boundary.sh",
             "products/platform/scripts/check-yaml-reader-boundary.py",
             "products/platform/scripts/test_check_yaml_reader_boundary.py",
