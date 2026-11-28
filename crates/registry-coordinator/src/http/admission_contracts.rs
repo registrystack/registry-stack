@@ -34,11 +34,25 @@ fn embed_refs(value: &mut Value, name: &str) {
     }
 }
 
+pub(super) fn webhook_parameters() -> [Value; 3] {
+    [
+        json!({"name":"webhook-id","in":"header","required":true,"schema":{"type":"string","format":"uuid"}}),
+        json!({"name":"webhook-timestamp","in":"header","required":true,"schema":{"type":"string","pattern":"^(0|[1-9][0-9]{0,19})$"}}),
+        json!({"name":"webhook-signature","in":"header","required":true,"schema":{"type":"string","minLength":1}}),
+    ]
+}
+
+pub(super) fn webhook_challenge() -> Value {
+    json!({
+        "description":"Authenticate the exact delivery with the configured Standard Webhooks key.",
+        "schema":{"type":"string","const":super::WEBHOOK_CHALLENGE}
+    })
+}
+
 fn event_path(paths: &mut Map<String, Value>) {
     let mut responses = problem_responses(&[
         P::EventInvalid,
         P::EventUnauthenticated,
-        P::EventSourceUnavailable,
         P::EventTooLarge,
         P::RequestInvalid,
         P::RequestBodyTooLarge,
@@ -57,10 +71,7 @@ fn event_path(paths: &mut Map<String, Value>) {
         P::ServiceUnavailable,
         P::RuntimeFailure,
     ]);
-    responses["401"]["headers"]["WWW-Authenticate"] = json!({
-        "description":"Authenticate the exact canonical event and delivery attempt with the configured source key.",
-        "schema":{"type":"string","const":"Registry-Signature version=\"v1\""}
-    });
+    responses["401"]["headers"]["WWW-Authenticate"] = webhook_challenge();
     responses.insert("204".into(), json!({
         "description":"Run admission is committed, or the exact event was already admitted. Empty Hook response proposes no source mutation.",
         "headers":{"X-Coordinator-Run-Id":{"schema":{"type":"string","format":"uuid"}}}
@@ -68,35 +79,10 @@ fn event_path(paths: &mut Map<String, Value>) {
     let mut parameters = ["workflow", "trigger"].into_iter().map(|name| {
         json!({"name":name,"in":"path","required":true,"schema":{"type":"string","minLength":1,"maxLength":64}})
     }).collect::<Vec<_>>();
-    for (name, schema) in [
-        ("ce-specversion", json!({"const":"1.0"})),
-        ("ce-id", json!({"type":"string","format":"uuid"})),
-        ("ce-source", json!({"type":"string","minLength":1})),
-        ("ce-type", json!({"type":"string","minLength":1})),
-        ("ce-time", json!({"type":"string","format":"date-time"})),
-        ("ce-dataschema", json!({"type":"string","minLength":1})),
-        (
-            "X-Registry-Event-Generation",
-            json!({"type":"string","pattern":"^[1-9][0-9]{0,18}$"}),
-        ),
-        (
-            "X-Registry-Delivery-Attempt",
-            json!({"type":"string","pattern":"^[1-9][0-9]{0,18}$"}),
-        ),
-        (
-            "X-Registry-Delivery-Time",
-            json!({"type":"string","format":"date-time"}),
-        ),
-        (
-            "Idempotency-Key",
-            json!({"type":"string","minLength":1,"maxLength":256}),
-        ),
-    ] {
-        parameters.push(json!({"name":name,"in":"header","required":true,"schema":schema}));
-    }
+    parameters.extend(webhook_parameters());
     paths.insert("/v1/events/{workflow}/{trigger}".into(), json!({"post":{
         "operationId":"admitEvent","summary":"Start a workflow from an authenticated product event",
-        "description":"Accept at most 1048576 canonical JSON bytes, the v1 signable bound, using the platform HookEnvelope and v1 delivery signature; the admitted event value is then held to the 131072-byte structured value profile. Envelope headers must match the body and the authored source, event type and data schema. Delivery time must be within 30 seconds; an older event may be redelivered. The exact source, event identity and trigger bind admission across retries. Every downstream call uses its own product authorization.",
+        "description":"Accept at most 1048576 canonical JSON bytes in a HookEnvelope, then hold the admitted event to the 131072-byte structured value profile. Standard Webhooks signs the webhook ID, Unix timestamp and exact body using the key for the trigger in the URL. The signed timestamp must be within 300 seconds in either direction. The webhook ID must equal the envelope ID, and the envelope must match the configured producer URI and authored event type and data schema. The source URI, event ID and trigger bind admission across retries. Every downstream call uses its own product authorization.",
         "security":[{"eventSource":[]}],"parameters":parameters,
         "requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/HookEnvelope"}}}},
         "responses":responses

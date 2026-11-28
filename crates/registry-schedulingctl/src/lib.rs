@@ -816,7 +816,7 @@ fn classify_failure(error: &anyhow::Error) -> (u8, Value) {
                 "artifact": "runtime-configuration",
                 "path": "destinations.hooks",
                 "message": format!("{error:#}"),
-                "suggestedAction": "Bind every destination the policy hooks name under destinations.hooks, with an hmacSha256KeyRef that resolves to a key of at least 32 bytes, then retry.",
+                "suggestedAction": activation::HOOK_DESTINATIONS_ACTION,
             }),
         );
     }
@@ -1371,13 +1371,23 @@ mod tests {
 
     #[test]
     fn a_hook_destination_apply_cannot_run_is_the_refusal_plan_reports() {
-        let refused = anyhow::Error::new(HookActivationError::InvalidSigningMaterial)
-            .context("activating the candidate policy's hook destinations");
+        let refused = anyhow::Error::new(HookActivationError::SigningMaterial(
+            "destinations.hooks.appointment-events.hmacSha256KeyRef has 65 bytes".to_owned(),
+        ))
+        .context("activating the candidate policy's hook destinations");
         let (exit, diagnostic) = classify_failure(&refused);
         assert_eq!(exit, DOMAIN_REFUSAL_EXIT);
         assert_eq!(diagnostic["code"], activation::HOOK_DESTINATIONS_CODE);
         assert_eq!(diagnostic["artifact"], "runtime-configuration");
         assert_eq!(diagnostic["path"], "destinations.hooks");
+        assert!(diagnostic["message"]
+            .as_str()
+            .unwrap()
+            .contains("destinations.hooks.appointment-events.hmacSha256KeyRef has 65 bytes"));
+        assert_eq!(
+            diagnostic["suggestedAction"],
+            activation::HOOK_DESTINATIONS_ACTION
+        );
     }
 
     #[test]

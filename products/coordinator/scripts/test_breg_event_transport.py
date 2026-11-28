@@ -62,8 +62,9 @@ class EventTransportTests(unittest.TestCase):
                 self.end_headers()
 
         body = b'{ "data": {"recordId": "synthetic-record"} }\n'
-        headers = {"Content-Type": "application/json", "ce-type": "application-created-v1",
-                   "x-registry-signature": "v1=synthetic-signature", "Idempotency-Key": "synthetic-key"}
+        headers = {"Accept": "application/json", "Content-Type": "application/json",
+                   "webhook-id": "synthetic-event", "webhook-timestamp": "1800000000",
+                   "webhook-signature": "v1,synthetic-signature"}
         with local_server(Upstream) as upstream:
             proxy = events.DeliveryProxy({path: upstream + path for path in PATHS})
             try:

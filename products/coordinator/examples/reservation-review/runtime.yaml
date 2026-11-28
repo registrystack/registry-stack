@@ -35,7 +35,7 @@ connections:
       scopes: [casework:review]
     completion:
       recipientBinding: reservation-review-v1
-      bearerTokenRef: secret:file/review-completion-token
+      hmacSha256KeyRef: secret:file/reservation-review-completion-key
     resultCheckSeconds: 900
   catalogue:
     type: scheduling

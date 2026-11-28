@@ -19,10 +19,29 @@ use zeroize::Zeroizing;
 pub const API_VERSION: &str = "id.registrystack.org/formats/coordinator/runtime/v1alpha1";
 pub const KIND: &str = "CoordinatorRuntimeConfig";
 
-const REMOVED_KEYS: &[RemovedKey] = &[RemovedKey {
-    path: "deployment.authentication.jwksSource.kind",
-    replacement: "Write `deployment.authentication.jwksSource.type` with the same value.",
-}];
+const EVENT_KEY_REPLACEMENT: &str = "Move the key under eventSources.<alias>.triggers.<workflow>.<trigger>.hmacSha256KeyRef, one distinct key per trigger.";
+const REMOVED_KEYS: &[RemovedKey] = &[
+    RemovedKey {
+        path: "deployment.authentication.jwksSource.kind",
+        replacement: "Write `deployment.authentication.jwksSource.type` with the same value.",
+    },
+    RemovedKey {
+        path: "eventSources.*.signingKeyRef",
+        replacement: EVENT_KEY_REPLACEMENT,
+    },
+    RemovedKey {
+        path: "eventSources.*.hmacSha256KeyRef",
+        replacement: EVENT_KEY_REPLACEMENT,
+    },
+    RemovedKey {
+        path: "eventSources.*.previousHmacSha256KeyRef",
+        replacement: EVENT_KEY_REPLACEMENT,
+    },
+    RemovedKey {
+        path: "connections.*.completion.bearerTokenRef",
+        replacement: "Replace bearerTokenRef with hmacSha256KeyRef. Casework signs review completions with Standard Webhooks.",
+    },
+];
 
 #[derive(Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -489,8 +508,16 @@ pub struct ReviewCompletionConfig {
         schemars(extend("pattern" = "^[!-~]{1,256}$", "minLength" = 1, "maxLength" = 256))
     )]
     pub recipient_binding: String,
-    /// The bearer token Casework's completion destination sends.
-    pub bearer_token_ref: SecretReference,
+    /// The exact HMAC-SHA-256 key shared with Casework's completion destination.
+    pub hmac_sha256_key_ref: SecretReference,
+    /// Optional previous key accepted during rotation.
+    #[serde(
+        default,
+        deserialize_with = "crate::event_trigger::present_hook_key_reference",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
+    pub previous_hmac_sha256_key_ref: Option<SecretReference>,
 }
 
 /// A completion recipient binding as Casework accepts one.
@@ -874,17 +901,13 @@ impl RuntimeConfig {
                                 "use a recipientBinding no other Casework connection declares, so every completion event names one connection",
                             ));
                         }
-                        let member = format!("{field}.completion.bearerTokenRef");
-                        if self
-                            .secret_providers
-                            .check_reference(&member, completion.bearer_token_ref.as_str())
-                            .is_err()
-                        {
-                            errors.push(config_error(
-                                &member,
-                                "enable the secretProviders entry named by the completion token reference",
-                            ));
-                        }
+                        crate::event_trigger::check_key_references(
+                            &mut errors,
+                            &self.secret_providers,
+                            &format!("{field}.completion"),
+                            &completion.hmac_sha256_key_ref,
+                            completion.previous_hmac_sha256_key_ref.as_ref(),
+                        );
                     }
                 }
                 _ => {}
@@ -895,10 +918,18 @@ impl RuntimeConfig {
 
     pub fn validate_workflow(&self, workflow: &crate::definition::Workflow) -> Result<()> {
         for (id, trigger) in &workflow.event_triggers {
-            if !self.event_sources.contains_key(&trigger.source) {
+            let key = self.event_sources.get(&trigger.source).and_then(|source| {
+                let workflow_id = registry_platform_yaml::LocalId::new(workflow.id.clone()).ok()?;
+                let trigger_id = registry_platform_yaml::LocalId::new(id.clone()).ok()?;
+                source.triggers.get(&workflow_id)?.0.get(&trigger_id)
+            });
+            if key.is_none() {
                 return Err(config_error(
-                    &format!("eventSources.{}", trigger.source),
-                    &format!("configure the source named by event trigger {id}"),
+                    &format!(
+                        "eventSources.{}.triggers.{}.{id}.hmacSha256KeyRef",
+                        trigger.source, workflow.id
+                    ),
+                    "Configure a distinct delivery key for this event trigger.",
                 ));
             }
         }
@@ -1223,6 +1254,15 @@ pub fn runtime_schema() -> Result<String> {
     schema["properties"]["eventSources"] = json!({"type":"object", "maxProperties":16,
         "description":"Optional trusted event producers keyed by the logical IDs used in Workflow triggers.",
         "propertyNames":{"$ref":"#/$defs/LocalId"}, "additionalProperties":{"$ref":"#/$defs/EventSourceConfig"}});
+    schema["$defs"]["EventSourceConfig"]["properties"]["triggers"] = json!({
+        "type":"object", "maxProperties":16,
+        "description":"Keys for event URLs, grouped by workflow ID.",
+        "propertyNames":{"$ref":"#/$defs/LocalId"}, "additionalProperties":{"$ref":"#/$defs/WorkflowTriggerKeys"}
+    });
+    schema["$defs"]["WorkflowTriggerKeys"] = json!({
+        "type":"object", "maxProperties":16,
+        "propertyNames":{"$ref":"#/$defs/LocalId"}, "additionalProperties":{"$ref":"#/$defs/TriggerKeyConfig"}
+    });
     schema["properties"]["database"] = json!({"allOf":[
         {"$ref":"#/$defs/DatabaseConfig"},
         {"properties":{"testOnlyPlaintext":{"const":false}}}

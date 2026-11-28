@@ -530,7 +530,6 @@
               "deployment.refused",
               "evaluation.uncertain",
               "event.invalid",
-              "event.source-unavailable",
               "event.too-large",
               "event.unauthenticated",
               "execution.held",
@@ -593,7 +592,6 @@
               "https://id.registrystack.org/problems/registry-coordinator/deployment/refused",
               "https://id.registrystack.org/problems/registry-coordinator/evaluation/uncertain",
               "https://id.registrystack.org/problems/registry-coordinator/event/invalid",
-              "https://id.registrystack.org/problems/registry-coordinator/event/source-unavailable",
               "https://id.registrystack.org/problems/registry-coordinator/event/too-large",
               "https://id.registrystack.org/problems/registry-coordinator/event/unauthenticated",
               "https://id.registrystack.org/problems/registry-coordinator/execution/held",
@@ -1166,15 +1164,16 @@
         "type": "http"
       },
       "eventSource": {
-        "description": "The platform v1 HMAC delivery signature, bound to the canonical envelope, signed delivery headers, HTTP method and exact request target. The configured event source key is separate from caller bearer tokens.",
+        "description": "Standard Webhooks signature verified by the event key configured for the workflow and trigger in the URL.",
         "in": "header",
-        "name": "X-Registry-Signature",
+        "name": "webhook-signature",
         "type": "apiKey"
       },
       "reviewCompletion": {
-        "description": "The completion credential configured for a Casework review connection, presented with its recipient binding.",
-        "scheme": "bearer",
-        "type": "http"
+        "description": "Standard Webhooks signature verified by the completion key of the connection selected by Registry-Recipient-Binding.",
+        "in": "header",
+        "name": "webhook-signature",
+        "type": "apiKey"
       }
     }
   },
@@ -1718,7 +1717,7 @@
     },
     "/v1/events/{workflow}/{trigger}": {
       "post": {
-        "description": "Accept at most 1048576 canonical JSON bytes, the v1 signable bound, using the platform HookEnvelope and v1 delivery signature; the admitted event value is then held to the 131072-byte structured value profile. Envelope headers must match the body and the authored source, event type and data schema. Delivery time must be within 30 seconds; an older event may be redelivered. The exact source, event identity and trigger bind admission across retries. Every downstream call uses its own product authorization.",
+        "description": "Accept at most 1048576 canonical JSON bytes in a HookEnvelope, then hold the admitted event to the 131072-byte structured value profile. Standard Webhooks signs the webhook ID, Unix timestamp and exact body using the key for the trigger in the URL. The signed timestamp must be within 300 seconds in either direction. The webhook ID must equal the envelope ID, and the envelope must match the configured producer URI and authored event type and data schema. The source URI, event ID and trigger bind admission across retries. Every downstream call uses its own product authorization.",
         "operationId": "admitEvent",
         "parameters": [
           {
@@ -1743,15 +1742,7 @@
           },
           {
             "in": "header",
-            "name": "ce-specversion",
-            "required": true,
-            "schema": {
-              "const": "1.0"
-            }
-          },
-          {
-            "in": "header",
-            "name": "ce-id",
+            "name": "webhook-id",
             "required": true,
             "schema": {
               "format": "uuid",
@@ -1760,73 +1751,18 @@
           },
           {
             "in": "header",
-            "name": "ce-source",
+            "name": "webhook-timestamp",
             "required": true,
             "schema": {
-              "minLength": 1,
+              "pattern": "^(0|[1-9][0-9]{0,19})$",
               "type": "string"
             }
           },
           {
             "in": "header",
-            "name": "ce-type",
+            "name": "webhook-signature",
             "required": true,
             "schema": {
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "ce-time",
-            "required": true,
-            "schema": {
-              "format": "date-time",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "ce-dataschema",
-            "required": true,
-            "schema": {
-              "minLength": 1,
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Registry-Event-Generation",
-            "required": true,
-            "schema": {
-              "pattern": "^[1-9][0-9]{0,18}$",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Registry-Delivery-Attempt",
-            "required": true,
-            "schema": {
-              "pattern": "^[1-9][0-9]{0,18}$",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "X-Registry-Delivery-Time",
-            "required": true,
-            "schema": {
-              "format": "date-time",
-              "type": "string"
-            }
-          },
-          {
-            "in": "header",
-            "name": "Idempotency-Key",
-            "required": true,
-            "schema": {
-              "maxLength": 256,
               "minLength": 1,
               "type": "string"
             }
@@ -1903,9 +1839,9 @@
             "description": "A problem: event.unauthenticated.",
             "headers": {
               "WWW-Authenticate": {
-                "description": "Authenticate the exact canonical event and delivery attempt with the configured source key.",
+                "description": "Authenticate the exact delivery with the configured Standard Webhooks key.",
                 "schema": {
-                  "const": "Registry-Signature version=\"v1\"",
+                  "const": "Registry-Signature scheme=\"standard-webhooks\", version=\"v1\"",
                   "type": "string"
                 }
               }
@@ -2025,7 +1961,6 @@
                         "code": {
                           "enum": [
                             "audit.response-unavailable",
-                            "event.source-unavailable",
                             "service.unavailable"
                           ]
                         }
@@ -2035,7 +1970,7 @@
                 }
               }
             },
-            "description": "A problem: audit.response-unavailable, event.source-unavailable, service.unavailable.",
+            "description": "A problem: audit.response-unavailable, service.unavailable.",
             "headers": {
               "Retry-After": {
                 "description": "Whole seconds to wait before trying again.",
@@ -3052,26 +2987,45 @@
     },
     "/v1/review-completions": {
       "post": {
-        "description": "Casework's completion destination for a review producer connection reports that a review result exists. The event only wakes the step waiting on that request, which then reads the result with the connection's producer credential. Every authentic, well-formed event answers 204 whether or not a step waits on its request.",
+        "description": "Casework's completion destination for a review producer connection reports that a review result exists. The event only wakes the step waiting on that request, which then reads the result with the connection's producer credential. The connection key verifies the signed webhook ID, Unix timestamp and exact body within 300 seconds in either direction. Every authentic, well-formed event answers 204 whether or not a step waits on its request.",
         "operationId": "receiveReviewCompletion",
         "parameters": [
           {
-            "description": "The recipient binding configured for the connection's completion destination.",
+            "description": "Selects the connection that verifies the delivery.",
             "in": "header",
             "name": "Registry-Recipient-Binding",
             "required": true,
             "schema": {
+              "maxLength": 256,
               "minLength": 1,
+              "pattern": "^[!-~]{1,256}$",
               "type": "string"
             }
           },
           {
-            "description": "The event identifier.",
             "in": "header",
-            "name": "Idempotency-Key",
+            "name": "webhook-id",
             "required": true,
             "schema": {
               "format": "uuid",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "webhook-timestamp",
+            "required": true,
+            "schema": {
+              "pattern": "^(0|[1-9][0-9]{0,19})$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "webhook-signature",
+            "required": true,
+            "schema": {
+              "minLength": 1,
               "type": "string"
             }
           }
@@ -3137,9 +3091,9 @@
             "description": "A problem: authentication.refused.",
             "headers": {
               "WWW-Authenticate": {
-                "description": "Bearer authentication challenge for missing or refused credentials.",
+                "description": "Authenticate the exact delivery with the configured Standard Webhooks key.",
                 "schema": {
-                  "const": "Bearer",
+                  "const": "Registry-Signature scheme=\"standard-webhooks\", version=\"v1\"",
                   "type": "string"
                 }
               }

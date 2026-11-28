@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use crate::event_trigger::IngressKeys;
 use registry_casework_client::{
     submission_digest, CaseworkAuth, CaseworkClient, CaseworkClientError, CaseworkProblemCode,
     ReviewCancelRequest, ReviewCreateRequest, ReviewRequestAccepted, ReviewResultResponse,
@@ -13,7 +14,6 @@ use registry_casework_client::{
 use registry_platform_httputil::client::{PrivateKeyJwt, RetryAfter, TokenProvider};
 use serde::Deserialize;
 use serde_json::Value;
-use zeroize::Zeroizing;
 
 use crate::{
     adapters::{refused, retryable, token_failure, valid_key},
@@ -30,27 +30,10 @@ pub(crate) struct CancelReviewInput {
     reason: String,
 }
 
-/// How Casework's completion destination for this producer authenticates:
-/// the bearer token it sends and the recipient binding it names.
+/// Verified delivery keys and routing binding for Casework completions.
 pub(crate) struct CompletionSender {
-    pub(crate) token: Zeroizing<String>,
+    pub(crate) ingress: IngressKeys,
     pub(crate) recipient: String,
-}
-
-impl CompletionSender {
-    /// Both values must match, each compared in time that depends only on
-    /// their lengths.
-    fn matches(&self, token: &str, recipient: &str) -> bool {
-        let token_matches = registry_platform_crypto::mac::constant_time_eq(
-            self.token.as_bytes(),
-            token.as_bytes(),
-        );
-        let recipient_matches = registry_platform_crypto::mac::constant_time_eq(
-            self.recipient.as_bytes(),
-            recipient.as_bytes(),
-        );
-        token_matches && recipient_matches
-    }
 }
 
 pub(crate) struct CaseworkConnection {
@@ -85,10 +68,8 @@ impl CaseworkConnection {
         self.result_check_seconds
     }
 
-    pub(crate) fn completion_matches(&self, token: &str, recipient: &str) -> bool {
-        self.completion
-            .as_ref()
-            .is_some_and(|sender| sender.matches(token, recipient))
+    pub(crate) fn completion(&self) -> Option<&CompletionSender> {
+        self.completion.as_ref()
     }
 
     /// Read the result of an accepted request. The client holds a 200 answer

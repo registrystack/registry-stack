@@ -48,7 +48,7 @@ async fn execute(cli: Cli) -> Result<()> {
     let d = deployment::config(&runtime)?;
     let workflows = Arc::new(deployment::load_workflows(d)?);
     workflows.validate(&runtime)?;
-    check_event_ingress_keys(&runtime, cli.recovery_only)?;
+    let event_keys = event_ingress_keys(&runtime, cli.recovery_only)?;
     let authenticator = Arc::new(
         d.authentication
             .authenticator(&runtime.secret_providers, d.local())
@@ -65,7 +65,8 @@ async fn execute(cli: Cli) -> Result<()> {
     } else {
         deployment::check_serving(&store, &runtime, workflows.digest()).await?;
     }
-    let adapters: Arc<dyn AdapterSet> = Arc::new(HttpAdapters::new(&runtime)?);
+    let adapters: Arc<dyn AdapterSet> =
+        Arc::new(HttpAdapters::with_event_keys(&runtime, event_keys)?);
     let worker = Worker::new(store.clone(), adapters.clone());
     let listener = tokio::net::TcpListener::bind(d.listener.bind.socket_addr())
         .await
@@ -203,11 +204,14 @@ async fn calendar_loop<S, SF>(
 
 /// Recovery disables event intake, so unavailable ingress secrets must not
 /// prevent an operator from inspecting and reconciling retained work.
-fn check_event_ingress_keys(runtime: &RuntimeConfig, recovery_only: bool) -> Result<()> {
+fn event_ingress_keys(
+    runtime: &RuntimeConfig,
+    recovery_only: bool,
+) -> Result<crate::event_trigger::EventKeys> {
     if recovery_only {
-        Ok(())
+        Ok(crate::event_trigger::EventKeys::new())
     } else {
-        crate::event_trigger::check_keys(runtime)
+        crate::event_trigger::resolve_keys(runtime)
     }
 }
 
@@ -410,13 +414,13 @@ mod tests {
                     "signingKeyRef":"secret:file/client-key","resource":"urn:example:registry","scopes":["records:read"]}}},
             "eventSources":{"registry":{
                 "source":"urn:example:synthetic-event-source",
-                "signingKeyRef":"secret:file/unavailable-event-key"
+                "triggers":{"workflow":{"trigger":{"hmacSha256KeyRef":"secret:file/unavailable-event-key"}}}
             }}
         }))
         .unwrap();
         runtime.validate().unwrap();
-        assert!(check_event_ingress_keys(&runtime, false).is_err());
-        check_event_ingress_keys(&runtime, true).unwrap();
+        assert!(event_ingress_keys(&runtime, false).is_err());
+        event_ingress_keys(&runtime, true).unwrap();
     }
 
     fn increment(counter: &AtomicUsize) {

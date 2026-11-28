@@ -14,6 +14,7 @@ use std::time::{Duration, SystemTime};
 
 use registry_platform_canonical_json::canonicalize_json;
 use registry_platform_config::SecretResolver;
+use registry_platform_crypto::delivery_signature::DeliveryKeyError;
 use registry_platform_dispatch::postgres::PooledClient;
 use registry_platform_hooks::delivery::{
     activate_url_hook_destinations, hook_audit_entry, insert_delivery, verify_active_package,
@@ -48,6 +49,9 @@ use crate::config::{
 };
 use crate::store::{activation_layout, ClaimRow, PostgresStore};
 
+pub(crate) const CURRENT_KEY_MEMBER: &str = "hmacSha256KeyRef";
+pub(crate) const PREVIOUS_KEY_MEMBER: &str = "previousHmacSha256KeyRef";
+
 const DESTINATION_BINDING_SCHEMA: &str = "registry.scheduling-hook-destinations/v1";
 const COMPILED_HOOK_SCHEMA: &str = "registry.scheduling-hooks/v1";
 const DATA_SCHEMA_BINDING: &str = "registry.scheduling-hook-data/v1";
@@ -67,7 +71,7 @@ const IDENTITY_LOCK_TIMEOUT_MS: u32 = 5_000;
 const _: () = assert!(MAXIMUM_PAYLOAD_BYTES <= MAX_DESTINATION_REQUEST_BODY_BYTES);
 
 /// Value-free refusal from hook compilation or deployment activation.
-#[derive(Clone, Copy, Debug, Eq, PartialEq, thiserror::Error)]
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum HookActivationError {
     #[error("the Scheduling hook declaration is invalid")]
     InvalidDeclaration,
@@ -91,8 +95,8 @@ pub enum HookActivationError {
     InvalidDestination,
     #[error("a Scheduling hook destination widens the fixed delivery budget")]
     DeliveryBudgetWidening,
-    #[error("a Scheduling hook signing secret is unavailable or invalid")]
-    InvalidSigningMaterial,
+    #[error("{0}")]
+    SigningMaterial(String),
     #[error("the Scheduling hook runtime identity is invalid")]
     InvalidIdentity,
 }
@@ -293,18 +297,20 @@ impl ActivatedHooks {
         self.compiled.schema_fingerprint()
     }
 
-    /// Compile `declarations` and resolve every destination they name with
-    /// its signing material, as [`Self::activate`] does, without a runtime
-    /// identity, and keep nothing. Operator tooling reports with it that a
-    /// candidate's hooks cannot run before anything is planned or applied.
-    pub fn check_destinations(
+    /// Compile the hook declarations and activate every configured binding
+    /// without a runtime identity. Plan uses these bindings to check the
+    /// same signing keys a runtime would hold.
+    pub fn activate_destination_bindings(
         declarations: &[HookDeclaration],
         configured: &BTreeMap<String, UrlHookDestinationConfig>,
         secrets: &SecretResolver,
-    ) -> Result<(), HookActivationError> {
+    ) -> Result<ActivatedUrlHookDestinations, HookActivationError> {
         let compiled = CompiledHooks::compile(declarations)?;
-        activate_destinations(&compiled.destination_ids, configured, secrets)?;
-        Ok(())
+        activate_destinations(&compiled.destination_ids, configured, secrets)
+    }
+
+    pub(crate) fn destination_bindings(&self) -> &ActivatedUrlHookDestinations {
+        &self.destinations
     }
 
     #[must_use]
@@ -569,12 +575,67 @@ fn activation_error(error: UrlHookActivationError) -> HookActivationError {
             HookActivationError::DeliveryBudgetWidening
         }
         UrlHookActivationError::InvalidDestination => HookActivationError::InvalidDestination,
-        UrlHookActivationError::SigningKeyUnavailable { .. }
-        | UrlHookActivationError::InvalidSigningKey { .. }
-        | UrlHookActivationError::RepeatedSigningKey { .. } => {
-            HookActivationError::InvalidSigningMaterial
+        UrlHookActivationError::SigningKeyUnavailable {
+            destination,
+            member,
+            reason,
+        } => HookActivationError::SigningMaterial(format!(
+            "destinations.hooks.{destination}.{member} could not be resolved: {reason}. {}",
+            reason.suggested_action()
+        )),
+        UrlHookActivationError::InvalidSigningKey {
+            destination,
+            member,
+            length,
+            trailing_newline,
+            reason,
+        } => {
+            let path = format!("destinations.hooks.{destination}.{member}");
+            let message = if reason == DeliveryKeyError::PreviousEqualsCurrent {
+                repeated_rotation_key(
+                    &path,
+                    &format!("destinations.hooks.{destination}.{CURRENT_KEY_MEMBER}"),
+                )
+            } else {
+                invalid_delivery_key(&path, length, trailing_newline, reason)
+            };
+            HookActivationError::SigningMaterial(message)
+        }
+        UrlHookActivationError::RepeatedSigningKey { first, second } => {
+            HookActivationError::SigningMaterial(repeated_delivery_key(
+                &format!("destinations.hooks.{first}"),
+                &format!("destinations.hooks.{second}"),
+            ))
         }
     }
+}
+
+pub(crate) fn invalid_delivery_key(
+    path: &str,
+    length: usize,
+    trailing_newline: bool,
+    error: DeliveryKeyError,
+) -> String {
+    let action = match error {
+        DeliveryKeyError::TooShort { .. } | DeliveryKeyError::TooLong { .. } => {
+            "Supply 32 to 64 exact key bytes."
+        }
+        DeliveryKeyError::SecretText => "Supply the exact key bytes without the whsec_ encoding.",
+        DeliveryKeyError::PreviousEqualsCurrent => unreachable!("rotation uses its own refusal"),
+    };
+    format!("{path} has {length} bytes (trailing newline: {trailing_newline}). {action}")
+}
+
+pub(crate) fn repeated_delivery_key(first: &str, second: &str) -> String {
+    format!(
+        "{first} and {second} resolve to the same key bytes. Give {second} its own key by writing 32 new random bytes to another secret and referencing it there."
+    )
+}
+
+pub(crate) fn repeated_rotation_key(previous: &str, current: &str) -> String {
+    format!(
+        "{previous} holds the same bytes as {current}. To rotate, write 32 new random bytes to the secret {current} references and keep the old bytes behind {previous}."
+    )
 }
 
 /// The delays between attempts: from 30 seconds, doubling, capped at one
@@ -1124,6 +1185,77 @@ mod tests {
         assert_eq!(retry_delays_ms(), expected);
     }
 
+    fn hook_key_refusal(second_key: &[u8], use_previous: bool) -> String {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        for (name, key) in [
+            ("event-key", [0x5a; 32].as_slice()),
+            ("mirror-key", second_key),
+        ] {
+            let path = directory.path().join(name);
+            std::fs::write(&path, key).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+        let secrets = SecretResolver::new([SecretProvider::File], directory.path()).unwrap();
+        let mut configured: DestinationsConfig = serde_json::from_value(json!({"hooks": {
+            "appointment-events": {
+                "url": "https://events.example.test/scheduling",
+                "hmacSha256KeyRef": "secret:file/event-key"
+            },
+            "audit-mirror": {
+                "url": "https://events.example.test/mirror",
+                "hmacSha256KeyRef": "secret:file/mirror-key"
+            }
+        }}))
+        .unwrap();
+        if use_previous {
+            let mirror = configured.hooks.get_mut("audit-mirror").unwrap();
+            mirror.previous_hmac_sha256_key_ref = Some(mirror.hmac_sha256_key_ref.clone());
+        }
+        activate_destinations(&BTreeSet::new(), &configured.hooks, &secrets)
+            .expect_err("hook signing material is refused")
+            .to_string()
+    }
+
+    #[test]
+    fn a_repeated_hook_key_names_both_destinations_and_the_key_recipe() {
+        let error = hook_key_refusal(&[0x5a; 32], false);
+        let first = "destinations.hooks.appointment-events.hmacSha256KeyRef";
+        let second = "destinations.hooks.audit-mirror.hmacSha256KeyRef";
+        assert_eq!(error, format!(
+            "{first} and {second} resolve to the same key bytes. Give {second} its own key by writing 32 new random bytes to another secret and referencing it there."
+        ));
+    }
+
+    #[test]
+    fn an_observer_previous_key_equal_to_its_current_key_names_both_paths_and_rotation() {
+        let error = hook_key_refusal(&[0x5b; 32], true);
+        let previous = "destinations.hooks.audit-mirror.previousHmacSha256KeyRef";
+        let current = "destinations.hooks.audit-mirror.hmacSha256KeyRef";
+        assert_eq!(error, format!(
+            "{previous} holds the same bytes as {current}. To rotate, write 32 new random bytes to the secret {current} references and keep the old bytes behind {previous}."
+        ));
+    }
+
+    #[test]
+    fn invalid_hook_keys_name_the_path_size_newline_and_action_once() {
+        let mut key = [0x5b; 65];
+        key[64] = b'\n';
+        let mut encoded = [0x5b; 32];
+        encoded[..6].copy_from_slice(b"whsec_");
+        let path = "destinations.hooks.audit-mirror.hmacSha256KeyRef";
+        assert_eq!(
+            hook_key_refusal(&key, false),
+            format!(
+                "{path} has 65 bytes (trailing newline: true). Supply 32 to 64 exact key bytes."
+            )
+        );
+        assert_eq!(hook_key_refusal(&encoded, false), format!(
+            "{path} has 32 bytes (trailing newline: false). Supply the exact key bytes without the whsec_ encoding."
+        ));
+    }
+
     /// The binding digests a deployed Scheduling runtime records with every
     /// captured delivery. A retained delivery is refused once its recorded
     /// digest no longer matches the activated destination, so these values
@@ -1137,6 +1269,10 @@ mod tests {
         std::fs::write(&key_path, [0x5a; 32]).expect("write the test hook key");
         std::fs::set_permissions(&key_path, std::fs::Permissions::from_mode(0o600))
             .expect("restrict the test hook key");
+        let mirror_path = directory.path().join("mirror-key");
+        std::fs::write(&mirror_path, [0x5b; 32]).expect("write the test mirror key");
+        std::fs::set_permissions(&mirror_path, std::fs::Permissions::from_mode(0o600))
+            .expect("restrict the test mirror key");
         let secrets = SecretResolver::new([SecretProvider::File], directory.path())
             .expect("the test secret resolver");
         let configured: DestinationsConfig = serde_json::from_value(json!({"hooks": {
@@ -1146,7 +1282,7 @@ mod tests {
             },
             "audit-mirror": {
                 "url": "http://127.0.0.1:8080/hooks",
-                "hmacSha256KeyRef": "secret:file/hook-key",
+                "hmacSha256KeyRef": "secret:file/mirror-key",
                 "attemptTimeoutMilliseconds": 250,
                 "maximumAttempts": 3,
             },
@@ -1159,7 +1295,7 @@ mod tests {
 
         assert_eq!(
             activated.binding_digest,
-            "sha256:6021194b5df3b34eeb31b21c8b3ef448f2d639d3e8393d13b98a8276b5411df0"
+            "sha256:63f9ba0e4c8368aa0a5f82253a3523ed604c0553b8f39c7e349b5277fc962782"
         );
         assert_eq!(
             activated.bindings["appointment-events"].binding_digest(),
@@ -1167,7 +1303,7 @@ mod tests {
         );
         assert_eq!(
             activated.bindings["audit-mirror"].binding_digest(),
-            "sha256:dd0b35e51274ab6a1d2456e9b0520acdf5b68e720a352d0d4819f41090ff7d97"
+            "sha256:2f321a61540105f154d771348140d9275e1a0e2eed721f6d593a0a59f5babc9e"
         );
     }
 
@@ -1243,7 +1379,7 @@ mod tests {
             if configured {
                 accepted += 1;
                 assert!(
-                    matches!(activated, Err(HookActivationError::InvalidSigningMaterial)),
+                    matches!(activated, Err(HookActivationError::SigningMaterial(_))),
                     "activation refused {id:?} {config:?} for its budget, which the configuration accepts"
                 );
             } else {

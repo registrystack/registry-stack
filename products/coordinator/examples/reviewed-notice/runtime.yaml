@@ -38,7 +38,7 @@ connections:
       scopes: [casework:review]
     completion:
       recipientBinding: coordinator-v1
-      bearerTokenRef: secret:file/review-completion-token
+      hmacSha256KeyRef: secret:file/reviewed-notice-completion-key
     resultCheckSeconds: 900
   notices:
     type: messaging

@@ -327,6 +327,33 @@ impl Workflows {
         for package in self.packages.values() {
             runtime.validate_workflow(&package.definition.workflow)?;
         }
+        for (alias, source) in &runtime.event_sources {
+            for (workflow, triggers) in &source.triggers {
+                let package = self.get(workflow.as_str());
+                for trigger in triggers.0.keys() {
+                    let deployed = package.and_then(|package| {
+                        package
+                            .definition
+                            .workflow
+                            .event_triggers
+                            .get(trigger.as_str())
+                    });
+                    if deployed.is_none_or(|trigger| trigger.source != *alias) {
+                        let field = format!(
+                            "eventSources.{alias}.triggers.{workflow}.{trigger}.hmacSha256KeyRef"
+                        );
+                        return Err(CoordinatorError::new(
+                            "coordinator.event.configuration",
+                            "the event trigger configuration was refused",
+                        )
+                        .at("runtime.yaml", format!("/{}", field.replace('.', "/")))
+                        .suggest(format!(
+                            "Remove {field} or deploy the corresponding trigger bound to {alias}."
+                        )));
+                    }
+                }
+            }
+        }
         Ok(())
     }
 }

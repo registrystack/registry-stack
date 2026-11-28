@@ -119,7 +119,8 @@ impl UrlDestination {
         &self.request_target
     }
 
-    pub(super) fn keys(&self) -> &DeliveryKeys {
+    /// Signing keys for comparison across destinations, with their bytes kept private.
+    pub fn keys(&self) -> &DeliveryKeys {
         &self.keys
     }
 

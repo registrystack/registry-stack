@@ -336,7 +336,7 @@ Keep the project runtime's `secretProviders`, `database.runtimeUrlRef`, `namespa
 | --- | --- |
 | `namespace` | The deployment's SQL namespace, `coordinator_` followed by lowercase letters, digits, or `_`. |
 | `secretProviders` | Where references resolve: `secret:file/<name>` under `file.root`, and `secret:env/<NAME>` only when `environment: {}` is present. |
-| `eventSources` | Optional trusted producers whose signed events start runs, each with its `source` URI and an HMAC `signingKeyRef`. |
+| `eventSources` | Optional trusted producers whose signed events start runs, each with its `source` URI and distinct HMAC keys under `triggers.<workflow>.<trigger>`. |
 | `deployment.databaseId` | The deployment's durable identity; a mismatch refuses startup and apply. |
 | `deployment.runtimeRole` | The runtime role, matching the role in `database.runtimeUrlRef`. |
 | `deployment.packages` | One `root` and `expectedDigest` per workflow, up to sixteen. |
@@ -421,6 +421,19 @@ Coordinator does not check that a record, subject, or recipient identifier in th
     crates/registry-coordinator/tests/deployment_surface.rs scope_claim;
     products/coordinator/generated/runtime/runtime.schema.json ClientPolicy. */}
 
+### Configure signed product events
+
+Under each `eventSources.<alias>`, set the producer URI in `source` and put the delivery key for each URL under `triggers.<workflow>.<trigger>.hmacSha256KeyRef`.
+Generate a separate key file for each trigger and give the same file to that trigger's sender.
+
+```sh
+(umask 077 && openssl rand -hex 32 | tr -d '\n' > key)
+```
+
+Coordinator reads these files at startup and refuses keys reused by any trigger or Casework completion connection.
+To rotate a trigger key, keep its current reference fixed, put the new bytes behind it, and supply the old bytes via `previousHmacSha256KeyRef`.
+Restart the receiver to load the new keys.
+
 ### Let Casework wake waiting runs
 
 A run waiting on a Casework review reads the result every `resultCheckSeconds`, from 60 to 86,400 and 900 by default.
@@ -435,17 +448,17 @@ connections:
     # baseUrl, profile, authorization as for any Casework connection
     completion:
       recipientBinding: coordinator-v1
-      bearerTokenRef: secret:file/review-completion-token
+      hmacSha256KeyRef: secret:file/review-completion-key
     resultCheckSeconds: 900
 ```
 
 - **`producer`** is the producer's key under the Casework project's `trustedProducers`.
   That entry's `completion.destinationId` names a destination, and its `completion.recipientBinding` repeats the binding in the next block.
 - **`recipientBinding`** is 1 to 256 visible ASCII characters, without spaces, and must differ between Casework connections; `check` refuses a duplicate.
-- **`bearerTokenRef`** names a token you generate, of at most 4096 bytes, as visible ASCII such as 32 random bytes in hexadecimal:
+- **`hmacSha256KeyRef`** names 32 to 64 exact key bytes. Generate a dedicated key file for this completion and give the same file to its Casework sender.
 
   ```sh
-  (umask 077 && openssl rand -hex 32 | tr -d '\n' > /run/registry-coordinator/secrets/review-completion-token)
+  (umask 077 && openssl rand -hex 32 | tr -d '\n' > /run/registry-coordinator/secrets/review-completion-key)
   ```
 
 In the Casework project, the producer's `completion` block names a destination and the same recipient binding:
@@ -464,27 +477,26 @@ trustedProducers:
       recipientBinding: coordinator-v1
 ```
 
-In the Casework runtime file, `reviewCompletionDestinations.<destinationId>` binds that destination to the Coordinator's route and to Casework's own reference to the same token.
-Present it as a bearer token with `bearerTokenRef` or `auth: {secretRef}`, not `auth` with a custom header; Coordinator accepts no custom header.
+In the Casework runtime file, `reviewCompletionDestinations.<destinationId>` binds that destination to the Coordinator's route and to Casework's own reference to the same key file.
 
 ```yaml
 reviewCompletionDestinations:
   coordinator:
     url: https://coordinator.example.org/v1/review-completions
-    bearerTokenRef: secret:file/coordinator-completion-token
+    hmacSha256KeyRef: secret:file/review-completion-key
 ```
 
 [Completion destinations](../casework-retention/#completion-destinations) describes those keys, including the delivery bounds `attemptTimeoutMilliseconds`, `maximumAttempts`, and `retryDelaySeconds`.
 The [reviewed notice example](https://github.com/registrystack/registry-stack/tree/main/products/coordinator/examples) lists the full set of Casework prerequisites for one review producer.
 
 Coordinator accepts Casework's completion events at `POST /v1/review-completions` on the service listener.
-It finds the connection by the `Authorization: Bearer` token and the `registry-recipient-binding` header together, comparing the token in constant time.
-It refuses any other sender with HTTP 401 `authentication.refused` before reading the body, including a request that lacks either value or whose pair matches no connection.
-An authenticated event must:
+The `Registry-Recipient-Binding` header selects the connection. Its configured key verifies the Standard Webhooks signature over the webhook ID, Unix timestamp, and exact body.
+An unknown binding or a refused signature answers HTTP 401 `authentication.refused`. The signed timestamp must be within 300 seconds in either direction.
+The body limit is 2048 bytes. A larger body answers HTTP 413 `request.body-too-large`. An authenticated event must meet these requirements:
 
-- be `application/json` and at most 2048 bytes;
+- use exactly `application/json`;
 - name non-nil identifiers;
-- repeat its `eventId` as the `idempotency-key` header;
+- repeat its `eventId` as the `webhook-id` header;
 - carry a `completedAt` no older than 365 days and no more than 5 minutes ahead of the Coordinator's clock.
 
 Anything else answers HTTP 400 `request.invalid` or 415 `request.unsupported-media-type`.
@@ -493,7 +505,7 @@ An event only brings forward the next result read of a run that waits; it never 
 Without a `completion` block the route refuses every event, so lower `resultCheckSeconds` when events cannot reach Coordinator.
 
 A live run's binding includes `producer` but neither `completion` nor `resultCheckSeconds`.
-You can change either, or rotate the token, while runs wait: write the new token on both sides and restart each service.
+You can change either while runs wait. To rotate a completion key, keep the current reference fixed, write the new bytes behind it, and make the old bytes available using `previousHmacSha256KeyRef`. Restart both services to load the new keys.
 Changing `producer` is a binding change that startup refuses while runs use it.
 
 Check the file offline; it reads no credential and contacts no endpoint:
@@ -773,12 +785,12 @@ They expose every label value from the first scrape.
   `maybe-sent` is an attempt whose effect is uncertain and that waits for an operator.
   `transient` also counts a `wait-for` read that failed and left its wait open.
   `unavailable` is an attempt that ended in an internal error, such as an unreadable store, before the step answered.
-- An authentication refusal is a bearer credential refused before a caller is resolved.
-  `refused` is a missing, malformed, or unverified token, or a completion event without a configured completion token and recipient binding.
+- An authentication refusal records a rejected caller credential or signed completion.
+  `refused` covers a missing, malformed, or unverified token and a completion with a refused signature or recipient binding.
   `policy` is a verified token no caller policy admits, and `unavailable` means the token verifier cannot answer.
   A resolved caller refused an action is not counted here, but `coordinator_request_refusals_total` counts it.
 - `coordinator_request_refusals_total` counts every refused request under the check that refused it, and no label carries caller text.
-  It covers a refused credential, a policy denial after authentication, a refused signed event delivery or completion callback, a key source the service cannot reach or use (the token verifier's keys or the signed-event key), and a run the caller cannot see.
+  It covers a refused credential, a policy denial after authentication, an event delivery refused under the key configured for its trigger URL, a refused completion callback, a key source the service cannot reach or use (the token verifier's keys), and a run the caller cannot see.
   Each refusal also writes one `request refused` log line with `failed_check`, at most five per check per minute.
 
 `coordinator_dispatch_jobs` is read from the database on each scrape.
@@ -1340,7 +1352,7 @@ Keep the supporting evidence under institutional custody; false or omitted attes
 {/* Evidence: crates/registry-coordinator/src/cli.rs RestoreHold, CompleteExecutionRecovery,
     ReleaseRestoreHold, ReleaseAdmissionHold;
     crates/registry-coordinator/src/service.rs recovery_only (worker poll skipped,
-    check_event_ingress_keys);
+    event_ingress_keys);
     crates/registry-coordinator/src/http.rs recovery_only (admissions refused);
     crates/registry-coordinator/src/store/recovery.rs restore_hold, admissions_hold. */}
 

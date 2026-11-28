@@ -2,31 +2,28 @@
 //! Authenticated committed product events admitted into the ordinary Run machine.
 //!
 //! Products own event capture and disclosure. A reviewed trigger names one exact
-//! source, event contract and typed mapping; deployment configuration supplies
-//! only that source's authentication. Neither the event nor its signature grants
-//! authority for a later product call.
+//! source, event contract and typed mapping. Deployment configuration supplies
+//! a distinct delivery key for each trigger URL. Authority for later product
+//! calls comes from the receiving product.
 
-use std::{
-    collections::BTreeMap,
-    time::{Duration, SystemTime},
-};
+use std::{collections::BTreeMap, time::SystemTime};
 
 use axum::{
     body::Bytes,
-    extract::{OriginalUri, Path, State},
-    http::{HeaderMap, HeaderValue, Method, StatusCode},
+    extract::{Path, State},
+    http::{HeaderMap, HeaderValue, StatusCode},
     response::{IntoResponse, Response},
 };
 use registry_platform_authcommon::FailedCheck;
-use registry_platform_config::{sha256_uri, SecretProvidersConfig, SecretReference};
-use registry_platform_crypto::delivery_signature::{MAX_BODY_BYTES, MIN_HMAC_SHA256_KEY_BYTES};
+use registry_platform_config::{
+    sha256_uri, SecretProvidersConfig, SecretReference, SecretResolver,
+};
+use registry_platform_crypto::delivery_signature::{
+    DeliveryKey, DeliveryKeyError, DeliveryKeys, DeliverySignatureError, MAX_BODY_BYTES,
+};
 use registry_platform_dispatch::idempotency_key;
-use registry_platform_hooks::{
-    receiver::{
-        verify_delivery as verify_signed_delivery, DeliveryFreshness, ReceiverError,
-        SignedDelivery, VerifiedDelivery,
-    },
-    EnvelopeLimits, HookEnvelope,
+use registry_platform_hooks::receiver::{
+    verify_hook_delivery, DeliveryFreshness, HookDelivery, HookDeliveryError, VerifiedHookDelivery,
 };
 use registry_platform_yaml::{ExternalId, LocalId};
 use serde::{Deserialize, Serialize};
@@ -39,13 +36,9 @@ use crate::{
     CoordinatorError, Result,
 };
 
-/// The Version 1 signable bound, so every event a producer can sign can be
-/// verified. The admitted event value is then held to the structured-value
-/// profile.
+/// Signed event bodies are bounded to 1 MiB. Admitted values also fit the
+/// structured-value profile.
 pub const MAXIMUM_EVENT_BYTES: usize = MAX_BODY_BYTES;
-/// Delivery time is refreshed by the producer for every attempt. Event commit
-/// time is immutable and may be older after an outage or operator replay.
-pub const DELIVERY_SKEW: Duration = Duration::from_secs(30);
 const EVENT_KEY_DOMAIN: &[u8] = b"registry-coordinator-event-start/v1";
 const EVENT_OWNER_DOMAIN: &[u8] = b"registry-coordinator-event-owner/v1";
 
@@ -56,8 +49,157 @@ const EVENT_OWNER_DOMAIN: &[u8] = b"registry-coordinator-event-owner/v1";
 pub struct EventSourceConfig {
     /// Exact absolute producer URI that signed event envelopes must declare.
     pub source: ExternalId,
-    /// Protected reference to the raw HMAC-SHA-256 key, at least 32 bytes.
-    pub signing_key_ref: SecretReference,
+    /// Workflow IDs and trigger names identify the keys for each event URL.
+    #[cfg_attr(feature = "schema", schemars(extend("maxProperties" = 16)))]
+    pub triggers: BTreeMap<LocalId, WorkflowTriggerKeys>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(transparent)]
+pub struct WorkflowTriggerKeys(
+    #[cfg_attr(feature = "schema", schemars(extend("maxProperties" = 16)))]
+    pub  BTreeMap<LocalId, TriggerKeyConfig>,
+);
+
+/// Standard Webhooks keys for one event trigger URL.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TriggerKeyConfig {
+    /// Reference to 32 to 64 exact key bytes shared only with this trigger's sender.
+    pub hmac_sha256_key_ref: SecretReference,
+    /// Optional previous key accepted during rotation.
+    #[serde(
+        default,
+        deserialize_with = "present_hook_key_reference",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[cfg_attr(feature = "schema", schemars(with = "SecretReference"))]
+    pub previous_hmac_sha256_key_ref: Option<SecretReference>,
+}
+
+pub(crate) fn present_hook_key_reference<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<SecretReference>, D::Error> {
+    SecretReference::deserialize(deserializer).map(Some)
+}
+
+/// Resolved Standard Webhooks keys and the operator paths that identify them.
+pub(crate) struct IngressKeys {
+    pub keys: DeliveryKeys,
+    path: String,
+    previous_path: String,
+}
+
+pub(crate) type EventKeys = BTreeMap<(LocalId, LocalId), IngressKeys>;
+
+impl IngressKeys {
+    pub(crate) fn resolve(
+        resolver: &SecretResolver,
+        path: String,
+        current: &SecretReference,
+        previous: Option<&SecretReference>,
+        refuse: fn(&str, &str) -> CoordinatorError,
+    ) -> Result<Self> {
+        let current_path = format!("{path}.hmacSha256KeyRef");
+        let previous_path = format!("{path}.previousHmacSha256KeyRef");
+        let current = resolve_key(resolver, &current_path, current, refuse)?;
+        let previous = previous
+            .map(|reference| resolve_key(resolver, &previous_path, reference, refuse))
+            .transpose()?;
+        let keys = DeliveryKeys::new(current, previous).map_err(|_| {
+            refuse(
+                &previous_path,
+                &format!("{previous_path} holds the same bytes as {current_path}. To rotate, write 32 new random bytes to the secret {current_path} references and keep the old bytes behind {previous_path}."),
+            )
+        })?;
+        Ok(Self {
+            keys,
+            path: current_path,
+            previous_path,
+        })
+    }
+
+    pub(crate) fn labelled(&self) -> impl Iterator<Item = (&str, &DeliveryKey)> {
+        std::iter::once((self.path.as_str(), self.keys.current())).chain(
+            self.keys
+                .previous()
+                .map(|key| (self.previous_path.as_str(), key)),
+        )
+    }
+}
+
+fn resolve_key(
+    resolver: &SecretResolver,
+    path: &str,
+    reference: &SecretReference,
+    refuse: fn(&str, &str) -> CoordinatorError,
+) -> Result<DeliveryKey> {
+    let secret = resolver
+        .resolve_binary_reference(reference)
+        .map_err(|error| {
+            refuse(
+                path,
+                &format!(
+                    "{path} could not be resolved: {error}. {}",
+                    error.suggested_action()
+                ),
+            )
+        })?;
+    let bytes = secret.expose_secret();
+    let length = bytes.len();
+    let trailing_newline = bytes.ends_with(b"\n");
+    DeliveryKey::new(bytes)
+        .map_err(|error| refuse(path, &key_diagnostic(path, length, trailing_newline, error)))
+}
+
+fn key_diagnostic(
+    path: &str,
+    length: usize,
+    trailing_newline: bool,
+    error: DeliveryKeyError,
+) -> String {
+    let suffix = if trailing_newline {
+        ", ending in a newline"
+    } else {
+        ""
+    };
+    let reason = match error {
+        DeliveryKeyError::TooShort { .. } | DeliveryKeyError::TooLong { .. } => {
+            "Supply 32 to 64 exact key bytes."
+        }
+        DeliveryKeyError::SecretText => "Supply exact key bytes without the whsec_ encoding.",
+        DeliveryKeyError::PreviousEqualsCurrent => "Use distinct current and previous keys.",
+    };
+    format!("{path} resolved to {length} bytes{suffix}. {reason}")
+}
+
+pub(crate) fn duplicate_key(first: &str, second: &str) -> CoordinatorError {
+    CoordinatorError::new(
+        "adapter.configuration",
+        format!("{first} and {second} resolve to the same key bytes. Give {second} its own key by writing 32 new random bytes to another secret and referencing it there."),
+    )
+}
+
+pub(crate) fn check_key_references(
+    errors: &mut Vec<CoordinatorError>,
+    secrets: &SecretProvidersConfig,
+    path: &str,
+    current: &SecretReference,
+    previous: Option<&SecretReference>,
+) {
+    for (name, reference) in std::iter::once(("hmacSha256KeyRef", current))
+        .chain(previous.map(|reference| ("previousHmacSha256KeyRef", reference)))
+    {
+        let field = format!("{path}.{name}");
+        if secrets.check_reference(&field, reference.as_str()).is_err() {
+            errors.push(configuration(
+                &field,
+                "Enable the secretProviders entry named by the delivery key reference.",
+            ));
+        }
+    }
 }
 
 /// Resolved governed trigger. The package revision covers every member, the
@@ -113,37 +255,69 @@ pub(crate) fn source_findings(
         {
             errors.push(configuration(&format!("{field}.source"), "Bind each exact absolute event source URI once, without credentials, whitespace or fragment."));
         }
-        if secrets
-            .check_reference(
-                &format!("{field}.signingKeyRef"),
-                source.signing_key_ref.as_str(),
-            )
-            .is_err()
-        {
+        if source.triggers.len() > 16 {
             errors.push(configuration(
-                &format!("{field}.signingKeyRef"),
-                "Enable the secret provider named by the event signing key reference.",
+                &format!("{field}.triggers"),
+                "Declare keys for at most sixteen workflows per source.",
             ));
+        }
+        for (workflow, triggers) in &source.triggers {
+            let workflow_path = format!("{field}.triggers.{workflow}");
+            if triggers.0.len() > 16 {
+                errors.push(configuration(
+                    &workflow_path,
+                    "Declare at most sixteen trigger keys per workflow.",
+                ));
+            }
+            for (trigger, key) in &triggers.0 {
+                check_key_references(
+                    &mut errors,
+                    secrets,
+                    &format!("{workflow_path}.{trigger}"),
+                    &key.hmac_sha256_key_ref,
+                    key.previous_hmac_sha256_key_ref.as_ref(),
+                );
+            }
         }
     }
     errors
 }
 
-/// Startup readiness checks the same secret references the receiver consumes.
-pub(crate) fn check_keys(config: &crate::runtime::RuntimeConfig) -> Result<()> {
-    let resolver = config
-        .secret_providers
-        .resolver()
-        .map_err(|_| source_unavailable())?;
-    for source in config.event_sources.values() {
-        let key = resolver
-            .resolve_reference(&source.signing_key_ref)
-            .map_err(|_| source_unavailable())?;
-        if key.len() < MIN_HMAC_SHA256_KEY_BYTES {
-            return Err(source_unavailable());
+pub(crate) fn resolve_keys(config: &crate::runtime::RuntimeConfig) -> Result<EventKeys> {
+    let mut keys = BTreeMap::new();
+    if config.event_sources.is_empty() {
+        return Ok(keys);
+    }
+    let resolver = config.secret_providers.resolver().map_err(|_| {
+        configuration(
+            "eventSources",
+            "Make the event source secret providers available.",
+        )
+    })?;
+    for (alias, source) in &config.event_sources {
+        for (workflow, triggers) in &source.triggers {
+            for (trigger, key) in &triggers.0 {
+                let path = format!("eventSources.{alias}.triggers.{workflow}.{trigger}");
+                let keys_for_trigger = IngressKeys::resolve(
+                    &resolver,
+                    path.clone(),
+                    &key.hmac_sha256_key_ref,
+                    key.previous_hmac_sha256_key_ref.as_ref(),
+                    configuration,
+                )?;
+                if keys
+                    .insert((workflow.clone(), trigger.clone()), keys_for_trigger)
+                    .is_some()
+                {
+                    return Err(configuration(
+                        &path,
+                        "Configure only one source for this workflow trigger.",
+                    ));
+                }
+            }
         }
     }
-    Ok(())
+    Ok(keys)
 }
 
 /// Reuse the ordinary mapping validator with a single synthetic finish whose
@@ -246,88 +420,45 @@ pub struct VerifiedEvent {
     pub actor: Actor,
 }
 
-#[expect(
-    clippy::too_many_arguments,
-    reason = "The verifier binds exact received wire fields, configured producer, subscription, and receiver clock"
-)]
 pub fn verify_delivery(
     source: &EventSourceConfig,
-    source_name: &str,
     trigger: &EventTrigger,
     trigger_name: &str,
-    method: &Method,
-    request_target: &str,
     headers: &HeaderMap,
     body: &[u8],
-    key: &[u8],
+    keys: &DeliveryKeys,
     now: SystemTime,
 ) -> Result<VerifiedEvent> {
-    if body.len() > MAXIMUM_EVENT_BYTES {
-        return Err(body_too_large());
-    }
-    if body.is_empty() || method != Method::POST {
-        return Err(invalid_event());
-    }
-    let VerifiedDelivery {
-        id,
-        source: event_source,
-        event_type,
-        time,
-        data_schema,
-        content_type,
-        idempotency_key: delivery_key,
-        ..
-    } = verify_signed_delivery(
-        SignedDelivery {
-            method: method.as_str(),
-            request_target,
+    check_body(body)?;
+    let VerifiedHookDelivery { id, envelope, .. } = verify_hook_delivery(
+        HookDelivery {
             headers: headers
                 .iter()
                 .map(|(name, value)| (name.as_str(), value.as_bytes())),
             body,
-            key,
+            keys,
         },
-        DeliveryFreshness::Within {
-            now,
-            skew: DELIVERY_SKEW,
-        },
+        DeliveryFreshness::default_at(now),
     )
-    .map_err(|error| {
-        unauthenticated(match error {
-            ReceiverError::Stale | ReceiverError::InvalidDeliveryTime => {
-                FailedCheck::DeliveryFreshness
-            }
-            // A key the receiver cannot use is its own fault, not the sender's.
-            ReceiverError::InvalidKey => FailedCheck::KeySourceUnavailable,
-            _ => FailedCheck::DeliverySignature,
-        })
+    .map_err(|error| match error {
+        HookDeliveryError::InvalidEnvelope => invalid_event(),
+        HookDeliveryError::IdMismatch | HookDeliveryError::InvalidContentType => {
+            unauthenticated(FailedCheck::DeliveryBinding)
+        }
+        HookDeliveryError::Signature(
+            DeliverySignatureError::StaleDelivery | DeliverySignatureError::InvalidTimestamp,
+        ) => unauthenticated(FailedCheck::DeliveryFreshness),
+        HookDeliveryError::Signature(DeliverySignatureError::BodyTooLarge) => body_too_large(),
+        _ => unauthenticated(FailedCheck::DeliverySignature),
     })?;
-    if content_type != "application/json"
-        || event_source != source.source.as_ref()
-        || trigger.source != source_name
-        || event_type != trigger.event_type
-        || data_schema != trigger.data_schema
-        || delivery_key.is_empty()
-        || delivery_key.len() > 256
+    if envelope.source != source.source.as_ref()
+        || envelope.event_type != trigger.event_type
+        || envelope.dataschema != trigger.data_schema
     {
         return Err(unauthenticated(FailedCheck::DeliveryBinding));
     }
-    let envelope = HookEnvelope::from_canonical_bytes(
-        body,
-        &EnvelopeLimits::tightened_to(MAXIMUM_EVENT_BYTES),
-    )
-    .map_err(|_| invalid_event())?;
+    let event_source = envelope.source.as_str();
     let value = serde_json::to_value(&envelope).map_err(|_| invalid_event())?;
-    if envelope.id != id
-        || envelope.source != event_source
-        || envelope.event_type != event_type
-        || envelope.dataschema != data_schema
-        || value["time"].as_str() != Some(time)
-    {
-        return Err(invalid_event());
-    }
-    // Signed deliveries may reach the signable bound, but an admitted event
-    // is a workflow value, so it must also fit the structured-value profile.
     crate::functions::check_value(&value).map_err(|error| {
         if error.code == "function.value_limit" {
             event_too_large()
@@ -366,8 +497,6 @@ pub fn verify_delivery(
 pub async fn receive(
     State(state): State<HttpState>,
     Path((workflow_name, trigger_name)): Path<(String, String)>,
-    OriginalUri(uri): OriginalUri,
-    method: Method,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
@@ -378,6 +507,7 @@ pub async fn receive(
                 "event admissions are disabled during recovery",
             ));
         }
+        check_body(&body)?;
         let package = state
             .workflows
             .get(&workflow_name)
@@ -392,25 +522,18 @@ pub async fn receive(
             .runtime
             .event_sources
             .get(&trigger.source)
-            .ok_or_else(source_unavailable)?;
-        let resolver = state
-            .runtime
-            .secret_providers
-            .resolver()
-            .map_err(|_| source_unavailable())?;
-        let key = resolver
-            .resolve_reference(&source.signing_key_ref)
-            .map_err(|_| source_unavailable())?;
+            .ok_or_else(|| unauthenticated(FailedCheck::DeliveryBinding))?;
+        let keys = state
+            .adapters
+            .event_keys(&workflow_name, &trigger_name)
+            .ok_or_else(|| unauthenticated(FailedCheck::DeliveryBinding))?;
         let verified = verify_delivery(
             source,
-            &trigger.source,
             trigger,
             &trigger_name,
-            &method,
-            &uri.to_string(),
             &headers,
             &body,
-            key.expose_secret(),
+            keys,
             SystemTime::now(),
         )?;
         crate::deployment::check(&state.store, &state.runtime, state.workflows.digest()).await?;
@@ -451,7 +574,7 @@ fn event_problem(error: CoordinatorError) -> Response {
     if signature_refused {
         response.headers_mut().insert(
             axum::http::header::WWW_AUTHENTICATE,
-            HeaderValue::from_static("Registry-Signature version=\"v1\""),
+            HeaderValue::from_static(crate::http::WEBHOOK_CHALLENGE),
         );
     }
     response
@@ -481,7 +604,7 @@ fn body_too_large() -> CoordinatorError {
     CoordinatorError::new(
         "request.body-too-large",
         format!(
-            "the signed event delivery exceeds the {MAXIMUM_EVENT_BYTES}-byte Version 1 signable bound; send a smaller event"
+            "the signed event delivery exceeds the {MAXIMUM_EVENT_BYTES}-byte body bound; send a smaller event"
         ),
     )
 }
@@ -492,12 +615,14 @@ fn unauthenticated(check: FailedCheck) -> CoordinatorError {
     )
     .failing(check)
 }
-fn source_unavailable() -> CoordinatorError {
-    CoordinatorError::new(
-        "event-source-unavailable",
-        "the configured event source authentication is unavailable",
-    )
-    .failing(FailedCheck::KeySourceUnavailable)
+fn check_body(body: &[u8]) -> Result<()> {
+    if body.len() > MAXIMUM_EVENT_BYTES {
+        return Err(body_too_large());
+    }
+    if body.is_empty() {
+        return Err(invalid_event());
+    }
+    Ok(())
 }
 fn configuration(field: &str, advice: &str) -> CoordinatorError {
     CoordinatorError::new(

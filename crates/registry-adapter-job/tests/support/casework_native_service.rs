@@ -147,7 +147,7 @@ impl Drop for OwnedSchema {
 pub struct Casework {
     pub origin: String,
     pub binding: Value,
-    completion_token: String,
+    completion_key: [u8; 32],
     staff_token: String,
     _process: Process,
     _owned: OwnedSchema,
@@ -255,11 +255,9 @@ impl Casework {
             .bytes()
             .await
             .expect("read the synthetic issuer JWKS body");
-        let completion_token = format!(
-            "{}{}",
-            uuid::Uuid::new_v4().simple(),
-            uuid::Uuid::new_v4().simple()
-        );
+        let mut completion_key = [0_u8; 32];
+        completion_key[..16].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
+        completion_key[16..].copy_from_slice(uuid::Uuid::new_v4().as_bytes());
         for (name, bytes) in [
             ("database", scoped_database.as_bytes()),
             ("jwks", jwks.as_ref()),
@@ -267,7 +265,7 @@ impl Casework {
                 "audit-key",
                 b"synthetic-casework-audit-key-0123456789".as_slice(),
             ),
-            ("completion-token", completion_token.as_bytes()),
+            ("completion-key", completion_key.as_slice()),
         ] {
             private_file(&root.path().join(name), bytes);
         }
@@ -298,7 +296,7 @@ impl Casework {
                 "contextProviders": {},
                 "reviewCompletionDestinations": {"coordinator": {
                     "url": format!("{coordinator_origin}/v1/review-completions"),
-                    "bearerTokenRef": "secret:file/completion-token",
+                    "hmacSha256KeyRef": "secret:file/completion-key",
                     "attemptTimeoutMilliseconds": 5000,
                     "maximumAttempts": 10,
                     "retryDelaySeconds": 1
@@ -396,7 +394,7 @@ impl Casework {
         Self {
             origin,
             binding,
-            completion_token,
+            completion_key,
             staff_token,
             _process: process,
             _owned: OwnedSchema { database, schema },
@@ -404,8 +402,8 @@ impl Casework {
         }
     }
 
-    pub fn completion_token(&self) -> &str {
-        &self.completion_token
+    pub fn completion_key(&self) -> &[u8] {
+        &self.completion_key
     }
 
     pub async fn approve(&self, requester_reference: &str) -> String {
