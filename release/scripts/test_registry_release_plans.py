@@ -508,7 +508,7 @@ version = "1.1.0"
                 binding_loader("1.1.0"),
             )
         web_client = self.root / "clients/typescript"
-        web_identity = {"name": "@registrystack/web-client", "version": "1.1.0"}
+        web_identity = {"name": "@registrystack/client", "version": "1.1.0"}
         write_json(web_client / "package.json", web_identity)
         write_json(
             web_client / "package-lock.json",
@@ -517,16 +517,16 @@ version = "1.1.0"
         unified_node = self.root / "crates/registry-stack-client-node"
         write_json(
             unified_node / "package.json",
-            {"name": "@registrystack/client", "version": "1.1.0"},
+            {"name": "@registrystack/client-node", "version": "1.1.0"},
         )
         write_json(
             unified_node / "package-lock.json",
             {
-                "name": "@registrystack/client",
+                "name": "@registrystack/client-node",
                 "version": "1.1.0",
                 "lockfileVersion": 3,
                 "packages": {
-                    "": {"name": "@registrystack/client", "version": "1.1.0"}
+                    "": {"name": "@registrystack/client-node", "version": "1.1.0"}
                 },
             },
         )
@@ -535,7 +535,7 @@ version = "1.1.0"
             write_json(
                 unified_node / "npm" / platform / "package.json",
                 {
-                    "name": f"@registrystack/client-{platform}",
+                    "name": f"@registrystack/client-node-{platform}",
                     "version": "1.1.0",
                 },
             )

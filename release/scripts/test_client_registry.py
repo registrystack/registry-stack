@@ -92,7 +92,7 @@ class ClientRegistryTest(unittest.TestCase):
         include_messaging: bool = False,
         include_scheduling: bool = False,
     ) -> None:
-        definition = self.module.client_definition(client)
+        definition = self.module.client_definition(client, self.version)
         optional = {
             f"{definition.npm_root_package}-{platform}": self.version
             for platform, _binary in self.module.npm_platforms(
@@ -325,7 +325,7 @@ class ClientRegistryTest(unittest.TestCase):
     def test_v0_39_rejects_a_root_package_that_exposes_scheduling(self) -> None:
         self.version = "0.39.0"
         self._write_distribution("stack")
-        definition = self.module.client_definition("stack")
+        definition = self.module.client_definition("stack", self.version)
         root = self.module.npm_tarballs(self.directory, self.version, "stack")[-1]
         write_npm_package(
             root,
@@ -392,7 +392,7 @@ class ClientRegistryTest(unittest.TestCase):
     def test_0_29_rejects_a_root_package_that_exposes_casework(self) -> None:
         self.version = "0.29.0"
         self._write_distribution("stack")
-        definition = self.module.client_definition("stack")
+        definition = self.module.client_definition("stack", self.version)
         root = self.module.npm_tarballs(
             self.directory, self.version, "stack"
         )[-1]
@@ -416,7 +416,7 @@ class ClientRegistryTest(unittest.TestCase):
     def test_selected_casework_requires_its_root_facade(self) -> None:
         self.version = "0.30.0"
         self._write_distribution("stack")
-        definition = self.module.client_definition("stack")
+        definition = self.module.client_definition("stack", self.version)
         root = self.module.npm_tarballs(
             self.directory, self.version, "stack"
         )[-1]
@@ -439,7 +439,7 @@ class ClientRegistryTest(unittest.TestCase):
     def test_selected_messaging_requires_its_root_facade(self) -> None:
         self.version = "0.38.0"
         self._write_distribution("stack")
-        definition = self.module.client_definition("stack")
+        definition = self.module.client_definition("stack", self.version)
         root = self.module.npm_tarballs(self.directory, self.version, "stack")[-1]
         write_npm_package(
             root,
@@ -465,7 +465,7 @@ class ClientRegistryTest(unittest.TestCase):
     def test_selected_scheduling_requires_its_root_facade(self) -> None:
         self.version = "0.40.0"
         self._write_distribution("stack")
-        definition = self.module.client_definition("stack")
+        definition = self.module.client_definition("stack", self.version)
         root = self.module.npm_tarballs(self.directory, self.version, "stack")[-1]
         write_npm_package(
             root,
@@ -875,11 +875,11 @@ class BindStackCompatibilityMetadataTest(unittest.TestCase):
         self.temporary_directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary_directory.cleanup)
         self.directory = Path(self.temporary_directory.name)
-        self.version = "0.44.0-nightly.20261023.fixture"
+        self.version = "0.49.0-nightly.20261127.fixture"
         self.package_json = self.directory / "package.json"
         self.package_json.write_text(
             json.dumps(
-                {"name": "@registrystack/client", "version": self.version},
+                {"name": "@registrystack/client-node", "version": self.version},
                 indent=2,
             )
             + "\n",
@@ -970,17 +970,17 @@ class ClientReadmeInstallTest(unittest.TestCase):
                 stripped = line.strip()
                 where = f"{readme.name}:{number}"
                 if stripped.startswith("npm install ") and "@registrystack/" in stripped:
-                    self.assertIn("@registrystack/client@", stripped, where)
+                    self.assertIn("@registrystack/client-node@", stripped, where)
                 if stripped.startswith("python -m pip install ") and "registry-" in stripped:
                     self.assertIn("registry-stack-client==", stripped, where)
 
     def test_every_binding_readme_points_at_its_unified_namespace(self) -> None:
         expected = {
-            "registry-breg-client-node": "@registrystack/client",
-            "registry-discovery-client-node": "@registrystack/client",
-            "registry-evidence-client-node": "@registrystack/client",
-            "registry-messaging-client-node": "@registrystack/client",
-            "registry-scheduling-client-node": "@registrystack/client",
+            "registry-breg-client-node": "@registrystack/client-node",
+            "registry-discovery-client-node": "@registrystack/client-node",
+            "registry-evidence-client-node": "@registrystack/client-node",
+            "registry-messaging-client-node": "@registrystack/client-node",
+            "registry-scheduling-client-node": "@registrystack/client-node",
             "registry-breg-client-py": "registry-stack-client",
             "registry-casework-client-py": "registry-stack-client",
             "registry-discovery-client-py": "registry-stack-client",

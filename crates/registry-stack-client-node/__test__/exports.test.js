@@ -10,7 +10,7 @@ const PRODUCTS = ['discovery', 'evidence', 'breg', 'casework', 'messaging', 'sch
 // Node synthesises the named exports an ESM consumer imports from this CommonJS
 // entry point by statically scanning it for individual `exports.<name> =`
 // assignments. A single `module.exports = { ... }` object literal defeats that
-// scan and leaves `import { breg } from '@registrystack/client'` unresolvable,
+// scan and leaves `import { breg } from '@registrystack/client-node'` unresolvable,
 // so the shape of the assignments is part of the public contract.
 test('the public package exposes one namespace per product', () => {
   const source = fs.readFileSync(path.join(__dirname, '..', 'index.js'), 'utf8');

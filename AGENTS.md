@@ -102,7 +102,7 @@ not products of their own.
 | `crates/registry-render-client` | Bounded HTTP client for the optional Render serving adapter |
 | `crates/registry-render-client-node`, `crates/registry-render-client-py` | Internal Render bindings for explicit local candidates; release readiness remains held |
 | `crates/registry-stack-client` | Rust facade over the maintained Registry Stack product clients |
-| `crates/registry-stack-client-node` | Public `@registrystack/client` facade and platform package definitions |
+| `crates/registry-stack-client-node` | Public `@registrystack/client-node` facade and platform package definitions |
 | `crates/registry-stack-client-py` | Public `registry-stack-client` Python facade assembled with all native bindings |
 | `crates/registry-evidence` | Single-crate Evidence runtime and `evidence` binary |
 | `crates/registry-evidence-verifier` | Portable Evidence response verification, shared by the runtime and client tooling |

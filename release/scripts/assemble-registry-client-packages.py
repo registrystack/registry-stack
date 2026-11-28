@@ -9,8 +9,8 @@ before it reaches a release candidate.
 
 It produces, into `--output-dir`:
 
-  registrystack-client-<version>.tgz                    the public root package
-  registrystack-client-<platform>-<version>.tgz         its native platform package
+  registrystack-client-node-<version>.tgz               the public root package
+  registrystack-client-node-<platform>-<version>.tgz    its native platform package
   registry_stack_client-<version>-<wheel tag>.whl       the public Python wheel
 
 Prerequisites this script does not perform:
@@ -552,9 +552,10 @@ def main() -> int:
 
     expected = []
     if args.artifacts in ("all", "node"):
+        stem = client_registry.client_definition("stack", version).npm_tarball_stem
         expected += [
-            output_dir / f"registrystack-client-{version}.tgz",
-            output_dir / f"registrystack-client-{napi_platform}-{version}.tgz",
+            output_dir / f"{stem}-{version}.tgz",
+            output_dir / f"{stem}-{napi_platform}-{version}.tgz",
         ]
     if args.artifacts in ("all", "python"):
         tag = PLATFORMS[napi_platform]["wheel_tag"]

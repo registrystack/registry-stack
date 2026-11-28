@@ -1,11 +1,11 @@
 # registry-breg-client-node
 
 Internal napi-rs binding for the Base Registry Engine (BReg) Rust client. It is built
-into the public `@registrystack/client` package and is not published as a
+into the public `@registrystack/client-node` package and is not published as a
 standalone npm package.
 
 ```js
-const { breg: { BaseRegistryClient } } = require('@registrystack/client');
+const { breg: { BaseRegistryClient } } = require('@registrystack/client-node');
 const client = new BaseRegistryClient({ baseUrl: 'https://registry.example.invalid/' });
 const health = await client.health();
 ```
@@ -57,7 +57,7 @@ The message names what to check without exposing header values, body, or keys.
 
 ## Exact values and application metadata
 
-Use the public server-side package `@registrystack/client` and its `breg`
+Use the public server-side package `@registrystack/client-node` and its `breg`
 namespace. `registryContract(profile).operations` exposes typed,
 caller-filtered field, request, and query descriptors.
 Labels are inert presentation text;
@@ -81,7 +81,7 @@ Proposal methods accept bounded plain objects for inputs, queries and transition
 bodies and expose the validated representation as `BRegProposal.documentJson`.
 
 ```js
-const { breg } = require('@registrystack/client');
+const { breg } = require('@registrystack/client-node');
 const client = new breg.BaseRegistryClient({ baseUrl, authorization: { static: token } });
 const contract = await client.registryContract(profile);
 const operation = contract.operations.find(value => value.kind === 'create');

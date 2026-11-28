@@ -39,7 +39,7 @@ const productClients = {
 } as const
 const serverOnly: readonly string[] = ['coordinator', 'evidence-oid4vci', 'messaging']
 
-function registerDetails(description: RegisterDescription, source: string) {
+function registerDetails(member: string, description: RegisterDescription, source: string) {
   const { register } = description
   if (!/^breg-[a-z0-9]+(-[a-z0-9]+)*$/u.test(register)) {
     throw new Error('Invalid BReg register module ' + register)
@@ -50,7 +50,7 @@ function registerDetails(description: RegisterDescription, source: string) {
   const hasProposals = startRows.length > 0 || /^ {2}"proposals\.get": /mu.test(registerText)
   const authors = description.authorProfiles ?? []
   if (hasProposals && authors.length === 0) {
-    throw new Error('The register ' + register + ' has Proposals, so the service description needs authorProfiles.')
+    throw new Error('The register ' + member + ' has Proposals, so the service description needs authorProfiles.')
   }
   const granted = new Set<string>()
   for (const row of startRows) {
@@ -59,11 +59,11 @@ function registerDetails(description: RegisterDescription, source: string) {
   }
   for (const author of authors) {
     if (!granted.has(author)) {
-      throw new Error('The authorProfile ' + JSON.stringify(author) + ' cannot start Proposals in ' + register
+      throw new Error('The authorProfile ' + JSON.stringify(author) + ' cannot start Proposals in ' + member
         + '. Profiles granted Proposal start: ' + ([...granted].sort().join(', ') || 'none') + '.')
     }
   }
-  if (new Set(authors).size !== authors.length) throw new Error('List each author profile only once.')
+  if (new Set(authors).size !== authors.length) throw new Error('List each author profile for ' + member + ' only once.')
   const hasTypedProposals = registerText.includes('export interface ProposalActions {')
   return { authors, hasTypedProposals }
 }
@@ -94,7 +94,7 @@ export function generateService(description: ServiceDescription, settings: Servi
     checkRegisterMember(name)
     const setting = Object.hasOwn(settings.registers ?? {}, name) ? settings.registers?.[name] : undefined
     const source = setting?.source ?? fileURLToPath(new URL('./generated/' + entry.register + '.ts', import.meta.url))
-    return { name, entry, index, setting, ...registerDetails(entry, source) }
+    return { name, entry, index, setting, ...registerDetails(name, entry, source) }
   })
   const typed = members.filter(member => member.hasTypedProposals)
   const hasAuthors = members.some(member => member.authors.length > 0)

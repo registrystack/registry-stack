@@ -116,6 +116,7 @@ class ReleaseRehearsalTest(unittest.TestCase):
         shutil.copy2(ROOT / "release/units.yaml", root / "release/units.yaml")
         for relative in (
             "release/scripts/release_candidate.py",
+            "release/scripts/client_registry.py",
             "release/scripts/release_roster.py",
             "release/scripts/rstack_components.py",
             "release/scripts/release_units.py",

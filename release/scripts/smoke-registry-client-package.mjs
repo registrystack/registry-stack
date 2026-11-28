@@ -5,8 +5,8 @@
 // project, never against a checkout.
 
 import assert from 'node:assert';
-import * as client from '@registrystack/client';
-import { breg, casework, discovery, evidence } from '@registrystack/client';
+import * as client from '@registrystack/client-node';
+import { breg, casework, discovery, evidence } from '@registrystack/client-node';
 
 assert.strictEqual(typeof breg.BaseRegistryClient, 'function');
 assert.strictEqual(typeof breg.verifyHookDelivery, 'function');

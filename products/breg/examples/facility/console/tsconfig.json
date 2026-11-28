@@ -9,7 +9,7 @@
     "types": ["node"],
     "typeRoots": ["../../../../../crates/registry-breg-client-node/node_modules/@types"],
     "paths": {
-      "@registrystack/client": ["../../../../../crates/registry-stack-client-node/index.d.ts"]
+      "@registrystack/client-node": ["../../../../../crates/registry-stack-client-node/index.d.ts"]
     }
   },
   "files": ["console.ts", "../../../generated/facility/generated/sdk/project.ts"]

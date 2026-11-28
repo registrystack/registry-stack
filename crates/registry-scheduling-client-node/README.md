@@ -1,8 +1,7 @@
 # Registry Scheduling Node binding
 
-This internal napi-rs binding is not published separately. Beginning with
-Registry Stack v0.40.0, its namespace and native addon ship inside
-`@registrystack/client`.
+This internal napi-rs binding joined the unified Node package in Registry Stack
+v0.40.0. Install `@registrystack/client-node` for v0.49.0 and later.
 
 Every operation accepts a bearer token for that call. `createHold`,
 `createAppointment`, `rescheduleAppointment`, and `cancelAppointment` require a

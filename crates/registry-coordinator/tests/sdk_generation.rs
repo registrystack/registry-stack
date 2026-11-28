@@ -55,6 +55,7 @@ fn exported_clients_pin_the_compiled_revision_and_use_maintained_clients() {
     // so the wrappers import the Coordinator bindings directly.
     assert!(typescript
         .contains("import type * as coordinator from '@registrystack/coordinator-client-native';"));
+    assert!(!typescript.contains("@registrystack/client-node'"));
     assert!(!typescript.contains("@registrystack/client'"));
     assert!(python.contains(
         "from registry_coordinator_client import CoordinatorClient, RunStatus, StartRunRequest"

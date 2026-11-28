@@ -11,10 +11,10 @@ locale: en
 standards_referenced: []
 ---
 
-The TypeScript clients call Registry Stack products over HTTP from screens and functions.
+`@registrystack/client` is the default for pages and edge functions that call Registry Stack over HTTP.
 They use Fetch and WebCrypto, so they run in browsers, Deno, edge functions and Node 24.
 They have no runtime dependencies.
-The native Rust, Node and Python clients stay the choice for servers.
+Node.js services and tools that need the Rust core can use `@registrystack/client-node`.
 See the [client API reference](../client-api/).
 
 The TypeScript package exports JavaScript modules and type declarations. Generate your service in your application to get factories typed to its registers and installed products.
@@ -43,11 +43,11 @@ A `Client` is built from a `Transport`, so every module of one service shares on
 The factories live in a generated file for each service, as [Construct a client](#construct-a-client) describes.
 `browser.ts` exports these product namespaces: `bregMinimal`, `bregFacility`, `casework`,
 `coordinator`, `documents`, `evidence`, `messaging` and `scheduling`.
-It also re-exports the two example services as `bregFacilityDocumentsCaseworkEvidence` and `bregFacilityAllProducts`.
+`browser.ts` re-exports three example services as `bregFacilityDocumentsCaseworkEvidence`, `bregFacilityAllProducts` and `twoRegisters`.
 It also exports `RegistryError`, `describeError`, `pages`, `allPages`, `DeliveryError`, `verifyDelivery` and `verifyRequest`.
 A function that only receives deliveries imports `webhook.ts` instead, so it does not load every client.
 
-The two BReg modules come from example projects.
+The BReg and service examples under `@registrystack/client/products/...` are generated from this repository’s sample registers. Use them as examples when generating clients for your own registers.
 Your project has its own Records, Actions and access profiles, so generate a client for it.
 
 {/* Evidence: clients/typescript/generate-all.ts; clients/typescript/browser.ts;
@@ -58,14 +58,14 @@ Your project has its own Records, Actions and access profiles, so generate a cli
 Install the package in your application with Node 24.
 
 ```sh test-skip="requires an npm release and local BReg projects"
-npm install @registrystack/web-client
+npm install @registrystack/client
 ```
 
 Run the generator from your application directory with `bregctl` on `PATH`.
 You can also set `RSTACK_BREGCTL_BIN` to the executable path.
 
 ```sh test-skip="requires an npm release and local BReg projects"
-npx registry-generate \
+npx --no-install registry-generate \
   --register facility=./projects/facility \
   --author-profile facility=facility-correction-author \
   --route-prefix facility=/facilities \
@@ -102,7 +102,8 @@ Before 1.0, the client versions must share a minor version, so `0.48.1` works wi
 From 1.0, they must share a major version.
 Patch differences are always accepted.
 
-Before writing files, the generator checks any installed package it can resolve from the output directory.
+The generator must resolve `@registrystack/client` from the output directory before it writes files.
+If resolution fails, install the package in your application.
 The runtime checks the recorded client version when you construct a client.
 If either check fails, regenerate with the command from your installed package.
 You can also install the matching package version named in the error.

@@ -34,9 +34,9 @@ and still validate historical Relay descriptions. Current Rust publication,
 index, query, and client contracts support Evidence only. Operators must remove
 Relay origins and rebuild a mixed pre-retirement index before starting a current
 runtime.
-Starting with Registry Stack v0.26.1, install the Node.js package as
-`@registrystack/client@<version>` or the Python package as
-`registry-stack-client==<version>`, using the SDK version selected by the recommended Stack distribution.
+Use the SDK version selected by the recommended Stack distribution. For v0.49.0
+and later, install the Node.js package as `@registrystack/client-node@<version>`.
+The unified Python package is `registry-stack-client==<version>` from v0.26.1.
 Discovery and discoveryctl can also ship together under an independent
 `discovery/vX.Y.Z` release. A newer compatible Discovery patch does not require
 republishing the SDK; use a combination named in the distribution or release notes. The Python distribution imports as `registry_client`.

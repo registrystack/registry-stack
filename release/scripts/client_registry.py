@@ -56,8 +56,8 @@ CLIENTS = {
         wheel_stem="registry_relay_client",
     ),
     "stack": ClientDefinition(
-        npm_root_package="@registrystack/client",
-        npm_tarball_stem="registrystack-client",
+        npm_root_package="@registrystack/client-node",
+        npm_tarball_stem="registrystack-client-node",
         native_binary_stems=(
             "discovery-client",
             "evidence-client",
@@ -67,8 +67,8 @@ CLIENTS = {
         wheel_stem="registry_stack_client",
     ),
 }
-WEB_NPM_NAME = "@registrystack/web-client"
-WEB_NPM_FIRST_RELEASE = (0, 49, 0)
+WEB_NPM_NAME = "@registrystack/client"
+CLIENT_NPM_SPLIT_RELEASE = (0, 49, 0)
 NPM_PLATFORM_NAMES = ("darwin-arm64", "linux-arm64-gnu", "linux-x64-gnu")
 WHEEL_PLATFORMS = (
     "manylinux_2_17_x86_64.manylinux2014_x86_64",
@@ -102,11 +102,22 @@ def npm_integrity(path: Path) -> str:
     return "sha512-" + base64.b64encode(digest.digest()).decode("ascii")
 
 
-def client_definition(client: str) -> ClientDefinition:
+def client_definition(client: str, version: str | None = None) -> ClientDefinition:
     try:
-        return CLIENTS[client]
+        definition = CLIENTS[client]
     except KeyError as exc:
         raise ClientRegistryError(f"unknown client {client!r}") from exc
+    if (
+        client == "stack"
+        and version is not None
+        and release_version(version.split("-", 1)[0]) < CLIENT_NPM_SPLIT_RELEASE
+    ):
+        # Previously published releases used this name for the native facade.
+        return definition._replace(
+            npm_root_package=WEB_NPM_NAME,
+            npm_tarball_stem="registrystack-client",
+        )
+    return definition
 
 
 def release_version(version: str) -> tuple[int, int, int]:
@@ -252,7 +263,7 @@ def npm_platforms(
 
 
 def expected_optional_dependencies(client: str, version: str) -> dict[str, str]:
-    definition = client_definition(client)
+    definition = client_definition(client, version)
     return {
         f"{definition.npm_root_package}-{platform}": version
         for platform in NPM_PLATFORM_NAMES
@@ -321,7 +332,7 @@ def bind_optional_dependencies(
     it landed by reading the packed tarball back.
     """
     require_supported_client(client, version)
-    definition = client_definition(client)
+    definition = client_definition(client, version)
     try:
         metadata = json.loads(package_json.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -384,7 +395,7 @@ def bind_optional_dependencies(
 
 
 def npm_tarballs(directory: Path, version: str, client: str) -> list[Path]:
-    definition = client_definition(client)
+    definition = client_definition(client, version)
     return [
         *(
             directory / f"{definition.npm_tarball_stem}-{platform}-{version}.tgz"
@@ -462,7 +473,7 @@ def npm_package_metadata(path: Path) -> tuple[dict[str, Any], set[str]]:
 
 
 def web_npm_tarball(version: str) -> str | None:
-    if release_version(version) < WEB_NPM_FIRST_RELEASE:
+    if release_version(version) < CLIENT_NPM_SPLIT_RELEASE:
         return None
     stem = WEB_NPM_NAME.removeprefix("@").replace("/", "-")
     return f"{stem}-{version}.tgz"
@@ -509,7 +520,7 @@ def validate_npm_packages(
     include_coordinator: bool = False,
 ) -> list[Path]:
     require_supported_client(client, version)
-    definition = client_definition(client)
+    definition = client_definition(client, version)
     expected_optional = expected_optional_dependencies(client, version)
     paths = npm_tarballs(directory, version, client)
     for path in paths:

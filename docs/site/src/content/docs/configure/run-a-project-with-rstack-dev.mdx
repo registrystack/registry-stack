@@ -21,6 +21,15 @@ product is enough: you do not need the others to try yours. This page starts wit
 own, then runs several together, and ends with the reference for the plan, applications, issuer
 binding, isolation and recovery.
 
+## Generate the application client
+
+From the application, run `npm install @registrystack/client`, then run
+`rstack client generate --help` for the register, product and output options.
+The command looks for the installed generator starting at the output path and uses
+the same BReg CLI as `rstack dev`. See the [TypeScript client reference](../../reference/typescript-clients/).
+
+{/* Evidence: crates/registry-rstack/src/cli.rs, generate_client(); clients/typescript/package.json. */}
+
 ## Before you start
 
 You need:

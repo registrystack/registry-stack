@@ -213,7 +213,7 @@ async function fakeClientPackages(dir) {
   const source = join(dir, 'client-source');
   await mkdir(packages);
   await mkdir(source);
-  await writeFile(join(source, 'package.json'), JSON.stringify({ name: '@registrystack/client', version: '0.0.0-tutorial', main: 'index.js' }));
+  await writeFile(join(source, 'package.json'), JSON.stringify({ name: '@registrystack/client-node', version: '0.0.0-tutorial', main: 'index.js' }));
   await writeFile(join(source, 'index.js'), "module.exports = 'assembled';\n");
   await execFileAsync('npm', ['pack', '--ignore-scripts', '--pack-destination', packages], { cwd: source });
   await writeFile(join(packages, 'registry_stack_client-0.0.0-py3-none-any.whl'), '');
@@ -225,8 +225,8 @@ test('the breg toolset serves the client packages to a journey that installs the
     '## Install\n\n' +
     fence(
       'sh',
-      'npm init -y >/dev/null\nnpm install "@registrystack/client@0.0.0-tutorial" >/dev/null\n' +
-        "node -p \"require('@registrystack/client')\"\n" +
+      'npm init -y >/dev/null\nnpm install "@registrystack/client-node@0.0.0-tutorial" >/dev/null\n' +
+        "node -p \"require('@registrystack/client-node')\"\n" +
         'printf \'%s %s\\n\' "$PIP_NO_INDEX" "$(basename "$PIP_FIND_LINKS")"',
     ) +
     fence('text test-expect', 'assembled\n1 packages');

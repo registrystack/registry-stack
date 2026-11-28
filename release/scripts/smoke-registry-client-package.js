@@ -2,7 +2,7 @@
 'use strict';
 
 const assert = require('node:assert');
-const client = require('@registrystack/client');
+const client = require('@registrystack/client-node');
 const { breg, casework, discovery, evidence } = client;
 
 assert.strictEqual(typeof breg.BaseRegistryClient, 'function');

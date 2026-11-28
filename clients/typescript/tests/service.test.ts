@@ -160,7 +160,7 @@ test('the generator is deterministic and attaches the helpers when installed', (
 test('a register that uses Proposals needs an author profile', () => {
   for (const register of ['breg-facility', 'breg-minimal']) {
     assert.throws(() => generateService(description(register)), error =>
-      error instanceof Error && /authorProfiles/u.test(error.message) && error.message.includes(register))
+      error instanceof Error && /The register facility has Proposals.*authorProfiles/u.test(error.message))
   }
 })
 

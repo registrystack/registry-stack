@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Generated service imports resolve in standard TypeScript Node16, NodeNext, and Bundler projects.
+- The service generator reports that it requires Node.js 24 or later when run with an older version.
+- The generator requires an application-local `@registrystack/client` installation and prints installation guidance when it cannot resolve the package.
+
+- The Rust-backed Node package moved to `@registrystack/client-node`.
+  For Node services and tools, run `npm install @registrystack/client-node` and change imports to `@registrystack/client-node`.
+  `@registrystack/client` is now the Fetch-based browser and edge client.
+- `rstack client generate` runs the application’s local `registry-generate` with the BReg CLI resolved by `rstack`.
+
 - Fetch-based TypeScript clients, generated from each registry's contract, are
   in `clients/typescript/`. They use Fetch and WebCrypto and have no runtime
   dependencies. Their tests run on Node 24 and Deno, and the browser build has

@@ -245,7 +245,7 @@ updates:
   # its own package-lock.json. optionalDependencies seen in these lockfiles
   # belong to third-party build tooling (e.g. @napi-rs/lzma, @napi-rs/tar)
   # publishing their own platform binaries; they are not this repo's
-  # @registrystack/client platform packages, which sync-registry-client-node.py
+  # @registrystack/client-node platform packages, which sync-registry-client-node.py
   # assembles at release time and are never checked into a lockfile Dependabot
   # reads, so no ignore rule is needed here.
   - package-ecosystem: npm

@@ -409,7 +409,7 @@ function clientPackages(repoRoot) {
 }
 
 // A fence that installs the unified client packages.
-const CLIENT_INSTALLS = /registry-stack-client[=@\s"']|@registrystack\/client[@\s"']/u;
+const CLIENT_INSTALLS = /registry-stack-client[=@\s"']|@registrystack\/client(?:-node)?[@\s"']/u;
 
 // The environment that serves the client packages to a journey whose steps
 // install them, and the function that stops serving them. A journey that

@@ -132,7 +132,7 @@ fn python_literal(value: &Value) -> String {
 pub(super) fn generate(project: &Path, output: &Path) -> Result<Value> {
     crate::project::check(project, false, false)?;
     let project = crate::project::load_and_check_policy(project)?;
-    let mut typescript=String::from("// Generated from the compiled ReviewPolicy closure.\nimport type { casework } from '@registrystack/client';\n");
+    let mut typescript=String::from("// Generated from the compiled ReviewPolicy closure.\nimport type { casework } from '@registrystack/client-node';\n");
     let mut python=String::from("# Generated from the compiled ReviewPolicy closure.\nfrom __future__ import annotations\nfrom typing import Literal, TypedDict, NotRequired\nfrom registry_client.casework import PolicyBinding, SubjectBinding, ReviewCreateRequest, ReviewTask, ReviewResult\n\n");
     let mut schemas = serde_json::Map::new();
     for policy in &project.review_policies {

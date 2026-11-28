@@ -1,17 +1,16 @@
-# @registrystack/client
+# @registrystack/client-node
 
 One versioned Node.js package for the Discovery, Evidence, Base Registry
 Engine, Casework, Messaging, Scheduling, and Coordinator client APIs in Registry Stack.
 
-Coordinator joins the client roster at v0.44.0. Its imports below require a
-Coordinator-enabled v0.44.0 candidate or published package; published v0.43.0
-contains the earlier six products. Check the version-specific release assets
-before installing. Source integration does not establish publication.
+Registry Stack v0.49.0 moves the native Node package from `@registrystack/client`
+to `@registrystack/client-node`. The Coordinator namespace entered the client
+roster in v0.44.0. Check the version-specific release assets before installing.
 
 ## Install
 
 ```sh
-npm install "@registrystack/client@<version>"
+npm install "@registrystack/client-node@<version>"
 ```
 
 Requires Node.js 24.11 or newer. Supported targets are macOS arm64, Linux
@@ -22,7 +21,7 @@ bindings.
 ## Usage
 
 ```js
-const { discovery, evidence, breg, casework, messaging, scheduling, coordinator } = require('@registrystack/client');
+const { discovery, evidence, breg, casework, messaging, scheduling, coordinator } = require('@registrystack/client-node');
 
 const registry = new breg.BaseRegistryClient({
   baseUrl: 'https://registry.example.invalid/',
@@ -69,7 +68,7 @@ the Discovery namespace. Read the version-matched record through the exported
 JSON path:
 
 ```js
-const compatibility = require('@registrystack/client/compatibility.json');
+const compatibility = require('@registrystack/client-node/compatibility.json');
 ```
 
 ## TypeScript
@@ -191,7 +190,7 @@ without the cursor after `410 review.result-expired`.
 Apache-2.0
 
 Coordinator joins the seven-product roster at v0.44.0. The source facade also
-contains held `render` and `@registrystack/client/render` namespaces. Default
+contains held `render` and `@registrystack/client-node/render` namespaces. Default
 assembly omits Render; `--include-render` adds it to an explicit local candidate
 and does not authorize publication. Render takes a token or a resource-bound provider with
 `bearerToken()` and performs one bounded render or seal exchange. A correlation key is

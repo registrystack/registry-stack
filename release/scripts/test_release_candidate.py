@@ -1392,13 +1392,19 @@ class ReleaseCandidateTest(TestCase):
                     )
                     self.assertFalse(any("adapter" in name for name in required))
 
-    def test_web_client_package_starts_with_v0_49_0(self) -> None:
-        name = "registrystack-web-client"
-        self.assertNotIn(f"{name}-0.48.0.tgz", self.module._release_payload_inventory("0.48.0"))
-        self.assertEqual(
-            "client-package",
-            self.module._release_payload_inventory("0.49.0")[f"{name}-0.49.0.tgz"],
-        )
+    def test_browser_and_node_client_tarballs_are_distinct_from_v0_49_0(self) -> None:
+        previous = self.module._release_payload_inventory("0.48.0")
+        current = self.module._release_payload_inventory("0.49.0")
+        self.assertEqual("client-package", previous["registrystack-client-0.48.0.tgz"])
+        self.assertNotIn("registrystack-client-node-0.48.0.tgz", previous)
+        for name in (
+            "registrystack-client-0.49.0.tgz",
+            "registrystack-client-node-0.49.0.tgz",
+            "registrystack-client-node-linux-x64-gnu-0.49.0.tgz",
+        ):
+            self.assertEqual("client-package", current[name])
+        self.assertNotIn("registrystack-client-linux-x64-gnu-0.49.0.tgz", current)
+        self.assertNotIn("registrystack-web-client-0.49.0.tgz", current)
 
     @roster_patch("release_roster.ADAPTER_IMAGE_FIRST_RELEASE", (0, 49, 0))
     def test_adapter_image_joins_the_rosters_from_its_first_release(self) -> None:
@@ -1432,14 +1438,15 @@ class ReleaseCandidateTest(TestCase):
             )
         )
         self.assertTrue(evidence.issubset(self.module.SECURITY_EVIDENCE_REQUIRED_FILES))
-        # The binaries already ship on their own gate. Only the web client joins.
-        self.assertEqual(
-            {
-                name.replace("0.48.0", "0.49.0"): kind
-                for name, kind in self.module._release_payload_inventory("0.48.0").items()
-            } | {self.module.client_registry.web_npm_tarball("0.49.0"): "client-package"},
-            self.module._release_payload_inventory("0.49.0"),
-        )
+        # Adapter image onboarding keeps the existing binary payloads.
+        def non_client_payloads(version: str) -> dict[str, str]:
+            return {
+                name.replace(version, "<version>"): kind
+                for name, kind in self.module._release_payload_inventory(version).items()
+                if kind != "client-package"
+            }
+
+        self.assertEqual(non_client_payloads("0.48.0"), non_client_payloads("0.49.0"))
 
     @roster_patch("release_roster.ADAPTER_IMAGE_FIRST_RELEASE", (0, 49, 0))
     def test_adapter_onboarding_stays_closed_until_external_setup(self) -> None:

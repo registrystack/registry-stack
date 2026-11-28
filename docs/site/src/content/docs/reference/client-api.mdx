@@ -1,6 +1,6 @@
 ---
 title: Registry Stack client API reference
-description: Construction, operations, outcomes, and errors for each product namespace of the unified Registry Stack client.
+description: Choose a Registry Stack client and look up the native bindings’ operations, outcomes, and errors.
 status: current
 owner: registry-docs
 source_repos:
@@ -12,13 +12,17 @@ standards_referenced:
   - openapi
 ---
 
-One package carries every maintained Registry Stack client API: `@registrystack/client` on npm and
-`registry-stack-client` on PyPI. It holds one namespace per product: `discovery` for Registry
-Discovery, `evidence` for Registry Evidence, `breg` for Base Registry
-Engine (BReg), `casework` for Registry
-Casework<DocsetProduct product="registry-messaging">, `messaging` for Registry Messaging</DocsetProduct>, and `scheduling` for
-Registry Scheduling<DocsetProduct product="registry-coordinator">, with `coordinator` for Registry Coordinator from the v0.44.0 client roster</DocsetProduct>. Each namespace keeps its own routes,
-authentication, errors, and verification rules, because those contracts differ.
+Use the Fetch-based [TypeScript client](../typescript-clients/) in browsers and edge runtimes.
+Install `@registrystack/client` by default for pages and functions. Its generator creates typed
+clients for the registers and products in your service.
+
+Use `@registrystack/client-node` for Node.js services and tools that need the Rust core.
+Python applications can use `registry-stack-client`. The rest of this reference covers the
+native clients. Each product namespace has its own routes, authentication, errors, and
+verification rules.
+
+{/* Evidence: clients/typescript/package.json; clients/typescript/README.md;
+    crates/registry-stack-client-node/package.json; release/scripts/client_registry.py, client_definition(). */}
 
 Rust is the canonical implementation. The Python and Node packages are thin bindings over it: they
 convert native values, construct the Rust client, run one method, and map the validated result or
@@ -30,7 +34,10 @@ cache, or pagination policy.
 Registry Stack releases are pre-1.0 (`v0.x`). Keep a client on the same Registry Stack release as the
 deployment it calls unless a release note states a wider compatibility range.
 
-The unified packages are published beginning with Registry Stack v0.26.1. Releases through v0.26.0
+The native packages are published beginning with Registry Stack v0.26.1. For versions v0.26.1
+through v0.48.x, the Node package used the name `@registrystack/client`. Starting with v0.49.0,
+the native Node package is `@registrystack/client-node` and `@registrystack/client` is the
+browser and edge package. Releases through v0.26.0
 carry no Base Registry Engine client package and no unified package; they distribute one standalone
 package per product instead. The `casework` namespace is present in those same unified packages
 beginning with Registry Stack v0.30.0<DocsetProduct product="registry-messaging">; the `messaging` namespace is present
@@ -48,7 +55,7 @@ the exact wheel and npm tarballs for an offline install.
 The Rust crates have `publish = false`, stay source-only in the Registry Stack workspace, and are
 not published to crates.io.
 
-## Install a client
+## Install a native client
 
 Read the version from the deployment's binary rather than typing it, then install that exact
 version:
@@ -58,13 +65,13 @@ python -m pip install "registry-stack-client==<version>"
 ```
 
 ```sh
-npm install "@registrystack/client@<version>"
+npm install "@registrystack/client-node@<version>"
 ```
 
 The distribution installs as `registry-stack-client` and imports as `registry_client`. The two
 spellings differ, so `import registry_stack_client` raises `ModuleNotFoundError`.
 
-A TypeScript consumer also needs the Node type definitions, and must name them. The published
+A TypeScript consumer of the native Node package also needs the Node type definitions, and must name them. The published
 declarations use `Buffer`, a Node.js global, and TypeScript 6 does not load installed `@types`
 packages on its own, so a project compiling against the declarations reports `TS2591` on every use
 of `Buffer` until it has both installed the package and listed it in `compilerOptions.types`:
@@ -109,7 +116,7 @@ from registry_client import breg, casework, coordinator, discovery, evidence, me
 ```
 
 ```js
-const { breg, casework, coordinator, discovery, evidence, messaging, scheduling } = require('@registrystack/client');
+const { breg, casework, coordinator, discovery, evidence, messaging, scheduling } = require('@registrystack/client-node');
 ```
 
 ```rust
@@ -125,7 +132,7 @@ from registry_client import breg, casework, discovery, evidence, scheduling
 ```
 
 ```js
-const { breg, casework, discovery, evidence, scheduling } = require('@registrystack/client');
+const { breg, casework, discovery, evidence, scheduling } = require('@registrystack/client-node');
 ```
 
 ```rust
@@ -137,7 +144,7 @@ use registry_stack_client::{breg, casework, discovery, evidence, scheduling};
 <DocsetProduct product="registry-coordinator">
 
 The v0.44.0 source exports `registry_stack_client::coordinator`,
-`registry_client.coordinator`, and `@registrystack/client/coordinator` (also
+`registry_client.coordinator`, and `@registrystack/client-node/coordinator` (also
 available as the Node root's `coordinator` export). Construct
 `coordinator.CoordinatorClient(base_url)` in Python or
 `new coordinator.CoordinatorClient({ baseUrl })` in Node. Each operation takes
@@ -377,7 +384,7 @@ client = discovery.DiscoveryClient(
 ```
 
 ```js
-const { discovery } = require('@registrystack/client');
+const { discovery } = require('@registrystack/client-node');
 
 const client = new discovery.DiscoveryClient({
   baseUrl: 'https://discovery.example.invalid/',
@@ -496,7 +503,7 @@ client = evidence.EvidenceClient(
 ```
 
 ```js
-const { evidence } = require('@registrystack/client');
+const { evidence } = require('@registrystack/client-node');
 
 const client = new evidence.EvidenceClient({
   baseUrl: 'https://evidence.example.invalid/',
@@ -731,7 +738,7 @@ client = breg.BaseRegistryClient(
 ```
 
 ```js
-const { breg } = require('@registrystack/client');
+const { breg } = require('@registrystack/client-node');
 
 const client = new breg.BaseRegistryClient({
   baseUrl: 'https://breg.example.invalid/institution-a',
@@ -784,7 +791,7 @@ application-owned transaction that claims the event identity and commits the eff
 `apply_registry_event()` applies the payload the receiver expects.
 
 ```js
-const { breg } = require('@registrystack/client');
+const { breg } = require('@registrystack/client-node');
 
 const MAX_BODY_BYTES = 1_048_576;
 const EXPECTED_SOURCE = 'urn:registrystack:registry:example:instance:primary';
@@ -1042,7 +1049,7 @@ client = casework.CaseworkClient("https://casework.example.invalid/")
 ```
 
 ```js
-const { casework } = require('@registrystack/client');
+const { casework } = require('@registrystack/client-node');
 
 const client = new casework.CaseworkClient({
   baseUrl: 'https://casework.example.invalid/',
@@ -1091,7 +1098,7 @@ and retained idempotency key. They use the shared Rust canonicaliser, including 
 validation and Unicode key ordering.
 
 ```ts
-import { casework } from '@registrystack/client';
+import { casework } from '@registrystack/client-node';
 
 const client = new casework.CaseworkClient({ baseUrl: 'https://casework.example.invalid/' });
 
@@ -1269,7 +1276,7 @@ client = messaging.MessagingClient("https://messaging.example.invalid/")
 ```
 
 ```js
-const { messaging } = require('@registrystack/client');
+const { messaging } = require('@registrystack/client-node');
 
 const client = new messaging.MessagingClient({
   baseUrl: 'https://messaging.example.invalid/',
@@ -1457,7 +1464,7 @@ client = scheduling.SchedulingClient("https://scheduling.example.invalid/")
 ```
 
 ```js
-const { scheduling } = require('@registrystack/client');
+const { scheduling } = require('@registrystack/client-node');
 
 const client = new scheduling.SchedulingClient({
   baseUrl: 'https://scheduling.example.invalid/',
