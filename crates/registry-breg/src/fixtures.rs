@@ -3287,6 +3287,7 @@ fn observed_condition_if_match(
 pub struct PostgresFixtureTestRunner {
     pool: RuntimePool,
     app: Router,
+    posture: registry_platform_config::Posture,
     bearer_tokens: Vec<String>,
     bearer_index: usize,
     suite: ValidatedFixtureJourneys,
@@ -3306,7 +3307,7 @@ impl PostgresFixtureTestRunner {
         prepared: &PreparedServer,
         bearer_tokens: Vec<String>,
     ) -> Result<Self, FixtureError> {
-        let (app, pool) = prepared
+        let (app, pool, posture) = prepared
             .fixture_runtime()
             .ok_or(FixtureError::ExecutionRefused)?;
         let step_count = suite
@@ -3332,6 +3333,7 @@ impl PostgresFixtureTestRunner {
         Ok(Self {
             pool,
             app,
+            posture,
             bearer_tokens,
             bearer_index: 0,
             suite: suite.clone(),
@@ -3410,9 +3412,15 @@ impl PostgresFixtureTestRunner {
                 }),
             );
         }
-        accept_response(&step, response, &mut self.observations, Some(&self.pool))
-            .await
-            .map_err(|error| self.current_step_failure(error))?;
+        accept_response(
+            &step,
+            response,
+            &mut self.observations,
+            Some(&self.pool),
+            self.posture == registry_platform_config::Posture::Development,
+        )
+        .await
+        .map_err(|error| self.current_step_failure(error))?;
         self.bearer_index += 1;
         self.step_index += 1;
         let journey = self
@@ -3696,7 +3704,7 @@ async fn execute_schema_test_with_issuers(
                     problem_detail,
                 }));
             }
-            accept_response(step, response, &mut observations, Some(&runtime.pool))
+            accept_response(step, response, &mut observations, Some(&runtime.pool), false)
                 .await
                 .map_err(step_failure)?;
             bearer_index += 1;
@@ -4593,6 +4601,7 @@ async fn accept_response(
     response: Response<Body>,
     observations: &mut BTreeMap<String, Observation>,
     _pool: Option<&RuntimePool>,
+    allow_development_failed_check: bool,
 ) -> Result<(), FixtureError> {
     let status = response.status();
     let headers = response.headers().clone();
@@ -4600,7 +4609,13 @@ async fn accept_response(
         .await
         .map_err(|_| FixtureError::ResponseTooLarge)?;
     let document = parse_json_strict(&bytes).map_err(|_| FixtureError::ResponseShapeRefused)?;
-    assert_response_with_observations(step, status, &document, observations)?;
+    assert_response_with_observations_for_posture(
+        step,
+        status,
+        &document,
+        observations,
+        allow_development_failed_check,
+    )?;
     if matches!(step.expect.outcome, ExpectedOutcome::Refusal) {
         let header_trace =
             response_trace_id(&headers).map_err(|_| FixtureError::ResponseShapeRefused)?;
@@ -4704,11 +4719,22 @@ fn assert_response(
     assert_response_with_observations(step, status, document, &BTreeMap::new())
 }
 
+#[cfg(test)]
 fn assert_response_with_observations(
     step: &ValidatedStep,
     status: StatusCode,
     document: &Value,
     observations: &BTreeMap<String, Observation>,
+) -> Result<(), FixtureError> {
+    assert_response_with_observations_for_posture(step, status, document, observations, false)
+}
+
+fn assert_response_with_observations_for_posture(
+    step: &ValidatedStep,
+    status: StatusCode,
+    document: &Value,
+    observations: &BTreeMap<String, Observation>,
+    allow_development_failed_check: bool,
 ) -> Result<(), FixtureError> {
     if status.as_u16() != step.expect.status {
         return Err(FixtureError::ExpectationMismatch);
@@ -4816,6 +4842,20 @@ fn assert_response_with_observations(
                 {
                     return Err(FixtureError::ExpectationMismatch);
                 }
+            }
+            if allow_development_failed_check && document.get("failedCheck").is_some() {
+                let valid = document
+                    .get("failedCheck")
+                    .and_then(Value::as_str)
+                    .is_some_and(|label| {
+                        registry_platform_authcommon::FailedCheck::ALL
+                            .iter()
+                            .any(|check| check.as_str() == label)
+                    });
+                if !valid {
+                    return Err(FixtureError::ResponseShapeRefused);
+                }
+                keys.push("failedCheck");
             }
             let object = exact_object(document, &keys)?;
             let trace_id = object
@@ -8089,9 +8129,54 @@ journeys:
             .expect("problem response builds");
         let mut observations = BTreeMap::new();
         assert_eq!(
-            accept_response(refusal, mismatched_trace, &mut observations, None).await,
+            accept_response(refusal, mismatched_trace, &mut observations, None, false).await,
             Err(FixtureError::ResponseShapeRefused),
             "the fixture executor refuses disagreement between body and header trace IDs"
+        );
+        let development_refusal = json!({
+            "type": "https://id.registrystack.org/problems/registry-breg/resource/not_found",
+            "title": "Not Found",
+            "status": 404,
+            "detail": "The requested resource was not found.",
+            "code": "resource.not_found",
+            "traceId": "11111111111111111111111111111111",
+            "failedCheck": "visibility"
+        });
+        assert_eq!(
+            assert_response(refusal, StatusCode::NOT_FOUND, &development_refusal),
+            Err(FixtureError::ResponseShapeRefused),
+            "production refusal assertions reject development failedCheck"
+        );
+        assert_eq!(
+            assert_response_with_observations_for_posture(
+                refusal,
+                StatusCode::NOT_FOUND,
+                &development_refusal,
+                &BTreeMap::new(),
+                true,
+            ),
+            Ok(()),
+            "development refusal assertions accept a closed FailedCheck label"
+        );
+        let invalid_failed_check = json!({
+            "type": "https://id.registrystack.org/problems/registry-breg/resource/not_found",
+            "title": "Not Found",
+            "status": 404,
+            "detail": "The requested resource was not found.",
+            "code": "resource.not_found",
+            "traceId": "11111111111111111111111111111111",
+            "failedCheck": "not-a-registered-check"
+        });
+        assert_eq!(
+            assert_response_with_observations_for_posture(
+                refusal,
+                StatusCode::NOT_FOUND,
+                &invalid_failed_check,
+                &BTreeMap::new(),
+                true,
+            ),
+            Err(FixtureError::ResponseShapeRefused),
+            "development refusal assertions reject unknown failedCheck labels"
         );
 
         let malformed_list = json!({

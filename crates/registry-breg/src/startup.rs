@@ -1064,10 +1064,12 @@ impl PreparedServer {
     /// carry no such capability, so fixture receipt code cannot attest canned
     /// Routers or a caller-selected database.
     #[cfg(all(feature = "postgres-test", feature = "tooling"))]
-    pub(crate) fn fixture_runtime(&self) -> Option<(Router, RuntimePool)> {
+    pub(crate) fn fixture_runtime(
+        &self,
+    ) -> Option<(Router, RuntimePool, registry_platform_config::Posture)> {
         self.fixture_pool
             .as_ref()
-            .map(|pool| (self.app.clone(), pool.clone()))
+            .map(|pool| (self.app.clone(), pool.clone(), self.recorded_posture))
     }
 
     #[cfg(feature = "postgres-test")]
