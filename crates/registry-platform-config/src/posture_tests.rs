@@ -293,8 +293,6 @@ fn a_panic_inside_a_collector_restores_the_outer_collector() {
     assert!(none.is_empty());
 }
 
-// F1
-
 #[test]
 fn production_refuses_each_setting_with_an_error_and_development_warns_under_the_same_code() {
     let mut production = PostureReport::new(declared(Posture::Production));

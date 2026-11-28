@@ -4471,6 +4471,7 @@ fn runtime_config_file_and_ancestors_require_trusted_ownership_and_modes() {
     load_runtime_config_with_env(&config_path, env_lookup, PRODUCTION_POSTURE)
         .expect("an owner-controlled development runtime file loads");
 
+    let quoted_path = config_path.display().to_string().replace('\'', "'\\''");
     for (mode, permission) in [(0o620, "g-w"), (0o602, "o-w")] {
         fs::set_permissions(&config_path, fs::Permissions::from_mode(mode))
             .expect("unsafe runtime mode sets");
@@ -4481,10 +4482,8 @@ fn runtime_config_file_and_ancestors_require_trusted_ownership_and_modes() {
             ("platform.runtime-config.unsafe-file", "")
         );
         let rendered = error.render_human(None);
-        assert!(
-            rendered.contains(&format!("chmod {permission} {}", config_path.display())),
-            "{rendered}"
-        );
+        let repair = format!("next: Run `chmod {permission} -- '{quoted_path}'`.");
+        assert!(rendered.contains(&repair), "{rendered}");
     }
 
     fs::set_permissions(&config_path, fs::Permissions::from_mode(0o600))
