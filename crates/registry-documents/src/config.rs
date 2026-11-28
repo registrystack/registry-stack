@@ -1479,6 +1479,8 @@ pub fn check_runtime_file_with_posture(
                 &check,
                 DOCUMENTS_RUNTIME_KIND,
             ));
+            let hook_destinations = hook_destination_diagnostics(&check, &loaded.config);
+            extend_unreported(&mut diagnostics, hook_destinations);
             (
                 diagnostics,
                 Some(loaded.posture.explicit_settings().to_vec()),
@@ -1490,6 +1492,40 @@ pub fn check_runtime_file_with_posture(
         report: check.report_with(DOCUMENTS_RUNTIME_KIND, diagnostics),
         unavailable: check.unavailable,
         explicit_settings,
+    }
+}
+
+/// What hook activation would refuse in each bound destination, from the
+/// shared hook destination check, at the destination's own pointer.
+fn hook_destination_diagnostics(
+    check: &RuntimeFileCheck<RuntimeConfig>,
+    config: &RuntimeConfig,
+) -> Vec<Diagnostic> {
+    config
+        .destinations
+        .hooks
+        .iter()
+        .flat_map(|(id, destination)| {
+            registry_platform_hooks::delivery::check_url_hook_destination_file(
+                destination,
+                &format!("/destinations/hooks/{}", escape(id)),
+                check,
+                DOCUMENTS_RUNTIME_KIND,
+            )
+        })
+        .collect()
+}
+
+/// Add each of `shared` at a member no diagnostic in `diagnostics` already
+/// names, so a refusal the product reports in its own words is not repeated.
+fn extend_unreported(diagnostics: &mut Vec<Diagnostic>, shared: Vec<Diagnostic>) {
+    for diagnostic in shared {
+        if !diagnostics
+            .iter()
+            .any(|known| known.path == diagnostic.path)
+        {
+            diagnostics.push(diagnostic);
+        }
     }
 }
 
@@ -3154,6 +3190,42 @@ pub(crate) mod tests {
             .iter()
             .map(|diagnostic| format!("{} {}", diagnostic.code, diagnostic.path))
             .collect()
+    }
+
+    /// The offline check runs the shared hook destination check, so it
+    /// refuses at the destination's own URL what activation refuses.
+    #[cfg(unix)]
+    #[test]
+    fn the_offline_check_refuses_what_hook_activation_refuses() {
+        let starter_url = "url: https://civil-registry.example.test/document-events";
+        assert!(STARTER_RUNTIME.contains(starter_url));
+        let with_hook = |url: &str| STARTER_RUNTIME.replace(starter_url, &format!("url: {url}"));
+        for refused in [
+            "https://localhost.:9443/hooks",
+            "https://receiver.localhost:9443/hooks",
+        ] {
+            assert_eq!(
+                offline_codes(&with_hook(refused)),
+                ["config.invalid-value /destinations/hooks/owning-system-events/url"],
+                "{refused}"
+            );
+        }
+        for admitted in [
+            "https://localhost:9443/hooks",
+            "https://127.0.0.1:9443/hooks",
+            "https://[::1]:9443/hooks",
+        ] {
+            assert_eq!(
+                offline_codes(&with_hook(admitted)),
+                Vec::<String>::new(),
+                "{admitted}"
+            );
+        }
+        // A finding the product already makes at the URL is not repeated.
+        assert_eq!(
+            offline_codes(&with_hook("http://receiver.example.test/hooks")),
+            ["documents.runtime.insecure-url /destinations/hooks/owning-system-events/url"]
+        );
     }
 
     #[cfg(unix)]

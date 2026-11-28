@@ -252,19 +252,9 @@ fn the_actual_check_accepts_a_file_source_when_the_host_feature_is_present() {
     assert_eq!(report["source"]["route"], "kobo-submissions");
 }
 
-/// The check's findings: standard output and error together.
-fn check_findings(fixture: &FileFixture) -> String {
-    let output = run_check(fixture);
-    format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    )
-}
-
 #[cfg(feature = "signed-coordinator-event")]
 #[test]
-fn a_named_plain_http_endpoint_needs_a_declared_private_range() {
+fn a_named_plain_http_endpoint_is_refused_whatever_its_private_ranges() {
     let fixture = FileFixture::new("csv", "file", 1_048_576);
     let declared = std::fs::read_to_string(&fixture.runtime).expect("the runtime config");
     let named = declared.replace(
@@ -278,16 +268,47 @@ fn a_named_plain_http_endpoint_needs_a_declared_private_range() {
     );
     assert_ne!(empty, named, "the fixture declares one private range");
 
-    std::fs::write(&fixture.runtime, &empty).expect("the runtime config");
+    // Adapter sources are https or loopback only: a declared range admits
+    // an https answer, never plain http.
+    for (runtime, ranges) in [(&empty, "no range"), (&named, "a declared range")] {
+        std::fs::write(&fixture.runtime, runtime).expect("the runtime config");
+        let output = run_check(&fixture);
+        assert!(!output.status.success(), "{ranges}: the check passed");
+        let findings = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            findings.lines().any(|line| {
+                line.contains("error[adapter.runtime.insecure-origin]")
+                    && line.contains("/endpoints/0/baseUrl")
+            }),
+            "{ranges}: {findings}"
+        );
+    }
+
+    // Plain http on loopback is admitted. The https-only acknowledgement is
+    // removed, since the check refuses it beside a plain-http origin.
+    let mut loopback: Value = serde_json::from_str(&declared).expect("the runtime config is JSON");
+    let endpoint = loopback["endpoints"][0]
+        .as_object_mut()
+        .expect("the fixture's endpoint");
     assert!(
-        check_findings(&fixture).contains("adapter.runtime.insecure-origin"),
-        "an empty list admits no private address"
+        endpoint.remove("anonymousHttps").is_some(),
+        "the fixture acknowledges anonymous https"
     );
-    std::fs::write(&fixture.runtime, &named).expect("the runtime config");
+    endpoint.insert("baseUrl".to_owned(), json!("http://127.0.0.1:8081"));
+    std::fs::write(
+        &fixture.runtime,
+        serde_json::to_string_pretty(&loopback).expect("the runtime config"),
+    )
+    .expect("the runtime config");
+    fixture.write_source("submissions.csv", b"id,status,note\n001,new,ready\n");
+    let output = run_check(&fixture);
     assert!(
-        !check_findings(&fixture).contains("adapter.runtime.insecure-origin"),
-        "a declared range admits the named host"
+        output.status.success(),
+        "plain http on loopback is admitted: {}",
+        String::from_utf8_lossy(&output.stderr)
     );
+    let report: Value = serde_json::from_slice(&output.stdout).expect("the report is JSON");
+    assert_eq!(report["ok"], true);
 }
 
 #[tokio::test]
@@ -603,6 +624,7 @@ async fn legacy_file_and_raw_state_stop_before_source_or_destination_io() {
     }
 }
 
+#[cfg(feature = "postgres-test")]
 fn run_host(store_url: &str, fixture: &FileFixture, args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_adapter-job"))
         .env("JOB_TEST_DB", store_url)

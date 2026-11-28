@@ -175,6 +175,9 @@ The other blocks are checked, so a deployment written now keeps its meaning when
   Set the optional `previousHmacSha256KeyRef` to keep signing with the previous key during rotation.
   Startup refuses a project hook whose destination is not bound here and any unavailable, invalid, or repeated signing key.
   S3, verifier and hook URLs accept HTTPS or HTTP over loopback in either posture. Other HTTP hosts are refused with `documents.runtime.insecure-url`.
+  An `https` URL to a loopback address or the exact name `localhost`, such as `https://localhost:9443/hooks`, is accepted in either posture.
+  `localhost` is delivered to only when every address it resolves to is loopback.
+  A name under `localhost`, the absolute name `localhost.`, or port zero is refused by `documentsctl check` and at startup with `config.invalid-value` at the destination's `url`.
   A pending or leased delivery pins the binding it was captured under (id, URL, current key reference, timeout, attempts), so startup refuses while one remains whose binding is no longer here.
   To move a hook, bind a new destination id, point the hook at it and apply, and remove the old entry once its deliveries have drained or expired.
 - `retention.receiptRetentionDays` is 1 to 365, default 7: how long a replay of an `Idempotency-Key` on a reservation or a grant is answered with the original outcome.

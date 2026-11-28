@@ -24,7 +24,7 @@ use registry_platform_config::{
 use registry_platform_crypto::delivery_signature::{
     distinct_delivery_keys, DeliveryKey, DeliveryKeyError, DeliveryKeys,
 };
-use registry_platform_httputil::destination::EventDestinationPolicy;
+use registry_platform_httputil::destination::{DestinationPolicyError, EventDestinationPolicy};
 use registry_platform_httputil::select::{DestinationSelectionError, TransportClass};
 use registry_platform_yaml::{Diagnostic, LocalId};
 use serde_json::{json, Value};
@@ -100,8 +100,12 @@ impl UrlHookActivationError {
 /// reports it. Once the ranges are valid, a selector refusal is reported
 /// with its code at `{pointer}/transport` when the declared transport
 /// disagrees with the URL or lacks ranges, and at `{pointer}/url` otherwise.
-/// A URL with a query or a fragment is reported at `{pointer}/url` as
-/// `config.invalid-value`. No message repeats a configured value.
+/// A URL with a query or a fragment, and a URL the selector admits but the
+/// fixed destination policy refuses (an https URL naming a name under
+/// `localhost` or the absolute name `localhost.`, or port zero), are reported
+/// at `{pointer}/url` as `config.invalid-value`. An https URL to a loopback
+/// literal or the exact name `localhost` is admitted, pinned to loopback
+/// addresses as a loopback http URL is. No message repeats a configured value.
 #[must_use]
 pub fn check_url_hook_destination(
     config: &UrlHookDestinationConfig,
@@ -164,7 +168,8 @@ struct DestinationRefusal {
 }
 
 /// The refusal activation would make from the URL and the transport, once
-/// every range is valid. A refused range is the range check's to report.
+/// every range is valid: the selector's, then the fixed destination
+/// policy's. A refused range is the range check's to report.
 fn destination_refusal(
     config: &UrlHookDestinationConfig,
     pointer: &str,
@@ -172,7 +177,9 @@ fn destination_refusal(
     let ranges = config.allowed_private_cidrs.ranges().ok()?;
     match url_destination_address_selected(config.url.as_str(), declared_transport(config), &ranges)
     {
-        Ok(_) => None,
+        Ok(address) => EventDestinationPolicy::from_selected(CHECK_ORIGIN_ID, &address.selected)
+            .err()
+            .map(|error| policy_refusal(&error, pointer)),
         Err(UrlDestinationError::Refused(error)) => {
             let member = match error {
                 DestinationSelectionError::TransportSchemeMismatch
@@ -193,6 +200,37 @@ fn destination_refusal(
             message: "the hook URL carries a query or a fragment".to_owned(),
             suggested_action: "Remove the query and the fragment from the hook URL.",
         }),
+    }
+}
+
+/// The origin id the check builds its policy under. Activation uses the
+/// destination's logical id, which the product checks on its own, so the
+/// check names a valid stand-in.
+const CHECK_ORIGIN_ID: &str = "destination";
+
+/// What the fixed destination policy refuses in a URL the selector admits,
+/// reported at `{pointer}/url` as activation would refuse it. The message is
+/// fixed, so it repeats no configured value.
+fn policy_refusal(error: &DestinationPolicyError, pointer: &str) -> DestinationRefusal {
+    let (message, suggested_action) = match error {
+        DestinationPolicyError::LocalhostNamespaceDenied => (
+            "an https hook URL cannot name a local-only host name",
+            "Reach a local receiver at the exact name localhost or a loopback address, or name a receiver outside the local namespace.",
+        ),
+        DestinationPolicyError::OriginPortZero => (
+            "the hook URL's port is zero",
+            "Give the hook URL a port other than 0.",
+        ),
+        _ => (
+            "the hook URL is not a valid destination",
+            "Correct the hook URL.",
+        ),
+    };
+    DestinationRefusal {
+        code: "config.invalid-value",
+        member: format!("{pointer}/url"),
+        message: message.to_owned(),
+        suggested_action,
     }
 }
 

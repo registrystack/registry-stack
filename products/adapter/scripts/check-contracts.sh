@@ -103,6 +103,9 @@ PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-job --feat
 clear_completed_adapter_lane
 PATH="$HOME/.cargo/bin:$PATH" cargo clippy --locked -p registry-adapter-job --features signed-coordinator-event --all-targets -- -D warnings
 PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-job --features signed-coordinator-event --lib
+# The file host's integration suite runs the real job check against the
+# signed destination, so the shared source-origin rule is held at runtime.
+PATH="$HOME/.cargo/bin:$PATH" cargo test --locked -p registry-adapter-job --features signed-coordinator-event,job-file --test job_file_host
 
 # The generated schemas are held to their generator (CFG-SCHEMA-2), and the
 # adapter formats are held to the configuration-format convention

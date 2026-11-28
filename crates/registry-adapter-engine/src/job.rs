@@ -111,7 +111,7 @@ impl fmt::Display for JobError {
         let rendered = self
             .diagnostics
             .iter()
-            .map(|diagnostic| format!("{} {}", diagnostic.code, diagnostic.message))
+            .map(crate::load::located_reason)
             .collect::<Vec<_>>()
             .join("; ");
         write!(formatter, "the job was refused: {rendered}")
@@ -1924,6 +1924,24 @@ mod tests {
     use registry_adapter_core::{DestinationMapping, JobDestination};
     use registry_platform_config::sha256_uri;
     use serde_json::json;
+
+    /// The job refusal's display names each finding's pointer and the
+    /// migration `check` prints, not the code and message alone.
+    #[test]
+    fn a_job_refusal_displays_each_pointer_and_next_step() {
+        let error = job_error(vec![Diagnostic::error(
+            "adapter.runtime.insecure-origin",
+            "/endpoints/0/baseUrl",
+            "the endpoint's origin is plain HTTP to a host that is not loopback",
+            "Serve the source over https, or reach it on loopback.",
+        )]);
+        assert_eq!(
+            error.to_string(),
+            "the job was refused: adapter.runtime.insecure-origin at /endpoints/0/baseUrl: \
+             the endpoint's origin is plain HTTP to a host that is not loopback. \
+             Serve the source over https, or reach it on loopback."
+        );
+    }
 
     /// A runtime refusal names the runtime member and the fix, and the
     /// secret-provider start failure keeps the value-free cause.

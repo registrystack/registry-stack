@@ -412,7 +412,7 @@ pub(crate) fn read<T: DeserializeOwned>(
 
 /// One reader finding as a sentence an author can act on: the code, the
 /// pointer to the faulty member, the reader's message, and its fix.
-fn located_reason(diagnostic: &registry_platform_yaml::Diagnostic) -> String {
+pub(crate) fn located_reason(diagnostic: &registry_platform_yaml::Diagnostic) -> String {
     let at = if diagnostic.path.is_empty() {
         String::new()
     } else {
@@ -783,7 +783,7 @@ fn load_inner(
         &pack.version,
         &digest_of(&pack_bytes),
     ) {
-        findings.push(format!("{} {}", diagnostic.code, diagnostic.message));
+        findings.push(located_reason(&diagnostic));
     }
     for diagnostic in check_workspace(&Workspace {
         profile: &profile,
@@ -793,7 +793,7 @@ fn load_inner(
         fixtures: &[],
     }) {
         if diagnostic.severity == Severity::Error {
-            findings.push(format!("{} {}", diagnostic.code, diagnostic.message));
+            findings.push(located_reason(&diagnostic));
         }
     }
     if !findings.is_empty() {
@@ -2035,6 +2035,57 @@ audit: {retentionDays: 90}
             assert!(message.contains("config.removed-key"), "{message}");
             assert!(message.contains(&pointer), "{message}");
             assert!(message.contains(removed.replacement), "{message}");
+        }
+    }
+
+    /// D1 (b) at load: Adapter sources are https or loopback only. The
+    /// maintained example, with its source moved to plain http beyond
+    /// loopback, is refused by the workspace check whatever range the
+    /// runtime lists, and a binding that declares `transport` is refused
+    /// when the runtime file is read, since a binding takes no such member.
+    #[test]
+    fn a_plain_text_source_beyond_loopback_refuses_the_load() {
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let project = repository.join("products/adapter/examples/dhis2-tracker");
+        let profile = repository.join("products/adapter/profiles/breg-records/profile.yaml");
+        let pack = repository.join("products/adapter/packs/dhis2-tracker/pack.yaml");
+        let example = std::fs::read_to_string(project.join("runtime.example.yaml"))
+            .expect("the example runtime");
+        let directory = tempfile::tempdir().expect("runtime directory");
+        let load_with = |from: &str, to: &str| {
+            assert!(example.contains(from), "the example runtime holds {from}");
+            let runtime = directory.path().join("runtime.yaml");
+            std::fs::write(&runtime, example.replacen(from, to, 1)).expect("write the runtime");
+            load(&project, Some(&profile), Some(&pack), &runtime).map(drop)
+        };
+
+        match load_with(
+            "baseUrl: https://tracker.example.invalid",
+            "baseUrl: http://10.0.0.7:8080",
+        ) {
+            Err(LoadError::Workspace(findings)) => {
+                // Startup names the pointer and the migration `check` prints.
+                assert!(
+                    findings.contains("adapter.runtime.insecure-origin at /endpoints/0/baseUrl"),
+                    "{findings}"
+                );
+                assert!(
+                    findings.contains(
+                        "Serve the source over https, or reach it on loopback through a sidecar that carries the connection over TLS."
+                    ),
+                    "{findings}"
+                );
+            }
+            other => panic!("plain http beyond loopback loaded: {other:?}"),
+        }
+        match load_with(
+            "    tlsTrustProfile: dhis2-private-ca\n",
+            "    transport: private-network-plaintext\n",
+        ) {
+            Err(LoadError::Runtime(message)) => {
+                assert!(message.contains("transport"), "{message}");
+            }
+            other => panic!("a declared transport loaded: {other:?}"),
         }
     }
 

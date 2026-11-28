@@ -63,6 +63,7 @@ fn store_from(input: serde_json::Value, scope: &str, files: &SecretFiles) -> S3O
         client: OutboundClientBuilder::new()
             .timeout(settings.timeout)
             .connect_timeout(connect_timeout(settings.timeout))
+            .destination(&settings.destination)
             .try_build()
             .unwrap(),
         namespace: NAMESPACE,
@@ -242,7 +243,8 @@ fn ipv6_signed_host_preserves_brackets_and_normalizes_default_ports() {
         assert_eq!(headers["host"], expected_host);
         let expected_authorization = format!("AWS4-HMAC-SHA256 Credential=breg960test/20260909/us-east-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature={signature}");
         assert_eq!(headers["authorization"], expected_authorization);
-        let request = store.client.get(url).headers(headers).build().unwrap();
+        let mut request = reqwest::Request::new(Method::GET, url);
+        *request.headers_mut() = headers;
         assert_eq!(request.headers()["host"], expected_host);
     }
 }

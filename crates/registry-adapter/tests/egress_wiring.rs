@@ -462,14 +462,15 @@ async fn a_private_key_jwt_kind_posts_its_assertion_without_an_authorization_hea
 }
 
 /// A destination the address policy refuses raises the uncatchable
-/// `egress.refused`, and no byte reaches the network.
+/// `egress.refused`, and no byte reaches the network. The origin is https,
+/// so the credential may travel and the address policy alone decides.
 #[tokio::test]
 async fn a_refused_destination_surfaces_as_egress_refused() {
     std::env::set_var("EGR_C4B_PRIVATE_USER", "private-user");
     std::env::set_var("EGR_C4B_PRIVATE_PASSWORD", "private-password");
     let config = runtime_config(vec![basic_binding(
         "private-api",
-        "http://10.0.0.7:8080/",
+        "https://10.0.0.7:8443/",
         "EGR_C4B_PRIVATE_USER",
         "EGR_C4B_PRIVATE_PASSWORD",
     )]);
@@ -493,7 +494,7 @@ async fn a_refused_destination_surfaces_as_egress_refused() {
     let bound = egress.endpoint("private-api").expect("the endpoint");
     let error = bound
         .send(registry_adapter::engine::egress::OutboundSend {
-            link: "http://10.0.0.7:8080/records",
+            link: "https://10.0.0.7:8443/records",
             exchange_headers: &[],
             shape: SendShape::Get,
             authorization: Some(&credential),
@@ -537,6 +538,46 @@ async fn a_refused_destination_surfaces_as_egress_refused() {
     let rendered = error.to_string();
     assert!(
         !rendered.contains("private-user") && !rendered.contains("private-password"),
+        "the refusal never carries a credential: {rendered}"
+    );
+}
+
+/// A credential never travels over private plain text, even to an address
+/// the allowlist admits: Adapter sources are https or loopback only, so the
+/// deployment refuses at load, as core's checks refuse the same binding,
+/// and no send is ever attempted.
+#[test]
+fn a_credential_over_private_plain_text_refuses_at_load() {
+    std::env::set_var("EGR_C4B_PLAIN_USER", "plain-user");
+    std::env::set_var("EGR_C4B_PLAIN_PASSWORD", "plain-password");
+    // 192.168.0.7 is inside 192.168.0.0/16, so only the credential refuses.
+    let config = runtime_config(vec![basic_binding(
+        "plain-api",
+        "http://192.168.0.7:8080/",
+        "EGR_C4B_PLAIN_USER",
+        "EGR_C4B_PLAIN_PASSWORD",
+    )]);
+    let endpoints = vec![pack_endpoint(
+        "plain-api",
+        EndpointAuthentication::Basic {},
+        &[],
+    )];
+    let error = match Egress::load(&endpoints, &config, &resolver()) {
+        Err(fault) => fault,
+        Ok(_) => panic!("a credential over private plain text refuses the load"),
+    };
+    assert!(
+        matches!(
+            &error,
+            EgressFault::Auth(AuthError::Plan(
+                AuthPlanFault::CredentialRequiresProtectedTransport
+            ))
+        ),
+        "the load refuses at the plan's credential rule: {error:?}"
+    );
+    let rendered = error.to_string();
+    assert!(
+        !rendered.contains("plain-user") && !rendered.contains("plain-password"),
         "the refusal never carries a credential: {rendered}"
     );
 }
@@ -1373,33 +1414,49 @@ async fn without_the_throw_an_out_of_range_status_returns_the_reply() {
 
 // Address policy and the declared CIDRs.
 
-/// A plain-HTTP origin whose literal address sits inside a declared
-/// private CIDR loads: core's authoring check admits it by the same
-/// one rule, the runtime's load agrees, and the send-time policy
-/// still refuses a plain-HTTP origin outside the declared CIDRs
+/// A declared private CIDR admits an https origin, never plain HTTP:
+/// Adapter sources are https or loopback only. The https origin inside
+/// the CIDR loads, the plain-HTTP origin at the same address refuses at
+/// load as core's authoring check refuses it, and the send-time policy
+/// refuses an https private address outside the declared CIDRs
 /// (`a_refused_destination_surfaces_as_egress_refused`).
 #[test]
-fn a_plain_http_origin_inside_the_declared_cidrs_loads() {
+fn a_declared_cidr_admits_an_https_origin_and_never_plain_http() {
     std::env::set_var("EGR_C4B_TEN_USER", "ten-user");
     std::env::set_var("EGR_C4B_TEN_PASSWORD", "ten-pass");
-    let config = runtime_config_with(
-        vec![basic_binding(
-            "private-api",
-            "http://10.0.0.7:8080/",
-            "EGR_C4B_TEN_USER",
-            "EGR_C4B_TEN_PASSWORD",
-        )],
-        &["10.0.0.0/8"],
-        None,
-    );
     let endpoints = vec![pack_endpoint(
         "private-api",
         EndpointAuthentication::Basic {},
         &[],
     )];
-    let egress = Egress::load(&endpoints, &config, &resolver())
-        .expect("a plain-HTTP origin inside the declared CIDRs loads");
+    let config = |base_url: &str| {
+        runtime_config_with(
+            vec![basic_binding(
+                "private-api",
+                base_url,
+                "EGR_C4B_TEN_USER",
+                "EGR_C4B_TEN_PASSWORD",
+            )],
+            &["10.0.0.0/8"],
+            None,
+        )
+    };
+    let egress = Egress::load(&endpoints, &config("https://10.0.0.7:8443/"), &resolver())
+        .expect("an https origin inside the declared CIDRs loads");
     assert!(egress.endpoint("private-api").is_some());
+    let error = match Egress::load(&endpoints, &config("http://10.0.0.7:8080/"), &resolver()) {
+        Err(fault) => fault,
+        Ok(_) => panic!("a plain-HTTP origin inside the declared CIDRs refuses the load"),
+    };
+    assert!(
+        matches!(
+            &error,
+            EgressFault::Auth(AuthError::Plan(
+                AuthPlanFault::CredentialRequiresProtectedTransport
+            ))
+        ),
+        "{error:?}"
+    );
 }
 
 // Transport failures inside an admitted exchange.

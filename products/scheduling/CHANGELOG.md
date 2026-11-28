@@ -5,6 +5,19 @@
 - Start a local development run from the starter with `rstack dev start`.
 
 - BREAKING: `schedulingctl records apply` reports a swap the store refuses (`package-not-active`, `deployment-identity`, `not-activated`, `database-id-mismatch`, `combined-invariant`) as a domain refusal with exit 1 and its own code, as the other activation commands do. It was exit 3 `store-unavailable`. Migration: Scripts that retry on exit 3 no longer retry these refusals. Run the command the message names.
+- A `destinations.hooks` URL over https to a loopback address literal or the
+  exact name `localhost`, such as `https://localhost:9443/hooks`, now
+  activates and delivers. Before, `https://localhost` was refused at startup
+  and an https loopback literal failed at every delivery. `localhost` is
+  delivered to only when every address it resolves to is loopback. The
+  reminder destination keeps its rule.
+- `schedulingctl check` runs the shared hook destination check on each
+  `destinations.hooks` entry, so it refuses what startup refuses, at the
+  destination's own pointer. For example, `https://localhost.:9443/hooks`
+  or a name under `localhost` is now refused by the check with
+  `config.invalid-value` at `/destinations/hooks/<id>/url`. Before, it
+  passed the check and was refused at startup. A refusal the check already
+  reports at that member keeps its scheduling code.
 - BREAKING: Scheduling signs every reminder delivery with Standard Webhooks.
   The POST carries `accept`, `content-type`, `webhook-id`,
   `webhook-timestamp` and `webhook-signature`. `webhook-id` is the outbox id and
