@@ -74,8 +74,14 @@ The crate enforces:
 - Outbound client: built by `registry-platform-httputil`'s
   `OutboundClientBuilder`, confined with `.destination()` to the selected host.
   No other name is resolved, and over `https` no answer may be a cloud metadata
-  or always-denied address. A cloud metadata or always-denied literal is
-  refused at activation, and an explicit loopback literal is admitted. Rustls,
+  or always-denied address. The rule judges the IPv4 address that an
+  IPv4-mapped, IPv4-compatible (`::/96`), 6to4 (`2002::/16`) or well-known
+  NAT64 (`64:ff9b::/96`) IPv6 address carries, so a name answering `::7f00:1`
+  is refused as one answering `127.0.0.1` is, and so is the literal
+  `[::7f00:1]`. A store reached through such an address moves to its own IPv4
+  or native IPv6 address, or to a name that answers one. A cloud metadata or
+  always-denied literal is refused at activation, and an explicit loopback
+  literal is admitted. Rustls,
   proxies ignored, retries and redirects disabled, and an optional exact CA
   bundle (`caBundleRef`, S3 only).
 - Secrets: read through `SecretResolver` only, bounded to visible ASCII, and

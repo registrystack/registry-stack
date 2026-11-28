@@ -6791,10 +6791,9 @@ fn worst_body(
 
 /// The endpoint-binding checks every mode runs: endpoint
 /// coverage, credential-kind match, `none` confined to the numeric
-/// loopback or `https` with an mTLS identity, and the plain-HTTP
-/// confinement to the loopback exception and the declared private CIDRs, the rule load's own destination policy enforces on
-/// resolved addresses. The facade's runtime check adds its own members
-/// to these findings.
+/// loopback or `https` with an mTLS identity, and plain HTTP confined to
+/// the loopback exception, the rule load's own credential policy enforces.
+/// The facade's runtime check adds its own members to these findings.
 #[must_use]
 pub fn check_endpoint_bindings(
     workspace: &Workspace<'_>,
@@ -6816,6 +6815,9 @@ pub fn check_endpoint_bindings(
             continue;
         }
         let endpoint = endpoint.expect("checked");
+        // One finding per refused origin: the credential refusal already
+        // names the plain-HTTP origin.
+        let mut origin_reported = false;
         if let Err(fault) =
             crate::auth::endpoint_authentication_policy(&endpoint.authentication, binding)
         {
@@ -6852,6 +6854,15 @@ pub fn check_endpoint_bindings(
                     "a none credential reaches an origin without numeric-loopback, mTLS, or acknowledged HTTPS admission".to_owned(),
                     "Add an mTLS client identity over TLS, use numeric loopback, or set anonymousHttps to operator-approved for a reviewed HTTPS source.",
                 ),
+                crate::auth::EndpointAuthenticationPolicyFault::CredentialRequiresProtectedTransport => {
+                    origin_reported = true;
+                    (
+                        CheckCode::RuntimeInsecureOrigin,
+                        "baseUrl",
+                        "the endpoint's credential would travel over plain HTTP to a host that is not loopback".to_owned(),
+                        SOURCE_ORIGIN_FIX,
+                    )
+                }
             };
             findings.push(finding(
                 code,
@@ -6865,12 +6876,12 @@ pub fn check_endpoint_bindings(
                 check_token_endpoint(&prefix, credential, &mut findings);
             }
         }
-        if !plain_http_origin_admitted(&binding.base_url, &bindings.allowed_private_cidrs) {
+        if !origin_reported && !plain_http_origin_admitted(&binding.base_url) {
             findings.push(finding(
                 CheckCode::RuntimeInsecureOrigin,
                 &format!("{prefix}/baseUrl"),
-                "the endpoint's origin is plain HTTP outside the declared private CIDRs and the loopback exception",
-                "Serve the origin over TLS, name its address inside allowedPrivateCidrs, or use a loopback origin.",
+                "the endpoint's origin is plain HTTP to a host that is not loopback",
+                SOURCE_ORIGIN_FIX,
             ));
         }
         if carries_query_or_fragment(&binding.base_url) {
@@ -7051,32 +7062,19 @@ pub fn loopback_exception_origin(url: &registry_platform_yaml::Url) -> bool {
         .is_some_and(|host| registry_platform_httputil::loopback::loopback_host(host).is_some())
 }
 
-/// The one plain-HTTP rule:
-/// plain HTTP is the contract inside the loopback exception and the declared private CIDRs, and refused everywhere
-/// else, for every authentication kind. The check evaluates the
-/// binding's host text; the send-time address resolution re-evaluates
-/// the same containment on the answers it gets, so a named host is
-/// admitted here exactly as the send admits it, by resolution.
+/// The one fix for a source origin the Adapter refuses.
+const SOURCE_ORIGIN_FIX: &str =
+    "Serve the source over https, or reach it on loopback through a sidecar that carries the connection over TLS.";
+
+/// The one plain-HTTP rule: Adapter sources are https or loopback only.
+/// Plain HTTP is admitted inside the loopback exception and refused
+/// everywhere else, for every authentication kind; a declared private
+/// range admits an https answer, never plain HTTP. A source a deployment
+/// reaches only over a private network is reached through a loopback
+/// sidecar that holds the TLS or the tunnel.
 #[must_use]
-pub fn plain_http_origin_admitted(
-    url: &registry_platform_yaml::Url,
-    allowed_private_cidrs: &[crate::runtime::Cidr],
-) -> bool {
-    if url.is_https() || loopback_exception_origin(url) {
-        return true;
-    }
-    match literal_origin_address(url) {
-        // A literal the allowlist names is the declared contract.
-        Some(address) => allowed_private_cidrs
-            .iter()
-            .any(|cidr| cidr.contains(address)),
-        // A named host resolves at send, where the same containment rule
-        // runs on the answers; the check cannot resolve, so it defers to the
-        // send. With an empty `allowedPrivateCidrs` the send admits no
-        // private address, so the check refuses the origin and names the
-        // missing range.
-        None => !allowed_private_cidrs.is_empty(),
-    }
+pub fn plain_http_origin_admitted(url: &registry_platform_yaml::Url) -> bool {
+    url.is_https() || loopback_exception_origin(url)
 }
 
 /// Whether a bound origin is plain HTTP on a non-loopback host.
@@ -14049,12 +14047,12 @@ mod tests {
         );
     }
 
-    /// The one plain-HTTP rule: a literal outside the declared
-    /// CIDRs refuses, a literal inside them and a loopback origin are
-    /// the declared contract, and a named host defers to the send-time
-    /// resolution that evaluates the same containment.
+    /// The one plain-HTTP rule: Adapter sources are https or loopback
+    /// only. A plain-HTTP origin beyond loopback refuses whether or not a
+    /// declared CIDR covers it, once, at `baseUrl`, and a binding with a
+    /// credential is refused because the credential would travel in clear.
     #[test]
-    fn runtime_plain_http_answers_the_declared_cidr_rule() {
+    fn runtime_plain_http_is_refused_beyond_loopback() {
         let profile = profile_builder(vec![]);
         let pack = pack_builder(vec![oauth_endpoint()], vec![]);
         let project = project_builder(&pack);
@@ -14064,44 +14062,54 @@ mod tests {
                 UniqueList::new(vec![Cidr::new("10.0.0.0/8").expect("cidr")]).expect("unique");
             runtime
         };
-        // A literal outside every declared CIDR refuses.
-        let outside = runtime_with_cidrs(vec![oauth_binding("http://192.0.2.9:8081")]);
-        let mut ws = workspace(&profile, &pack, &project);
-        ws.runtime = Some(&outside);
-        assert_has(
-            &check_runtime(&ws, &outside),
-            CheckCode::RuntimeInsecureOrigin,
-        );
-        // The same literal inside the declared CIDR is the contract.
-        let inside = runtime_with_cidrs(vec![oauth_binding("http://10.0.0.7:8081")]);
-        let mut ws = workspace(&profile, &pack, &project);
-        ws.runtime = Some(&inside);
-        assert!(
-            !codes(&check_runtime(&ws, &inside)).contains(&CheckCode::RuntimeInsecureOrigin.code())
-        );
+        // Outside the declared CIDR, inside it, a named host with a
+        // declared CIDR and a named host without one: each refuses once at
+        // `baseUrl`, as the credential refusal the load makes too.
+        for runtime in [
+            runtime_with_cidrs(vec![oauth_binding("http://192.0.2.9:8081")]),
+            runtime_with_cidrs(vec![oauth_binding("http://10.0.0.7:8081")]),
+            runtime_with_cidrs(vec![oauth_binding("http://cases.example.invalid")]),
+            runtime_builder(vec![oauth_binding("http://internal-api:8080")]),
+        ] {
+            let mut ws = workspace(&profile, &pack, &project);
+            ws.runtime = Some(&runtime);
+            let findings = check_runtime(&ws, &runtime);
+            let origin = findings
+                .iter()
+                .filter(|finding| finding.code == CheckCode::RuntimeInsecureOrigin.code())
+                .collect::<Vec<_>>();
+            assert_eq!(origin.len(), 1, "{findings:?}");
+            assert_eq!(origin[0].path, "/endpoints/0/baseUrl");
+            assert!(
+                origin[0].message.contains("credential"),
+                "{}",
+                origin[0].message
+            );
+            assert_eq!(
+                origin[0].suggested_action,
+                "Serve the source over https, or reach it on loopback through a sidecar that carries the connection over TLS."
+            );
+        }
+        // A credential-free binding beyond loopback is refused at `baseUrl`
+        // too, inside a declared CIDR, beside its own admission finding.
+        let mut none_endpoint = oauth_endpoint();
+        none_endpoint.authentication = EndpointAuthentication::None {};
+        let none_pack = pack_builder(vec![none_endpoint], vec![]);
+        let none_project = project_builder(&none_pack);
+        let mut none_binding = oauth_binding("http://10.0.0.7:8081");
+        none_binding.credential = Some(RuntimeCredential::None {});
+        let none_runtime = runtime_with_cidrs(vec![none_binding]);
+        let mut ws = workspace(&profile, &none_pack, &none_project);
+        ws.runtime = Some(&none_runtime);
+        let findings = check_runtime(&ws, &none_runtime);
+        assert_has(&findings, CheckCode::AuthNoneNotLoopback);
+        assert_has(&findings, CheckCode::RuntimeInsecureOrigin);
         // The loopback exception holds without any declared CIDR.
         let loopback = runtime_builder(vec![oauth_binding("http://127.0.0.1:8081")]);
         let mut ws = workspace(&profile, &pack, &project);
         ws.runtime = Some(&loopback);
         assert!(!codes(&check_runtime(&ws, &loopback))
             .contains(&CheckCode::RuntimeInsecureOrigin.code()));
-        // A named host cannot be shown outside the CIDRs at check time;
-        // the send-time resolution of the same rule decides it.
-        let named = runtime_with_cidrs(vec![oauth_binding("http://cases.example.invalid")]);
-        let mut ws = workspace(&profile, &pack, &project);
-        ws.runtime = Some(&named);
-        assert!(
-            !codes(&check_runtime(&ws, &named)).contains(&CheckCode::RuntimeInsecureOrigin.code())
-        );
-        // With no declared CIDR the send admits no private address, so the
-        // check refuses the named host and names the missing range.
-        let undeclared = runtime_builder(vec![oauth_binding("http://internal-api:8080")]);
-        let mut ws = workspace(&profile, &pack, &project);
-        ws.runtime = Some(&undeclared);
-        assert_has(
-            &check_runtime(&ws, &undeclared),
-            CheckCode::RuntimeInsecureOrigin,
-        );
         // Every loopback spelling is the loopback exception; a name that only
         // looks like it is a named host.
         for origin in [

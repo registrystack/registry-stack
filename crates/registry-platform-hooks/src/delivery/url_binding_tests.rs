@@ -634,6 +634,32 @@ fn refused_rows() -> Vec<RefusedRow> {
             (None, "config.invalid-value"),
             "/hook/url",
         ),
+        // The selector admits these, and the fixed destination policy built
+        // from the selection refuses them at activation.
+        (
+            "https name under localhost",
+            "https://receiver.localhost/hooks",
+            None,
+            listed(&[]),
+            (None, "config.invalid-value"),
+            "/hook/url",
+        ),
+        (
+            "https localhost absolute",
+            "https://localhost./hooks",
+            None,
+            listed(&[]),
+            (None, "config.invalid-value"),
+            "/hook/url",
+        ),
+        (
+            "port zero",
+            "https://receiver:0/hooks",
+            None,
+            listed(&[]),
+            (None, "config.invalid-value"),
+            "/hook/url",
+        ),
     ] {
         rows.push(RefusedRow {
             row: name,
@@ -743,6 +769,49 @@ fn the_shared_check_reports_what_activation_refuses() {
             "{url}"
         );
         activate(&secrets, &config).unwrap_or_else(|error| panic!("{url}: {error}"));
+    }
+}
+
+/// N2: https to an explicit loopback host is admitted in production, as the
+/// object store admits it, and the check and activation agree on each URL.
+/// A name under `localhost` and port zero keep their refusals.
+#[test]
+fn https_to_an_explicit_loopback_host_is_admitted_by_check_and_activation() {
+    let (_directory, secrets) = keyed_secrets();
+    for (url, transport) in [
+        ("https://127.0.0.1:9443/hooks", None),
+        ("https://127.0.0.2:9443/hooks", None),
+        ("https://[::1]:9443/hooks", None),
+        ("https://[::ffff:127.0.0.1]:9443/hooks", None),
+        ("https://localhost:9443/hooks", None),
+        ("https://LOCALHOST:9443/hooks", Some("verified-tls")),
+        ("https://localhost/hooks", Some("verified-tls")),
+    ] {
+        let config = declared_destination(url, transport, &[]);
+        assert!(
+            check_url_hook_destination(&config, HOOK).is_empty(),
+            "{url}"
+        );
+        activate(&secrets, &config).unwrap_or_else(|error| panic!("{url}: {error}"));
+    }
+    for url in [
+        "https://receiver.localhost:9443/hooks",
+        "https://localhost.:9443/hooks",
+        "https://localhost:0/hooks",
+        "https://127.0.0.1:0/hooks",
+    ] {
+        let config = declared_destination(url, None, &[]);
+        let found = check_url_hook_destination(&config, HOOK);
+        let coded: Vec<(&str, &str)> = found
+            .iter()
+            .map(|diagnostic| (diagnostic.code.as_str(), diagnostic.path.as_str()))
+            .collect();
+        assert_eq!(coded, [("config.invalid-value", "/hook/url")], "{url}");
+        assert_eq!(
+            activate(&secrets, &config).map(drop).unwrap_err(),
+            UrlHookActivationError::InvalidDestination,
+            "{url}"
+        );
     }
 }
 

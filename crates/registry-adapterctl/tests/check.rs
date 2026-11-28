@@ -1574,6 +1574,55 @@ fn the_runtime_file_refuses_the_removed_ca_bundle_ref_key() {
     );
 }
 
+/// Adapter sources are https or loopback only. A credential bound to a
+/// plain-HTTP source beyond loopback is refused once at `baseUrl`, inside a
+/// declared private range too, naming the way out. A binding has no
+/// `transport` member, so `transport: private-network-plaintext` is refused
+/// by the reader at the member, as the runtime's own read refuses it.
+#[test]
+fn the_runtime_file_refuses_plain_http_beyond_loopback() {
+    let (_root, project) = mutated_project(|root| {
+        let runtime = runtime_with_expressions("90").replace(
+            "    baseUrl: https://cases.example.invalid\n",
+            "    baseUrl: http://10.0.0.7:8080\n",
+        );
+        std::fs::write(root.join("runtime.yaml"), runtime).unwrap();
+    });
+    let runtime = _root.path().join("minimal").join("runtime.yaml");
+    let (exit, report, _) = run_json(&["check", &project, "--runtime", runtime.to_str().unwrap()]);
+    assert_refused(exit, &report, "adapter.runtime.insecure-origin");
+    let refused = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|diagnostic| diagnostic["code"] == "adapter.runtime.insecure-origin")
+        .collect::<Vec<_>>();
+    assert_eq!(refused.len(), 1, "{report}");
+    assert_eq!(refused[0]["path"], "/endpoints/0/baseUrl", "{report}");
+    assert_eq!(
+        refused[0]["suggestedAction"], "Serve the source over https, or reach it on loopback through a sidecar that carries the connection over TLS.",
+        "{report}"
+    );
+
+    let (_root, project) = mutated_project(|root| {
+        let runtime = runtime_with_expressions("90").replace(
+            "    baseUrl: https://cases.example.invalid\n",
+            "    baseUrl: http://10.0.0.7:8080\n    transport: private-network-plaintext\n",
+        );
+        std::fs::write(root.join("runtime.yaml"), runtime).unwrap();
+    });
+    let runtime = _root.path().join("minimal").join("runtime.yaml");
+    let (exit, report, _) = run_json(&["check", &project, "--runtime", runtime.to_str().unwrap()]);
+    assert_refused(exit, &report, "config.unknown-key");
+    let unknown = report["diagnostics"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|diagnostic| diagnostic["code"] == "config.unknown-key")
+        .unwrap();
+    assert_eq!(unknown["path"], "/endpoints/0/transport", "{report}");
+}
+
 /// A project binding still writing the renamed `asyncCompletion.mode` is
 /// refused with the reader's removed-key diagnostic at the key, naming the
 /// `type` replacement (CFG-CHANGE-2).

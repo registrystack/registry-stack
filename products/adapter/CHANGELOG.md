@@ -15,6 +15,22 @@
 - `adapterctl generate identity-facts` writes the caller requirements for one issuer.
 - Development refusal bodies include `failedCheck`.
 - `adapterctl check` lists each explicit production setting with its file and position.
+- BREAKING: Adapter sources are https or loopback only. An endpoint binding
+  on plain `http://` to a host that is not loopback now fails `adapterctl
+  check` with `adapter.runtime.insecure-origin` at its `baseUrl`, and the
+  facade and the job host refuse to start, even when `allowedPrivateCidrs`
+  covers its address. Before, such a binding passed `check` and loaded, and
+  each request that carried its credential (Basic, a static authorization or
+  API key, or an OAuth2 bearer) was refused at send time with
+  `egress.refused`, so the refusal surfaced only on traffic. A credential-free
+  binding was sent to in plain HTTP inside the range, and is now refused too.
+  A binding has no `transport` member, so
+  `transport: private-network-plaintext`, which other products accept, is
+  refused as an unknown key. `allowedPrivateCidrs` still decides which
+  private addresses an https source may reach. To migrate, serve the source
+  over https, or run a sidecar on the Adapter's host that carries the
+  connection over TLS, such as a service-mesh proxy or a TLS tunnel, and bind
+  the endpoint to it on loopback, for example `http://127.0.0.1:8081`.
 
 - BREAKING: an Adapter job sends each Coordinator event with Standard
   Webhooks. The POST carries `accept`, `content-type`, `webhook-id`,
@@ -102,12 +118,11 @@
 - A static key set that the facade refuses at startup states the rule it
   broke, so the operator can correct the document without reading the source.
 - BREAKING: an Adapter job whose runtime document names a plain `http://`
-  endpoint by host name must now list the address range that host resolves to
-  in `allowedPrivateCidrs`. An omitted or empty list admits no private
-  address, where before it admitted every one for such a host. To migrate, add
-  the smallest range that contains the endpoint, serve the endpoint over
-  https, or bind it on loopback. An affected job now fails `check` with
-  `adapter.runtime.insecure-origin`. The job host's hook ingress also counts
+  endpoint beyond loopback fails `check` with
+  `adapter.runtime.insecure-origin`, whatever `allowedPrivateCidrs` lists,
+  where before an omitted or empty list admitted every private address for
+  such a host. To migrate, serve the endpoint over https, or reach it on
+  loopback (see the first entry). The job host's hook ingress also counts
   and logs every refused credential and rate limit under
   `adapter_job_request_refusals_total{check}`, with no answer change, and the
   fixture destination and the plaintext test RabbitMQ and PostgreSQL sources

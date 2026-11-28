@@ -34,6 +34,33 @@
 - `documentsctl generate identity-facts PROJECT --runtime-config FILE --output FILE` writes the identity facts one issuer entry states. With more than one entry, `--issuer ISSUER_ID` names it, and a missing or unknown id is refused with `identity.facts.issuer-required` or `identity.facts.unknown-issuer`.
 
 - `documentsctl check` reports `explicitProductionSettings`, right after `posture`: each explicit setting of the runtime file that is valid in every posture and worth a reviewer's attention, such as `accessTokenType: JWT` or a non-default `scopeClaim`.
+- A `destinations.hooks` URL over https to a loopback address literal or the
+  exact name `localhost`, such as `https://localhost:9443/hooks`, now
+  activates and delivers. Before, `https://localhost` was refused at startup
+  and an https loopback literal failed at every delivery. `localhost` is
+  delivered to only when every address it resolves to is loopback.
+- `documentsctl check` runs the shared hook destination check on each
+  `destinations.hooks` entry, so it refuses what startup refuses, at the
+  destination's own pointer. For example, `https://localhost.:9443/hooks`
+  or a name under `localhost` is now refused by the check with
+  `config.invalid-value` at `/destinations/hooks/<id>/url`. Before, it
+  passed the check and was refused at startup. A refusal the check already
+  reports at that member, such as `documents.runtime.insecure-url`, keeps
+  its code.
+- BREAKING: an S3 `storage` URL or an http `contentVerification` URL over
+  https whose host name answers a loopback, link-local, `0.0.0.0` or cloud
+  metadata address is now refused at every request, so document uploads,
+  reads and verification fail. Before, such a name was followed wherever it
+  answered. An https URL whose host is a cloud metadata or always-denied
+  address literal is refused at startup. To reach a store or a verifier on
+  the same host, write `https://localhost:<port>` or a loopback literal such
+  as `https://127.0.0.1:<port>`, both admitted. `http://localhost` is now
+  accepted beside the loopback literals.
+  An https URL whose address literal, or an address its name answers, is an
+  IPv4-compatible (`::/96`) or 6to4 (`2002::/16`) IPv6 address carrying a
+  loopback, link-local, `0.0.0.0` or cloud metadata IPv4 address is now
+  refused. To migrate, write the store's or verifier's own IPv4 or native
+  IPv6 address, or a name that answers one.
 
 - BREAKING: Document Store hook deliveries use Standard Webhooks. Each POST
   carries `accept`, `content-type`, `webhook-id`, `webhook-timestamp` and

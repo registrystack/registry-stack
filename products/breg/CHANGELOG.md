@@ -11,6 +11,20 @@
 - `bregctl provision` reports all runtime posture refusals and includes the resolved `posture` in JSON.
 
 - `bregctl init` writes a plan and scenario for `rstack dev`, including projects derived from PublicSchema.
+- BREAKING: an `attachmentStorage` or `attachmentVerification` URL over https
+  whose host name answers a loopback, link-local, `0.0.0.0` or cloud metadata
+  address is now refused at every request, so attachment uploads and
+  verification fail. Before, such a name was followed wherever it answered.
+  An https URL whose host is a cloud metadata or always-denied address
+  literal is refused at startup. To reach a store or a verifier on the same
+  host, write `https://localhost:<port>` or a loopback literal such as
+  `https://127.0.0.1:<port>`, both admitted. `http://localhost` is now
+  accepted beside the loopback literals.
+  An https URL whose address literal, or an address its name answers, is an
+  IPv4-compatible (`::/96`) or 6to4 (`2002::/16`) IPv6 address carrying a
+  loopback, link-local, `0.0.0.0` or cloud metadata IPv4 address is now
+  refused. To migrate, write the store's or verifier's own IPv4 or native
+  IPv6 address, or a name that answers one.
 
 - BREAKING: BReg signs every URL hook delivery with Standard Webhooks. The
   POST carries `webhook-id`, `webhook-timestamp` and `webhook-signature`, an

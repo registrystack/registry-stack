@@ -136,6 +136,26 @@
   its caller reference. With two or more entries, the reference is a SHA-256
   digest of the verified issuer and subject, so equal subjects from different
   issuers stay distinct.
+- A URL hook destination over https to a loopback address literal
+  (`127.0.0.0/8`, `[::1]`, or an IPv4-mapped loopback such as
+  `[::ffff:127.0.0.1]`) or the exact name `localhost` is admitted in
+  every posture, as the object store admits it. Before, `https://localhost`
+  was refused at activation and an https loopback literal was refused at
+  every send. The destination is pinned to loopback addresses as an http
+  loopback destination is: a literal is dialled as written, and `localhost`
+  only when every address it resolves to is loopback.
+  `check_url_hook_destination` admits the same URLs. A name under
+  `localhost`, the absolute name `localhost.`, and port zero are still
+  refused. `FixedDestinationPolicy::from_selected` freezes such an event
+  selection under the new `DestinationProfile::LoopbackHttps`. Data and
+  credential destinations are unchanged: `localhost` over https is refused
+  when the policy is built and a loopback literal is refused at send, and
+  either slot refuses the `LoopbackHttps` profile with the new
+  `DestinationPolicyError::LoopbackHttpsRequiresEventDelivery`. BREAKING
+  (Rust API): an exhaustive match on `DestinationProfile` needs the
+  `LoopbackHttps` arm, and one on `DestinationPolicyError` needs the
+  `LoopbackHttpsRequiresEventDelivery` arm.
+
 
 - Every URL hook delivery is signed with Standard Webhooks. The signature is
   `v1,<base64>` over `webhook-id`, `webhook-timestamp` and the exact body
@@ -231,10 +251,20 @@
   into its own block. The outbound families consume a selection through
   `FixedDestinationPolicy::from_selected`, `ServiceBaseUrl::selected` and
   `OutboundClientBuilder::destination`, and a credential-free fetch through
-  `select::validate_selected_fetch`, which pins the request to the addresses
-  it admitted.
+  `select::validate_selected_fetch`. It returns a `SelectedFetch` pinned to
+  the addresses it admitted, whose `get` sends one GET with the caller's
+  `Accept` and timeout and nothing else, so no credential can be added to it.
+  Over https the fetch admits each answer as a fixed https destination does:
+  a private answer needs a listed range, and a cloud metadata, always-denied
+  or other non-global answer is refused. An explicit loopback literal and
+  `localhost`, pinned to loopback, are admitted. A consumer that moves from
+  `FetchUrlPolicy::strict()` to a selection therefore refuses a CGNAT
+  (`100.64.0.0/10`) answer that `strict()` admits today. The way out is to
+  list the range in `allowedPrivateCidrs`.
 
-- No credential travels over private plain text, on any path.
+- No credential travels over private plain text on any path the platform
+  renders or builds. A secret a caller writes into a free header or a body
+  is the caller's to keep off private plain text.
   `select::select_credential_destination` refuses such a selection, and
   `SelectedDestination::admits_credentials` is the one predicate.
   `FixedDestinationPolicy::new` refuses the credential slot over private plain
@@ -242,29 +272,42 @@
   send in any slot that carries an authorization value, an AWS signature or a
   script API key over private plain text is refused before anything is
   resolved. `OutboundClientBuilder::destination` never builds a client for a
-  private plain-text selection, and `ServiceBaseUrl::selected` refuses one.
+  private plain-text selection, and `ServiceBaseUrl::selected` refuses one. A
+  client built for an https selection is https-only: a plain-http request,
+  to the selected name or to an address literal, fails before anything is
+  resolved or dialled.
   `transport_protects_the_credential` is the credential selector with nothing
   declared. BREAKING (Rust API): `DestinationSendError` adds
   `CredentialRequiresProtectedTransport` and `DestinationNameMismatch`, so an
   exhaustive match needs both arms. The non-exhaustive
   `OutboundClientBuildError` adds `DestinationAddressDenied` and
   `CredentialRequiresProtectedTransport`, and `FetchUrlError` adds
-  `DestinationAddressDenied`.
+  `DestinationAddressDenied` and `Request`.
 
 - `OutboundClientBuilder::destination(&selected)` confines a client's name
   resolution to its selection. The client resolves only the selected host
   name and refuses any other name with `DestinationNameMismatch` before it is
   looked up. Every answer must be one the selection admits: loopback for
   loopback plain text, and never a cloud metadata or always-denied address
-  for https, judged after IPv4-mapped and NAT64 forms are decoded. Over https
+  for https, judged after the IPv4-mapped, IPv4-compatible (`::/96`), 6to4
+  (`2002::/16`) and well-known NAT64 (`64:ff9b::/96`) forms are decoded.
+  Other translation prefixes, such as local-use NAT64 (`64:ff9b:1::/48`), are
+  not decoded, so reaching a metadata address through one needs a translator
+  on the path that the deployment controls. Over https
   a private answer needs no range, so a selection's ranges have no effect on
   a client. An address literal is checked when the client is built, where an
   explicit loopback literal is admitted over https while a name that answers
-  loopback is refused. A literal host or `localhost` other than the selected
-  one is never resolved, so the caller sends only to the selected origin and
-  checks a URL with `SelectedDestination::admits_url` first. `build()` panics
-  where `try_build()` fails, so a caller that sets a destination uses
-  `try_build()`.
+  loopback is refused. BREAKING (Rust API): `destination()` returns a
+  `DestinationClientBuilder`, whose `try_build()` returns a
+  `DestinationClient` and never a raw `reqwest::Client`.
+  `DestinationClient::execute` sends a request only to the selection's own
+  scheme, host and port and refuses any other with
+  `DestinationClientError::OriginNotSelected` before anything is resolved or
+  dialled, so an address literal or `localhost`, which no resolver sees,
+  cannot carry a caller's credential elsewhere. A `Host` header that names
+  another authority, or a second `Host` header, is refused with
+  `DestinationClientError::HostNotSelected` before anything is dialled; a
+  matching `Host`, such as the object store's signed one, is sent.
 
 - `registry-platform-objectstore` selects the bucket URL and the verifier URL
   with `select_credential_destination` and builds each client through
@@ -283,7 +326,10 @@
   `registry-platform-hooks` adds `check_url_hook_destination` and
   `check_url_hook_destination_file`, which report every refusal activation
   would make: each refused range at its entry, the selector's code at
-  `transport` or `url`, and a query or fragment at `url`.
+  `transport` or `url`, and at `url` a query or fragment, an https URL naming
+  a name under `localhost` or `localhost.`, or port zero. Scheduling and Documents do
+  not call the check yet, so a refused destination still surfaces at their
+  startup.
   BREAKING (Rust API): `UrlDestinationAddress` adds `selected`,
   `UrlDestinationError` adds `Refused`, and `UrlHookActivationError` adds
   `DestinationRefused`, each carrying the selector's refusal with `code()`.

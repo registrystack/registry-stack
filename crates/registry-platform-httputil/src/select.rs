@@ -23,10 +23,10 @@ use reqwest::Url;
 use thiserror::Error;
 
 use crate::destination::{
-    classify_private_service_address, decode_well_known_nat64, is_always_denied_in_production,
-    origin_uses_localhost_namespace, profile_admits_credential_exchange, retain_private_cidrs,
-    DestinationPolicyError, DestinationProfile, DestinationSendError,
-    MAX_DESTINATION_PRIVATE_CIDRS,
+    classify_private_service_address, classify_production_address, decode_well_known_nat64,
+    is_always_denied_in_production, origin_uses_localhost_namespace,
+    profile_admits_credential_exchange, retain_private_cidrs, DestinationPolicyError,
+    DestinationProfile, DestinationSendError, MAX_DESTINATION_PRIVATE_CIDRS,
 };
 use crate::loopback::{PrivateRange, PrivateRangeError};
 use crate::{is_cloud_metadata_ip, normalize_ipv4_mapped};
@@ -82,6 +82,25 @@ impl SelectedDestination {
     #[must_use]
     pub fn admits_url(&self, url: &Url) -> bool {
         url.origin() == self.url.origin()
+    }
+
+    /// Whether `authority`, the value of a `Host` header, names the
+    /// selection's own host and port. It is read as a URL authority under the
+    /// selection's scheme, so case, a default port written or elided, and the
+    /// textual form of an IPv6 literal do not matter. A value carrying
+    /// userinfo, a path, a query, a fragment, whitespace or a control
+    /// character is refused.
+    pub(crate) fn admits_authority(&self, authority: &str) -> bool {
+        if authority.is_empty()
+            || authority.contains(['@', '/', '?', '#', '\\'])
+            || authority
+                .bytes()
+                .any(|byte| byte.is_ascii_whitespace() || byte.is_ascii_control())
+        {
+            return false;
+        }
+        Url::parse(&format!("{}://{authority}/", self.url.scheme()))
+            .is_ok_and(|named| named.origin() == self.url.origin())
     }
 
     /// Whether `name` is the selection's own host name, compared without
@@ -234,23 +253,94 @@ pub fn select_credential_destination(
     Ok(selected)
 }
 
-/// Resolve the selected URL once, admit every answer as a selected client
-/// would, and pin the request to the admitted addresses.
+/// Resolve the selected URL once, admit every answer, and pin the fetch to
+/// the admitted addresses.
 ///
-/// For a credential-free fetch only: the returned
-/// [`ValidatedFetchUrl`](crate::ValidatedFetchUrl) builds a request to any
-/// selection, private plain text included, and adds no credential rule. A
-/// destination that carries a credential uses a client built with
+/// For a credential-free fetch only: the returned [`SelectedFetch`] sends one
+/// GET to any selection, private plain text included, and hands out no
+/// request builder, so no credential can be added to it. A destination that
+/// carries a credential uses a client built with
 /// [`crate::OutboundClientBuilder::destination`] instead.
 ///
-/// The name `localhost` is pinned to the loopback addresses, never resolved.
-/// An address literal is checked as a selected client checks it when it is
-/// built. Any other name is resolved through the operating system, which
-/// blocks the calling thread.
+/// Over https each answer, and an address literal, is admitted as a fixed
+/// https destination admits it: a private address, CGNAT included, only
+/// inside the selection's ranges, and never a cloud metadata, always-denied
+/// or other non-global address. An explicit loopback literal is admitted, as
+/// a selected client admits it. Under a plain-text selection an answer is
+/// admitted as a selected client admits it. The name `localhost` is pinned
+/// to the loopback addresses, never resolved. Any other name is resolved
+/// through the operating system, which blocks the calling thread.
 pub fn validate_selected_fetch(
     selected: &SelectedDestination,
-) -> Result<crate::ValidatedFetchUrl, crate::FetchUrlError> {
-    validate_selected_fetch_resolved_by(selected, crate::resolve_host)
+) -> Result<SelectedFetch, crate::FetchUrlError> {
+    validate_selected_fetch_resolved_by(selected, crate::resolve_host).map(SelectedFetch)
+}
+
+/// A credential-free fetch of one selected URL, from
+/// [`validate_selected_fetch`]: one GET pinned to the admitted addresses,
+/// with no redirect followed and no proxy used. It hands out no request
+/// builder, so a caller cannot add a credential or any other header but
+/// `Accept`, whatever transport the selection declares.
+///
+/// ```no_run
+/// use registry_platform_httputil::select::{validate_selected_fetch, SelectedDestination};
+///
+/// async fn fetch(selected: &SelectedDestination) {
+///     let fetch = validate_selected_fetch(selected).expect("the fetch validates");
+///     let accept = reqwest::header::HeaderValue::from_static("application/json");
+///     let _ = fetch.get(&accept, std::time::Duration::from_secs(5)).await;
+/// }
+/// ```
+///
+/// The same caller cannot take a request builder from it:
+///
+/// ```compile_fail
+/// use registry_platform_httputil::select::{validate_selected_fetch, SelectedDestination};
+///
+/// fn builder(selected: &SelectedDestination) {
+///     let fetch = validate_selected_fetch(selected).expect("the fetch validates");
+///     let _ = fetch.immediate_get();
+/// }
+/// ```
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SelectedFetch(crate::ValidatedFetchUrl);
+
+impl SelectedFetch {
+    /// The selected URL the fetch sends to.
+    #[must_use]
+    pub fn url(&self) -> &Url {
+        self.0.url()
+    }
+
+    /// Send the GET with `accept` as its only caller header, within
+    /// `timeout`.
+    ///
+    /// # Errors
+    ///
+    /// [`crate::FetchUrlError::ClientBuild`] when the pinned client cannot be
+    /// built, and [`crate::FetchUrlError::Request`] when the request fails.
+    pub async fn get(
+        &self,
+        accept: &reqwest::header::HeaderValue,
+        timeout: std::time::Duration,
+    ) -> Result<reqwest::Response, crate::FetchUrlError> {
+        self.pinned_get(accept, timeout)?
+            .send()
+            .await
+            .map_err(crate::FetchUrlError::Request)
+    }
+
+    /// The one request [`Self::get`] sends, unsent.
+    fn pinned_get(
+        &self,
+        accept: &reqwest::header::HeaderValue,
+        timeout: std::time::Duration,
+    ) -> Result<reqwest::RequestBuilder, crate::FetchUrlError> {
+        Ok(self
+            .0
+            .immediate_get_with_timeout(timeout)?
+            .header(reqwest::header::ACCEPT, accept))
+    }
 }
 
 /// [`validate_selected_fetch`] with the addresses `lookup` answers. Tests
@@ -268,7 +358,8 @@ fn validate_selected_fetch_resolved_by(
         .port_or_known_default()
         .ok_or(crate::FetchUrlError::MissingPort)?;
     let literal = |ip: IpAddr| -> Result<Vec<SocketAddr>, crate::FetchUrlError> {
-        admit_literal_host(selected).map_err(crate::FetchUrlError::DestinationAddressDenied)?;
+        admit_fetch_literal(selected, ip)
+            .map_err(crate::FetchUrlError::DestinationAddressDenied)?;
         Ok(vec![SocketAddr::new(ip, port)])
     };
     let resolved_addrs = match url.host().ok_or(crate::FetchUrlError::MissingHost)? {
@@ -283,8 +374,10 @@ fn validate_selected_fetch_resolved_by(
             if answers.is_empty() {
                 return Err(crate::FetchUrlError::NoAddresses);
             }
-            admit_answers(selected, answers.iter().map(SocketAddr::ip))
-                .map_err(crate::FetchUrlError::DestinationAddressDenied)?;
+            for answer in &answers {
+                admit_fetch_address(selected, answer.ip())
+                    .map_err(crate::FetchUrlError::DestinationAddressDenied)?;
+            }
             answers
         }
     };
@@ -458,6 +551,38 @@ pub(crate) fn admit_literal_host(
     admit_address(selected, ip)
 }
 
+/// The address literal of a credential-free fetch. Over https an explicit
+/// loopback literal is admitted, as [`admit_literal_host`] admits it, and
+/// any other literal answers to [`admit_fetch_address`].
+fn admit_fetch_literal(
+    selected: &SelectedDestination,
+    ip: IpAddr,
+) -> Result<(), DestinationSendError> {
+    if selected.profile == DestinationProfile::ProductionHttps
+        && crate::loopback::loopback_address(ip)
+    {
+        return Ok(());
+    }
+    admit_fetch_address(selected, ip)
+}
+
+/// One address a credential-free fetch would dial. Over https it is the rule
+/// a fixed https destination applies, so a private answer needs a listed
+/// range, as `FetchUrlPolicy::strict` refuses one with no range. Under a
+/// plain-text selection it is the selected client's rule.
+fn admit_fetch_address(
+    selected: &SelectedDestination,
+    ip: IpAddr,
+) -> Result<(), DestinationSendError> {
+    if selected.profile == DestinationProfile::ProductionHttps {
+        return classify_production_address(
+            normalize_ipv4_mapped(ip),
+            &selected.allowed_private_cidrs,
+        );
+    }
+    admit_address(selected, ip)
+}
+
 fn admit_address(selected: &SelectedDestination, ip: IpAddr) -> Result<(), DestinationSendError> {
     let ip = normalize_ipv4_mapped(ip);
     match selected.profile {
@@ -472,6 +597,8 @@ fn admit_address(selected: &SelectedDestination, ip: IpAddr) -> Result<(), Desti
             }
         }
         DestinationProfile::ProductionHttps => admit_verified_tls_address(ip),
+        // Only a fixed destination freezes this profile; no selection has it.
+        DestinationProfile::LoopbackHttps => Err(DestinationSendError::InvalidFrozenPolicy),
         // The selector makes neither test profile.
         #[cfg(any(test, feature = "test-support"))]
         DestinationProfile::LocalPrivateDevelopmentHttp
@@ -482,11 +609,12 @@ fn admit_address(selected: &SelectedDestination, ip: IpAddr) -> Result<(), Desti
 }
 
 /// https admits a private answer with no range, and refuses the cloud
-/// metadata addresses and the always-denied ranges, judged after IPv4-mapped
-/// and well-known NAT64 forms are decoded.
+/// metadata addresses and the always-denied ranges, judged after the
+/// IPv4-mapped, IPv4-compatible, 6to4 and well-known NAT64 forms are decoded.
+/// Other translation prefixes, such as local-use NAT64, are not decoded.
 fn admit_verified_tls_address(ip: IpAddr) -> Result<(), DestinationSendError> {
     let ip = match ip {
-        IpAddr::V6(v6) => decode_well_known_nat64(v6).map_or(ip, IpAddr::V4),
+        IpAddr::V6(v6) => embedded_ipv4(v6).map_or(ip, IpAddr::V4),
         IpAddr::V4(_) => ip,
     };
     if is_cloud_metadata_ip(ip) {
@@ -496,6 +624,27 @@ fn admit_verified_tls_address(ip: IpAddr) -> Result<(), DestinationSendError> {
         return Err(DestinationSendError::AlwaysDeniedAddress);
     }
     Ok(())
+}
+
+/// The IPv4 address an IPv6 transition form carries: the well-known NAT64
+/// prefix `64:ff9b::/96`, IPv4-compatible `::/96` other than `::` and `::1`,
+/// and 6to4 `2002::/16`, whose address is the 32 bits after the prefix.
+fn embedded_ipv4(ip: std::net::Ipv6Addr) -> Option<std::net::Ipv4Addr> {
+    if let Some(embedded) = decode_well_known_nat64(ip) {
+        return Some(embedded);
+    }
+    let octets = ip.octets();
+    if octets[..12] == [0; 12] && !ip.is_unspecified() && !ip.is_loopback() {
+        return Some(std::net::Ipv4Addr::new(
+            octets[12], octets[13], octets[14], octets[15],
+        ));
+    }
+    if octets[..2] == [0x20, 0x02] {
+        return Some(std::net::Ipv4Addr::new(
+            octets[2], octets[3], octets[4], octets[5],
+        ));
+    }
+    None
 }
 
 /// A client resolver confined to one selection. It refuses any name other
@@ -1384,19 +1533,85 @@ mod tests {
         }
     }
 
+    /// A private plain-text fetch, through an injected resolution, pins its
+    /// private answer and builds one GET with the caller's `Accept` as its
+    /// only header and no body. Nothing is dialled, so no private route is
+    /// needed.
+    #[test]
+    fn a_private_plain_text_fetch_builds_one_get_with_accept_only() {
+        let selected = select(
+            "http://feed.internal.test:8080/feed",
+            Some(TransportClass::PrivateNetworkPlaintext),
+            &["10.0.0.0/8"],
+        );
+        let validated =
+            validate_selected_fetch_resolved_by(&selected, |_| Ok(vec![socket("10.1.2.3:8080")]))
+                .expect("a private answer inside the range is admitted");
+        assert_eq!(validated.resolved_addrs, [socket("10.1.2.3:8080")]);
+        let selected_fetch = SelectedFetch(validated);
+
+        let accept = reqwest::header::HeaderValue::from_static("application/x-test");
+        let timeout = std::time::Duration::from_secs(5);
+        let request = selected_fetch
+            .pinned_get(&accept, timeout)
+            .expect("the pinned client builds")
+            .build()
+            .expect("the request builds");
+        assert_eq!(request.method(), reqwest::Method::GET);
+        assert_eq!(request.url(), selected.url());
+        assert_eq!(request.headers().len(), 1, "{:?}", request.headers());
+        assert_eq!(request.headers()[reqwest::header::ACCEPT], accept);
+        assert!(request.body().is_none());
+        assert_eq!(request.timeout(), Some(&timeout));
+
+        let (outside, _) = fetch(&selected, &["192.168.1.1"]);
+        assert_eq!(
+            denied(outside),
+            Some(DestinationSendError::PrivateAddressNotAllowed)
+        );
+    }
+
     /// D3: a credential-free fetch resolves the selected name once and pins
-    /// the request to answers the selection admits, as a selected client
-    /// would admit them.
+    /// the request to answers the selection admits. Over https each answer
+    /// is admitted as a fixed https destination admits it: a private answer,
+    /// CGNAT included, needs a listed range (D4 (c), today's strict rule).
     #[test]
     fn a_selected_fetch_pins_only_answers_its_selection_admits() {
         let tls = select("https://records.example.test/", None, &[]);
-        let (result, asked) = fetch(&tls, &["93.184.216.34", "10.1.2.3"]);
+        let (result, asked) = fetch(&tls, &["93.184.216.34"]);
         assert_eq!(
-            result.expect("public and private answers over https"),
-            vec![socket("93.184.216.34:443"), socket("10.1.2.3:443")]
+            result.expect("a public answer over https"),
+            vec![socket("93.184.216.34:443")]
         );
         assert!(asked, "a name is resolved");
+        let listed = select(
+            "https://records.example.test/",
+            None,
+            &["10.0.0.0/8", "100.64.0.0/10"],
+        );
+        assert_eq!(
+            fetch(&listed, &["93.184.216.34", "10.1.2.3", "100.64.1.2"])
+                .0
+                .expect("private answers inside the listed ranges"),
+            vec![
+                socket("93.184.216.34:443"),
+                socket("10.1.2.3:443"),
+                socket("100.64.1.2:443")
+            ]
+        );
         for (answers, expected) in [
+            (
+                &["93.184.216.34", "10.1.2.3"][..],
+                DestinationSendError::PrivateAddressNotAllowed,
+            ),
+            (
+                &["100.64.1.2"][..],
+                DestinationSendError::PrivateAddressNotAllowed,
+            ),
+            (
+                &["192.0.2.1"][..],
+                DestinationSendError::NonGlobalAddressDenied,
+            ),
             (
                 &["169.254.169.254"][..],
                 DestinationSendError::CloudMetadataDenied,
@@ -1477,6 +1692,10 @@ mod tests {
                 vec![socket("127.0.0.1:443"), socket("[::1]:443")],
             ),
             (
+                select("https://10.1.2.3/", None, &["10.0.0.0/8"]),
+                vec![socket("10.1.2.3:443")],
+            ),
+            (
                 private("http://10.1.2.3:8080/"),
                 vec![socket("10.1.2.3:8080")],
             ),
@@ -1490,6 +1709,10 @@ mod tests {
             assert!(!asked, "{selected:?} is not looked up");
         }
         for (selected, expected) in [
+            (
+                select("https://10.1.2.3/", None, &[]),
+                DestinationSendError::PrivateAddressNotAllowed,
+            ),
             (
                 select("https://169.254.169.254/", None, &[]),
                 DestinationSendError::CloudMetadataDenied,
@@ -1608,5 +1831,38 @@ mod tests {
             Ok(()),
             "a name is checked when it resolves"
         );
+    }
+
+    /// Over https the client rule judges the IPv4 address an IPv4-compatible
+    /// (`::/96`) or 6to4 (`2002::/16`) form carries, as it judges the
+    /// IPv4-mapped and well-known NAT64 forms, for an answer and a literal.
+    #[test]
+    fn the_https_client_rule_decodes_ipv4_compatible_and_6to4_forms() {
+        use DestinationSendError::{AlwaysDeniedAddress, CloudMetadataDenied};
+        let tls = select("https://receiver.example.test/", None, &[]);
+        for (raw, expected) in [
+            ("::a9fe:a9fe", CloudMetadataDenied),
+            ("2002:a9fe:a9fe::1", CloudMetadataDenied),
+            ("::7f00:1", AlwaysDeniedAddress),
+            ("2002:7f00:1::1", AlwaysDeniedAddress),
+            ("2002:a9fe:a01::1", AlwaysDeniedAddress),
+        ] {
+            assert_eq!(admit_answers(&tls, [ip(raw)]), Err(expected), "{raw}");
+            assert_eq!(
+                admit_literal_host(&select(&format!("https://[{raw}]/"), None, &[])),
+                Err(expected),
+                "{raw}"
+            );
+        }
+        for raw in ["::5db8:d822", "2002:5db8:d822::1", "2002:a01:203::1"] {
+            assert_eq!(admit_answers(&tls, [ip(raw)]), Ok(()), "{raw}");
+        }
+        for raw in ["::", "::1"] {
+            assert_eq!(
+                admit_answers(&tls, [ip(raw)]),
+                Err(AlwaysDeniedAddress),
+                "{raw}"
+            );
+        }
     }
 }

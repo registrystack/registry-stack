@@ -1569,6 +1569,27 @@ pub struct RuntimeCheck {
     pub explicit_settings: Option<Vec<FoundExplicitSetting>>,
 }
 
+/// What hook activation would refuse in each bound destination, from the
+/// shared hook destination check, at the destination's own pointer.
+fn hook_destination_diagnostics(
+    check: &RuntimeFileCheck<RuntimeConfig>,
+    config: &RuntimeConfig,
+) -> Vec<Diagnostic> {
+    config
+        .destinations
+        .hooks
+        .iter()
+        .flat_map(|(id, destination)| {
+            registry_platform_hooks::delivery::check_url_hook_destination_file(
+                destination,
+                &format!("/destinations/hooks/{}", escape_pointer_segment(id)),
+                check,
+                SCHEDULING_RUNTIME_KIND,
+            )
+        })
+        .collect()
+}
+
 fn runtime_identifier_collision_diagnostics(
     check: &RuntimeFileCheck<RuntimeConfig>,
     config: &RuntimeConfig,
@@ -1660,6 +1681,15 @@ pub fn check_runtime(
                 .cloned()
                 .collect(),
         );
+        for diagnostic in hook_destination_diagnostics(&check, &loaded.config) {
+            // A refusal scheduling reports in its own words is not repeated.
+            if !diagnostics
+                .iter()
+                .any(|known| known.path == diagnostic.path)
+            {
+                diagnostics.push(diagnostic);
+            }
+        }
     }
     let report = check.report_with(SCHEDULING_RUNTIME_KIND, diagnostics);
     RuntimeCheck {
@@ -3160,6 +3190,44 @@ holdPolicy:
         assert!(!diagnostic.message.contains("relative-issuer"));
         assert!(!root.path().join("missing-package").exists());
         assert!(!root.path().join("secrets").exists());
+    }
+
+    /// The offline check runs the shared hook destination check, so it
+    /// refuses at the destination's own URL what activation refuses.
+    #[test]
+    fn the_offline_check_refuses_what_hook_activation_refuses() {
+        let found = |url: &str| {
+            let root = canonical_tempdir();
+            let mut document =
+                operator_value(&root.path().join("missing-package"), "development-loopback");
+            document["destinations"]["hooks"] = serde_json::json!({"appointment-events": {
+                "url": url,
+                "hmacSha256KeyRef": "secret:file/hook"
+            }});
+            let path = write_operator(root.path(), document);
+            check_runtime(&path, None, false)
+                .diagnostics
+                .iter()
+                .map(|d| format!("{} {}", d.code, d.path))
+                .collect::<Vec<_>>()
+        };
+        for refused in [
+            "https://localhost.:9443/hooks",
+            "https://receiver.localhost:9443/hooks",
+        ] {
+            assert_eq!(
+                found(refused),
+                ["config.invalid-value /destinations/hooks/appointment-events/url"],
+                "{refused}"
+            );
+        }
+        for admitted in [
+            "https://localhost:9443/hooks",
+            "https://127.0.0.1:9443/hooks",
+            "https://[::1]:9443/hooks",
+        ] {
+            assert_eq!(found(admitted), Vec::<String>::new(), "{admitted}");
+        }
     }
 
     #[test]

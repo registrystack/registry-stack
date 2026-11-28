@@ -324,6 +324,10 @@ pub enum EndpointAuthenticationPolicyFault {
     /// A matching `none` pair has neither its default loopback admission,
     /// an mTLS identity over HTTPS, nor the named HTTPS acknowledgement.
     NoneNotAdmitted,
+    /// A credential would travel over plain HTTP to a host that is not
+    /// loopback. Adapter sources are https or loopback only, so no declared
+    /// private range admits it.
+    CredentialRequiresProtectedTransport,
 }
 
 /// Apply the one pure source-authentication admission policy used by both
@@ -357,6 +361,12 @@ pub fn endpoint_authentication_policy(
         if !loopback && !identity_over_https {
             return Err(EndpointAuthenticationPolicyFault::NoneNotAdmitted);
         }
+    }
+    // Adapter sources are https or loopback only: a credential never
+    // travels over plain HTTP beyond the loopback exception, whatever
+    // private range the deployment declares.
+    if !matching_none && !crate::checks::plain_http_origin_admitted(&binding.base_url) {
+        return Err(EndpointAuthenticationPolicyFault::CredentialRequiresProtectedTransport);
     }
     Ok(())
 }
@@ -650,6 +660,109 @@ mod tests {
                 "{written} is not canonical"
             );
         }
+    }
+
+    /// No credential of any kind travels over plain HTTP beyond loopback:
+    /// Adapter sources are https or loopback only, so a declared private
+    /// range admits none of them. https and the loopback exception (the
+    /// name `localhost` or a loopback literal, the rule the runtime's
+    /// destination profile applies) carry every kind.
+    #[test]
+    fn a_credential_never_reaches_plain_http_beyond_loopback() {
+        let token_endpoint = "https://token.example.invalid/oauth/token";
+        let kinds = [
+            (
+                EndpointAuthentication::Basic {},
+                serde_json::json!({
+                    "type": "basic",
+                    "usernameRef": "secret:env/USER",
+                    "passwordRef": "secret:env/PASSWORD"
+                }),
+            ),
+            (
+                EndpointAuthentication::StaticAuthorization { scheme: None },
+                serde_json::json!({ "type": "static-authorization", "tokenRef": "secret:env/TOKEN" }),
+            ),
+            (
+                EndpointAuthentication::StaticApiKey {
+                    header_name: "X-Api-Key".to_owned(),
+                },
+                serde_json::json!({ "type": "static-api-key", "valueRef": "secret:env/KEY" }),
+            ),
+            (
+                EndpointAuthentication::Oauth2ClientCredentials {},
+                serde_json::json!({
+                    "type": "oauth2-client-credentials",
+                    "tokenEndpoint": token_endpoint,
+                    "clientIdRef": "secret:env/CLIENT_ID",
+                    "clientSecretRef": "secret:env/CLIENT_SECRET",
+                    "credentialPlacement": "basic-header",
+                    "maximumCacheSeconds": 300
+                }),
+            ),
+            (
+                EndpointAuthentication::Oauth2PrivateKeyJwt {},
+                serde_json::json!({
+                    "type": "oauth2-private-key-jwt",
+                    "tokenEndpoint": token_endpoint,
+                    "clientIdRef": "secret:env/CLIENT_ID",
+                    "clientAssertionKeyRef": "secret:file/assertion.pem",
+                    "clientAssertionAudience": "https://token.example.invalid",
+                    "maximumCacheSeconds": 0
+                }),
+            ),
+        ];
+        let binding = |base_url: &str, credential: &serde_json::Value| {
+            serde_json::from_value::<crate::runtime::EndpointBinding>(serde_json::json!({
+                "endpoint": "cases",
+                "baseUrl": base_url,
+                "credential": credential
+            }))
+            .expect("the binding reads")
+        };
+        for (endpoint, credential) in &kinds {
+            let kind = endpoint.kind();
+            for base_url in [
+                "http://10.0.0.7:8080/",
+                "http://civreg:8080/",
+                "http://192.0.2.9:8081",
+                "http://a.localhost:8081",
+                "http://localhost.:8081",
+            ] {
+                assert_eq!(
+                    endpoint_authentication_policy(endpoint, &binding(base_url, credential)),
+                    Err(EndpointAuthenticationPolicyFault::CredentialRequiresProtectedTransport),
+                    "{kind} over {base_url}"
+                );
+            }
+            for base_url in [
+                "https://10.0.0.7:8443/",
+                "https://cases.example.invalid",
+                "http://127.0.0.1:8081",
+                "http://127.0.0.2:8081",
+                "http://[::1]:8081",
+                "http://[::ffff:127.0.0.1]:8081",
+                "http://localhost:8081",
+            ] {
+                assert_eq!(
+                    endpoint_authentication_policy(endpoint, &binding(base_url, credential)),
+                    Ok(()),
+                    "{kind} over {base_url}"
+                );
+            }
+        }
+        // No binding declares a private plain-text transport: the binding
+        // has no `transport` member, so the read that both the checks and
+        // the load run refuses it.
+        let declared =
+            serde_json::from_value::<crate::runtime::EndpointBinding>(serde_json::json!({
+                "endpoint": "cases",
+                "baseUrl": "http://10.0.0.7:8080/",
+                "transport": "private-network-plaintext",
+                "credential": { "type": "none" }
+            }))
+            .expect_err("a binding never declares a transport");
+        assert!(declared.to_string().contains("transport"), "{declared}");
     }
 
     /// RFC 10070 section 4 makes the authorization server's issuer identifier

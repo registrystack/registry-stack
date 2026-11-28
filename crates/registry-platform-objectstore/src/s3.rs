@@ -14,8 +14,8 @@ use registry_platform_httputil::client::transport_protects_the_credential;
 use registry_platform_httputil::{
     read_bounded,
     select::{select_credential_destination, SelectedDestination},
-    validate_response_headers, BoundedReadError, OutboundClientBuilder, PeerPolicy,
-    ResponseHeaderError,
+    validate_response_headers, BoundedReadError, DestinationClient, OutboundClientBuilder,
+    PeerPolicy, ResponseHeaderError,
 };
 use reqwest::{
     header::{HeaderMap, HeaderValue},
@@ -283,7 +283,7 @@ fn binding_digest(
 /// records using the same deterministic key.
 pub struct S3ObjectStore {
     peer_policy: PeerPolicy,
-    client: reqwest::Client,
+    client: DestinationClient,
     namespace: ObjectNamespace,
     bucket_url: Url,
     region: String,
@@ -422,12 +422,12 @@ impl S3ObjectStore {
     async fn send(&self, method: Method, url: Url, body: Vec<u8>) -> Result<reqwest::Response> {
         let timestamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ").to_string();
         let headers = self.signed_headers(&method, &url, &body, &timestamp)?;
+        let mut request = reqwest::Request::new(method, url);
+        *request.headers_mut() = headers;
+        *request.body_mut() = Some(body.into());
         let response = self
             .client
-            .request(method, url)
-            .headers(headers)
-            .body(body)
-            .send()
+            .execute(request)
             .await
             .map_err(|_| ObjectStoreError::Unavailable)?;
         validate_response_headers(response.headers(), self.peer_policy).map_err(

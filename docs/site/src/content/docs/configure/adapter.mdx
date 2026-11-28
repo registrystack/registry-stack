@@ -709,19 +709,32 @@ See [Scrape metrics](../../operate/adapter/#scrape-metrics).
 
 ### Plain HTTP, private ranges and loopback
 
-An origin is plain HTTP only inside the loopback exception or inside the private ranges the runtime config declares in `allowedPrivateCidrs`.
+Adapter sources are https or loopback only.
+An origin is plain HTTP only inside the loopback exception.
 Loopback means a `127.0.0.0/8` address, `::1`, an IPv4-mapped form of a `127.0.0.0/8` address, or the exact name `localhost`.
 A payment provider connection takes only the address literals, never the name.
 The name is pinned: the connection goes only to loopback addresses.
 `a.localhost` and `localhost.` are named hosts.
-An omitted or empty `allowedPrivateCidrs` admits no private address.
-An origin plain HTTP names by host name, with no range declared, fails the runtime check with `adapter.runtime.insecure-origin`.
-The text names the fix: serve the origin over TLS, declare the range the host resolves to, or use a loopback origin.
 
-**Breaking, for ingestion job hosts.** Before this change a job host whose runtime document named a plain `http://` endpoint by host name, with `allowedPrivateCidrs` omitted or empty, reached every private address the name resolved to.
-Now that job fails the runtime check with `adapter.runtime.insecure-origin`.
-To migrate, add the smallest range that contains the endpoint to `allowedPrivateCidrs`, serve the endpoint over HTTPS, or bind it on loopback.
-The served facade is not affected: it already refused an empty list at load.
+A plain-HTTP origin beyond loopback fails the runtime check with `adapter.runtime.insecure-origin` at the binding's `baseUrl`, and the deployment refuses to start.
+This holds for every authentication kind, and inside the ranges `allowedPrivateCidrs` declares too, so a credential never travels in clear.
+The text names the fix: serve the source over https, or reach it on loopback through a sidecar that carries the connection over TLS.
+The facade and the job host print the same pointer and fix when they refuse to start.
+
+`allowedPrivateCidrs` decides which private addresses an https origin may reach.
+An omitted or empty list admits no private address.
+
+An endpoint binding has no `transport` member.
+Other products accept `transport: private-network-plaintext` for a receiver on a declared private network.
+The Adapter refuses it as an unknown key.
+
+A source that serves only plain HTTP inside a private network is reached through a sidecar on the Adapter's host.
+The sidecar carries the connection over TLS, for example a service-mesh proxy or a TLS tunnel, and the binding names it on loopback, for example `http://127.0.0.1:8081`.
+
+**Breaking.** Before this change a source on plain HTTP whose address `allowedPrivateCidrs` covered passed the runtime check and loaded.
+Each request that carried its credential was refused at send time with `egress.refused`, so the refusal surfaced only on traffic, and a credential-free source was reached in plain HTTP.
+Now the runtime check refuses both and the deployment does not start.
+To migrate, serve the source over https, or reach it on loopback through a sidecar.
 
 ### Upstream authentication
 

@@ -23,7 +23,8 @@ use registry_platform_httputil::client::transport_protects_the_credential;
 use registry_platform_httputil::{
     read_bounded,
     select::{select_credential_destination, SelectedDestination},
-    validate_response_headers, OutboundClientBuilder, PeerPolicy, ResponseHeaderError,
+    validate_response_headers, DestinationClient, OutboundClientBuilder, PeerPolicy,
+    ResponseHeaderError,
 };
 use reqwest::{
     header::{HeaderMap, HeaderValue},
@@ -210,7 +211,7 @@ fn binding_digest(namespace: VerifierNamespace, url: &Url, policy_id: &str) -> R
 /// One activated verifier.
 pub struct HttpVerifier {
     peer_policy: PeerPolicy,
-    client: reqwest::Client,
+    client: DestinationClient,
     namespace: VerifierNamespace,
     url: Url,
     authorization: ProtectedSecret,
@@ -239,12 +240,12 @@ impl HttpVerifier {
         bytes: Vec<u8>,
     ) -> Result<Verdict> {
         let headers = self.request_headers(sha256, content_type, &bytes)?;
+        let mut request = reqwest::Request::new(reqwest::Method::POST, self.url.clone());
+        *request.headers_mut() = headers;
+        *request.body_mut() = Some(bytes.into());
         let response = self
             .client
-            .post(self.url.clone())
-            .headers(headers)
-            .body(bytes)
-            .send()
+            .execute(request)
             .await
             .map_err(|_| VerifierError::Unavailable)?;
         validate_response_headers(response.headers(), self.peer_policy).map_err(

@@ -650,7 +650,12 @@ lowercase letters, digits, `-`, or `_`.
 Each entry requires `url` and `hmacSha256KeyRef`.
 `attemptTimeoutMilliseconds` defaults to 5000 and is bounded from 100 through 10000, while
 `maximumAttempts` defaults to 8 and is bounded from 1 through 20.
-URLs use the same HTTPS and explicit-loopback rules as the reminder destination.
+URLs use the same HTTPS and explicit-loopback rules as the reminder destination, with one
+addition: an `https` URL to a loopback address or the exact name `localhost`, such as
+`https://localhost:9443/hooks`, is accepted.
+`localhost` is delivered to only when every address it resolves to is loopback.
+A name under `localhost`, the absolute name `localhost.`, or port zero is refused by `schedulingctl check`
+and at startup with `config.invalid-value` at the destination's `url`.
 The key size, rotation field, and distinct-key requirement are the same as for the
 [reminder destination](#reminder-destination).
 

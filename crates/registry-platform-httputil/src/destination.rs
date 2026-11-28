@@ -271,6 +271,13 @@ pub enum DestinationProfile {
     /// Plain HTTP to an explicit loopback host: a loopback address literal or the
     /// exact name `localhost`. Valid in every posture.
     LoopbackHttp,
+    /// HTTPS to an explicit loopback host, admitted to loopback addresses
+    /// exactly as [`Self::LoopbackHttp`] is: a literal is sent as written, and
+    /// `localhost` only when every answer is loopback. Valid in every posture,
+    /// for event delivery destinations only: a data or credential policy
+    /// refuses it. [`FixedDestinationPolicy::from_selected`] freezes an https
+    /// event selection whose host explicitly denotes loopback with it.
+    LoopbackHttps,
     /// Test-only plain HTTP to one exact, explicitly allowed private IP.
     #[cfg(any(test, feature = "test-support"))]
     LocalPrivateDevelopmentHttp,
@@ -464,7 +471,12 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
 
     /// Freeze a destination binding from a selection: its origin is the
     /// selected URL's scheme, host and port, and its profile and ranges are
-    /// the selection's. Every check [`Self::new`] makes still applies.
+    /// the selection's. For an event delivery destination only, an https
+    /// selection whose host explicitly denotes loopback (a loopback literal or
+    /// the exact name `localhost`) freezes as
+    /// [`DestinationProfile::LoopbackHttps`], so a hook can reach a local TLS
+    /// receiver. A data or credential selection keeps the production rule.
+    /// Every check [`Self::new`] makes still applies.
     pub fn from_selected(
         origin_id: &str,
         selected: &crate::select::SelectedDestination,
@@ -473,10 +485,18 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
         origin.set_path("/");
         origin.set_query(None);
         origin.set_fragment(None);
+        let profile = match selected.profile() {
+            DestinationProfile::ProductionHttps
+                if S::EVENT_DELIVERY && origin_explicitly_denotes_loopback(&origin) =>
+            {
+                DestinationProfile::LoopbackHttps
+            }
+            profile => profile,
+        };
         Self::new(
             origin_id,
             origin.as_str(),
-            selected.profile(),
+            profile,
             selected.allowed_private_cidrs(),
         )
     }
@@ -531,6 +551,11 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
             return Err(DestinationPolicyError::OriginHasResourceComponents);
         }
 
+        // Loopback over https is a hook delivery exception: a data or
+        // credential destination keeps the production rule for loopback.
+        if profile == DestinationProfile::LoopbackHttps && !S::EVENT_DELIVERY {
+            return Err(DestinationPolicyError::LoopbackHttpsRequiresEventDelivery);
+        }
         // A credential exchange never runs over private plain text, whatever
         // the deployment declares for its data path.
         if S::CREDENTIAL_EXCHANGE && !profile_admits_credential_exchange(profile) {
@@ -546,6 +571,14 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
             DestinationProfile::LoopbackHttp => {
                 if origin.scheme() != "http" {
                     return Err(DestinationPolicyError::DevelopmentRequiresHttp);
+                }
+                if !origin_explicitly_denotes_loopback(&origin) {
+                    return Err(DestinationPolicyError::DevelopmentRequiresLoopbackHost);
+                }
+            }
+            DestinationProfile::LoopbackHttps => {
+                if origin.scheme() != "https" {
+                    return Err(DestinationPolicyError::ProductionRequiresHttps);
                 }
                 if !origin_explicitly_denotes_loopback(&origin) {
                     return Err(DestinationPolicyError::DevelopmentRequiresLoopbackHost);
@@ -962,7 +995,7 @@ impl<S: DestinationSlot> FixedDestinationPolicy<S> {
             DestinationProfile::PrivateServiceHttp => {
                 classify_private_service_address(ip, &self.allowed_private_cidrs)
             }
-            DestinationProfile::LoopbackHttp => {
+            DestinationProfile::LoopbackHttp | DestinationProfile::LoopbackHttps => {
                 if is_loopback(ip) {
                     Ok(())
                 } else {
@@ -1104,7 +1137,9 @@ pub(crate) fn retain_private_cidrs(
 /// selector.
 pub(crate) fn profile_admits_credential_exchange(profile: DestinationProfile) -> bool {
     match profile {
-        DestinationProfile::ProductionHttps | DestinationProfile::LoopbackHttp => true,
+        DestinationProfile::ProductionHttps
+        | DestinationProfile::LoopbackHttp
+        | DestinationProfile::LoopbackHttps => true,
         DestinationProfile::PrivateServiceHttp => false,
         #[cfg(any(test, feature = "test-support"))]
         DestinationProfile::PinnedLoopbackHttpsTest => true,
@@ -1136,8 +1171,9 @@ pub(crate) fn classify_private_service_address(
     }
 }
 
-/// Classify a normalized address under the production profile.
-fn classify_production_address(
+/// Classify a normalized address under the production profile. The
+/// credential-free fetch of an https selection applies the same rule.
+pub(crate) fn classify_production_address(
     ip: IpAddr,
     allowed_private_cidrs: &[IpNet],
 ) -> Result<(), DestinationSendError> {
@@ -1316,6 +1352,8 @@ pub enum DestinationPolicyError {
     DevelopmentRequiresHttp,
     #[error("loopback development destination requires an explicit loopback host")]
     DevelopmentRequiresLoopbackHost,
+    #[error("loopback HTTPS is admitted only for event delivery destinations")]
+    LoopbackHttpsRequiresEventDelivery,
     #[error("local private development destination requires HTTP")]
     LocalPrivateDevelopmentRequiresHttp,
     #[error("local private development destination requires an eligible private IP literal")]
@@ -5559,8 +5597,8 @@ mod tests {
         }
     }
 
-    fn classify(
-        policy: &DataDestinationPolicy,
+    fn classify<S: DestinationSlot>(
+        policy: &FixedDestinationPolicy<S>,
         addresses: &[&str],
     ) -> Result<(), DestinationSendError> {
         let answers = ResolvedAnswers::try_collect(
@@ -5639,6 +5677,233 @@ mod tests {
             DataDestinationPolicy::from_selected("registry", &localhost_name).unwrap_err(),
             DestinationPolicyError::LocalhostNamespaceDenied
         );
+    }
+
+    /// N2: an https event selection whose host explicitly denotes loopback
+    /// freezes to loopback addresses, as a loopback plain-text selection does:
+    /// a literal is admitted, `localhost` is admitted only when every answer
+    /// is loopback, and any other name answering loopback stays refused.
+    #[test]
+    fn a_frozen_https_loopback_event_selection_admits_only_loopback_answers() {
+        for (raw, answers) in [
+            ("https://127.0.0.1:8443/", &["127.0.0.1"][..]),
+            ("https://127.0.0.2:8443/", &["127.0.0.2"][..]),
+            ("https://[::1]:8443/", &["::1"][..]),
+            ("https://localhost:8443/", &["127.0.0.1", "::1"][..]),
+            ("https://localhost/", &["127.0.0.1"][..]),
+        ] {
+            let event =
+                EventDestinationPolicy::from_selected("loopback", &selection(raw, None, &[]))
+                    .unwrap_or_else(|error| panic!("{raw} freezes for an event: {error}"));
+            assert_eq!(event.origin.as_str(), raw);
+            assert_eq!(classify(&event, answers), Ok(()), "{raw}");
+        }
+
+        let localhost = EventDestinationPolicy::from_selected(
+            "loopback",
+            &selection("https://localhost:8443/", None, &[]),
+        )
+        .expect("https localhost freezes for an event");
+        for answers in [
+            &["93.184.216.34"][..],
+            &["10.1.2.3"][..],
+            &["127.0.0.1", "192.0.2.1"][..],
+        ] {
+            assert_eq!(
+                classify(&localhost, answers),
+                Err(DestinationSendError::DevelopmentAddressDenied),
+                "localhost answering {answers:?}"
+            );
+        }
+
+        // Any other name keeps the production rule, loopback answers refused.
+        let named = EventDestinationPolicy::from_selected(
+            "registry",
+            &selection("https://registry.example.test:8443/", None, &[]),
+        )
+        .expect("a named https selection freezes");
+        assert_eq!(
+            classify(&named, &["127.0.0.1"]),
+            Err(DestinationSendError::AlwaysDeniedAddress)
+        );
+        assert_eq!(classify(&named, &["93.184.216.34"]), Ok(()));
+
+        for (raw, refusal) in [
+            (
+                "https://localhost.:8443/",
+                DestinationPolicyError::LocalhostNamespaceDenied,
+            ),
+            (
+                "https://receiver.localhost:8443/",
+                DestinationPolicyError::LocalhostNamespaceDenied,
+            ),
+            (
+                "https://localhost:0/",
+                DestinationPolicyError::OriginPortZero,
+            ),
+            (
+                "https://127.0.0.1:0/",
+                DestinationPolicyError::OriginPortZero,
+            ),
+        ] {
+            assert_eq!(
+                EventDestinationPolicy::from_selected("loopback", &selection(raw, None, &[]))
+                    .unwrap_err(),
+                refusal,
+                "{raw}"
+            );
+        }
+    }
+
+    /// N2 is a hook delivery ruling only. A data or credential selection over
+    /// https keeps the production rule: `localhost` is refused when the
+    /// policy is built, a loopback literal is refused at send, and the
+    /// loopback https profile cannot be named for either slot.
+    #[test]
+    fn https_loopback_stays_refused_for_data_and_credential_slots() {
+        let localhost = selection("https://localhost:9443/", None, &[]);
+        assert_eq!(
+            DataDestinationPolicy::from_selected("loopback", &localhost).unwrap_err(),
+            DestinationPolicyError::LocalhostNamespaceDenied
+        );
+        assert_eq!(
+            CredentialDestinationPolicy::from_selected("loopback", &localhost).unwrap_err(),
+            DestinationPolicyError::LocalhostNamespaceDenied
+        );
+
+        let literal = selection("https://127.0.0.1:9443/", None, &[]);
+        let data = DataDestinationPolicy::from_selected("loopback", &literal)
+            .expect("an https loopback literal builds a data policy");
+        assert_eq!(
+            classify(&data, &["127.0.0.1"]),
+            Err(DestinationSendError::AlwaysDeniedAddress)
+        );
+        let credential = CredentialDestinationPolicy::from_selected("loopback", &literal)
+            .expect("an https loopback literal builds a credential policy");
+        assert_eq!(
+            classify(&credential, &["127.0.0.1"]),
+            Err(DestinationSendError::AlwaysDeniedAddress)
+        );
+
+        for origin in ["https://127.0.0.1:9443/", "https://localhost:9443/"] {
+            assert_eq!(
+                DataDestinationPolicy::new(
+                    "loopback",
+                    origin,
+                    DestinationProfile::LoopbackHttps,
+                    &[]
+                )
+                .unwrap_err(),
+                DestinationPolicyError::LoopbackHttpsRequiresEventDelivery,
+                "{origin}"
+            );
+            assert_eq!(
+                CredentialDestinationPolicy::new(
+                    "loopback",
+                    origin,
+                    DestinationProfile::LoopbackHttps,
+                    &[]
+                )
+                .unwrap_err(),
+                DestinationPolicyError::LoopbackHttpsRequiresEventDelivery,
+                "{origin}"
+            );
+        }
+    }
+
+    /// N2 at send: an https loopback event selection delivers to a local TLS
+    /// receiver, a literal without asking the resolver, and `localhost` only
+    /// through loopback answers. An answer off loopback is refused before
+    /// dialling, and a data selection to the same literal is refused at send.
+    #[tokio::test]
+    async fn a_frozen_https_loopback_event_selection_delivers_over_tls_to_loopback() {
+        let template = EventDestinationRequestTemplate::event_delivery(
+            "/hooks/registry",
+            1_024,
+            MAX_TEST_EVENT_REQUEST_BYTES,
+        )
+        .expect("closed event template");
+        let expected = br#"{"event":"widget.tombstoned","generation":42}"#;
+        for host in ["127.0.0.1", "localhost"] {
+            let (address, root, server) = spawn_tls_event_server(host).await;
+            let origin = format!("https://{host}:{}/", address.port());
+            let policy =
+                EventDestinationPolicy::from_selected("loopback", &selection(&origin, None, &[]))
+                    .expect("an https loopback event selection freezes");
+            let resolver = FakeResolver {
+                answers: vec![address],
+                calls: AtomicUsize::new(0),
+            };
+            let response = policy
+                .send_with_resolver(
+                    template
+                        .render_event(event_headers(), expected.to_vec())
+                        .expect("event request renders"),
+                    Duration::from_secs(2),
+                    &resolver,
+                    TransportTrust::TestRoot(root),
+                )
+                .await
+                .unwrap_or_else(|error| panic!("{host}: {error}"));
+            assert_eq!(response.status(), StatusCode::NO_CONTENT, "{host}");
+            let expected_calls = usize::from(host == "localhost");
+            assert_eq!(
+                resolver.calls.load(Ordering::SeqCst),
+                expected_calls,
+                "{host}"
+            );
+            let received = server
+                .await
+                .expect("TLS server task completed")
+                .expect("TLS server completed");
+            assert_eq!(received, expected.to_vec(), "{host}");
+        }
+
+        let (address, root, server) = spawn_tls_event_server("localhost").await;
+        let policy = EventDestinationPolicy::from_selected(
+            "loopback",
+            &selection(&format!("https://localhost:{}/", address.port()), None, &[]),
+        )
+        .expect("https localhost freezes for an event");
+        let resolver = FakeResolver {
+            answers: vec![SocketAddr::new(ip("192.0.2.1"), address.port())],
+            calls: AtomicUsize::new(0),
+        };
+        let refused = policy
+            .send_with_resolver(
+                template
+                    .render_event(event_headers(), expected.to_vec())
+                    .expect("event request renders"),
+                Duration::from_secs(2),
+                &resolver,
+                TransportTrust::TestRoot(root.clone()),
+            )
+            .await
+            .expect_err("localhost answering off loopback is refused");
+        assert_eq!(refused, DestinationSendError::DevelopmentAddressDenied);
+        assert_eq!(resolver.calls.load(Ordering::SeqCst), 1);
+
+        let data = DataDestinationPolicy::from_selected(
+            "loopback",
+            &selection(&format!("https://127.0.0.1:{}/", address.port()), None, &[]),
+        )
+        .expect("an https loopback literal builds a data policy");
+        let resolver = FakeResolver {
+            answers: vec![address],
+            calls: AtomicUsize::new(0),
+        };
+        let refused = data
+            .send_with_resolver(
+                DataDestinationRequest::new(DestinationMethod::Get, "/record", vec![], None, None)
+                    .expect("request validates"),
+                Duration::from_secs(2),
+                &resolver,
+                TransportTrust::TestRoot(root),
+            )
+            .await
+            .expect_err("a data send to a loopback literal is refused");
+        assert_eq!(refused, DestinationSendError::AlwaysDeniedAddress);
+        server.abort();
     }
 
     /// T22: a credential exchange never runs over private plain text, and
@@ -5973,6 +6238,74 @@ mod tests {
             Ok(())
         });
         (address, request_certificate, certificate_pem, handle)
+    }
+
+    /// A one-shot TLS receiver that reads one request with its
+    /// `content-length` body, answers 204, and returns the body it read.
+    async fn spawn_tls_event_server(
+        subject_alt_name: &str,
+    ) -> (
+        SocketAddr,
+        reqwest::Certificate,
+        JoinHandle<Result<Vec<u8>, ()>>,
+    ) {
+        let CertifiedKey { cert, signing_key } =
+            generate_simple_self_signed(vec![subject_alt_name.to_owned()])
+                .expect("generate test certificate");
+        let certificate_der = cert.der().clone();
+        let request_certificate = reqwest::Certificate::from_der(certificate_der.as_ref())
+            .expect("parse test root certificate");
+        let private_key =
+            PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(signing_key.serialize_der()));
+        let server_config = ServerConfig::builder()
+            .with_no_client_auth()
+            .with_single_cert(vec![certificate_der], private_key)
+            .expect("build test TLS configuration");
+        let acceptor = TlsAcceptor::from(Arc::new(server_config));
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind TLS test server");
+        let address = listener.local_addr().expect("TLS test server address");
+        let handle = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.map_err(|_| ())?;
+            let mut stream = acceptor.accept(stream).await.map_err(|_| ())?;
+            let mut request = Vec::with_capacity(2_048);
+            let header_end = loop {
+                let mut chunk = [0_u8; 512];
+                let read = stream.read(&mut chunk).await.map_err(|_| ())?;
+                if read == 0 {
+                    return Err(());
+                }
+                request.extend_from_slice(&chunk[..read]);
+                if request.len() > 16_384 {
+                    return Err(());
+                }
+                if let Some(at) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                    break at + 4;
+                }
+            };
+            let head = String::from_utf8_lossy(&request[..header_end]).to_ascii_lowercase();
+            let length: usize = head
+                .lines()
+                .find_map(|line| line.strip_prefix("content-length:"))
+                .and_then(|value| value.trim().parse().ok())
+                .ok_or(())?;
+            while request.len() < header_end + length {
+                let mut chunk = [0_u8; 512];
+                let read = stream.read(&mut chunk).await.map_err(|_| ())?;
+                if read == 0 {
+                    return Err(());
+                }
+                request.extend_from_slice(&chunk[..read]);
+            }
+            stream
+                .write_all(b"HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n")
+                .await
+                .map_err(|_| ())?;
+            stream.shutdown().await.map_err(|_| ())?;
+            Ok(request[header_end..header_end + length].to_vec())
+        });
+        (address, request_certificate, handle)
     }
 
     #[test]

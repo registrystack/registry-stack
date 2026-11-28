@@ -147,18 +147,40 @@ selection:
 - `FixedDestinationPolicy::from_selected` freezes a fixed-destination policy
   from it. The credential slot is refused over private plain text, and so is a
   send in any slot that carries an authorization value, an AWS signature or a
-  script API key, before anything is resolved.
+  script API key, before anything is resolved. For an event delivery
+  destination only, an https selection whose host is a loopback literal or the
+  exact name `localhost` freezes as `DestinationProfile::LoopbackHttps`, which
+  admits loopback answers only, as `LoopbackHttp` does, so `localhost` is sent
+  to only when every answer is loopback. A data or credential policy refuses
+  that profile with `LoopbackHttpsRequiresEventDelivery`, and any other https
+  selection keeps the production address rule: `localhost` is refused when
+  the policy is built and a loopback answer is refused at send.
 - `OutboundClientBuilder::destination` confines a client's name resolution.
   The client resolves only the selected host name. Every answer must be one
   the selection admits: never a cloud metadata or always-denied address over
-  https, and loopback only for loopback plain text. Over https a private
-  answer needs no range, so the selection's ranges have no effect on a client.
-  An address literal is checked when the client is built, where an explicit
-  loopback literal is admitted over https. A literal host or `localhost` other
-  than the selected one is never resolved, so the caller sends only to the
-  selected origin and checks a joined or followed URL with
-  `SelectedDestination::admits_url`. A private plain-text selection never
-  builds a client, since a client carries whatever credential its caller adds.
+  https, and loopback only for loopback plain text. Over https the rule
+  judges the IPv4 address that an IPv4-mapped, IPv4-compatible (`::/96`),
+  6to4 (`2002::/16`) or well-known NAT64 (`64:ff9b::/96`) address carries.
+  Other translation prefixes, such as local-use NAT64 (`64:ff9b:1::/48`), are
+  not decoded. Over https a private answer needs no range, so the selection's
+  ranges have no effect on a client. An address literal is checked when the
+  client is built, where an explicit loopback literal is admitted over https.
+  A client built for an https selection is https-only: a plain-http request
+  fails before anything is resolved or dialled, whatever its host. The
+  builder returns a `DestinationClientBuilder`, which builds a
+  `DestinationClient` and never a raw client. `DestinationClient::execute`
+  sends a request only when its URL has the selection's own scheme, host and
+  port, checked with `SelectedDestination::admits_url` before anything is
+  resolved or dialled. That covers an address literal or `localhost`, which
+  no resolver sees, so a credential the caller adds reaches no other origin.
+  A `Host` header the caller sets must name that same authority, compared as
+  a URL authority (case, a written or elided default port, and the form of
+  an IPv6 literal do not matter), and a request with more than one is
+  refused, so a credential cannot reach another virtual host behind the
+  selected peer either. A refused `Host` fails with
+  `DestinationClientError::HostNotSelected` before anything is dialled.
+  A private plain-text selection never builds a client, since a client
+  carries whatever credential its caller adds.
 - `ServiceBaseUrl::selected` refuses a private plain-text selection for the
   same reason.
 
@@ -167,8 +189,24 @@ A destination that carries a credential selects with
 with `platform.destination.credential-requires-protected-transport`.
 `SelectedDestination::admits_credentials` is the one predicate behind every
 credential refusal. A credential-free fetch validates a selection with
-`select::validate_selected_fetch`, which resolves once, admits each answer as
-a selected client would, and pins the request to the admitted addresses.
+`select::validate_selected_fetch`, which resolves once, admits each answer,
+and returns a `SelectedFetch` pinned to the admitted addresses. Over https it
+admits each answer as a fixed https destination does: a private address,
+CGNAT (`100.64.0.0/10`) included, only inside the selection's
+`allowedPrivateCidrs`, and never a cloud metadata, always-denied or other
+non-global address. An explicit loopback literal and `localhost`, pinned to
+the loopback addresses, are admitted, as a selected client admits them.
+`SelectedFetch::get` sends one GET with the caller's `Accept` and timeout and
+nothing else, so no credential can be added to it.
+
+Names resolve differently in the two families. A fixed destination queries
+its host as an absolute name, without the hosts file or the search domains.
+A selected client and a selected fetch resolve through the operating system,
+which reads the hosts file and appends the search domains to a single-label
+name. A single-label host such as `http://hooks:8080/` can therefore resolve
+for a client and fail for a fixed destination, for example under Kubernetes
+search domains. Write the fully qualified name, such as
+`hooks.registry.svc.cluster.local`, in every destination URL.
 
 ## URL Policy
 
