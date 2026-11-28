@@ -893,7 +893,7 @@ fn clean_removes_the_retained_state_of_an_ended_managed_run() {
     let scratch = tempfile::tempdir().unwrap();
     let state = scratch.path().join("state");
     fs::DirBuilder::new().mode(0o700).create(&state).unwrap();
-    let key = "fedcba9876543210fedcba9876543210";
+    let key = "feedfeedfeedfeedfeedfeedfeedfeed";
     let project = state.join(format!("development-project-{key}"));
     fs::DirBuilder::new().mode(0o700).create(&project).unwrap();
     for (name, value) in [
