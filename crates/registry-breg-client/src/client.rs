@@ -3309,7 +3309,10 @@ fn valid_action_input_problem_path(path: &str) -> bool {
 }
 
 fn valid_action_request_problem_path(path: &str) -> bool {
-    if matches!(path, "" | "/input" | "/preconditions") {
+    if matches!(
+        path,
+        "" | "/input" | "/preconditions" | "/text" | "/additions"
+    ) {
         return true;
     }
     let Some(remainder) = path.strip_prefix("/preconditions/") else {
@@ -3350,4 +3353,16 @@ fn problem_failure(status: StatusCode, trace_id: TraceId) -> BaseRegistryClientE
         BRegProtocolFailure::Problem,
         Some(trace_id),
     )
+}
+
+#[cfg(test)]
+mod ask_field_paths {
+    #[test]
+    fn answer_problem_locations_name_only_the_fixed_body_members() {
+        assert!(super::valid_action_request_problem_path("/text"));
+        assert!(super::valid_action_request_problem_path("/additions"));
+        assert!(!super::valid_action_request_problem_path(
+            "/additions/private-file"
+        ));
+    }
 }

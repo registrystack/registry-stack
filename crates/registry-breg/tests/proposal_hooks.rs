@@ -211,3 +211,23 @@ fn proposal_local_handlers_use_existing_abi_asset_and_build_admission() {
         assert!(!format!("{error:?}").contains("asset-missing"));
     }
 }
+
+#[test]
+fn ask_hooks_select_asked_and_answered_by_default_and_explicit_filter() {
+    use registry_breg::contract::ProposalEventTransition;
+    use std::collections::BTreeSet;
+    for transition in [
+        ProposalEventTransition::Asked,
+        ProposalEventTransition::Answered,
+    ] {
+        assert!(
+            registry_breg::proposal_hooks::matching_transitions(&BTreeSet::new())
+                .any(|item| item == transition)
+        );
+        assert_eq!(
+            registry_breg::proposal_hooks::matching_transitions(&BTreeSet::from([transition]))
+                .collect::<Vec<_>>(),
+            vec![transition]
+        );
+    }
+}

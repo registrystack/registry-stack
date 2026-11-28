@@ -431,9 +431,22 @@ impl BregContextProvider {
         {
             return Err(ReviewContextError::Invalid);
         }
+        let mut answers = std::collections::BTreeMap::new();
+        for ask in document.context.asks {
+            if let Some(answer) = ask.answer {
+                let id = uuid::Uuid::parse_str(&ask.id).map_err(|_| ReviewContextError::Invalid)?;
+                let answer = serde_json::from_value(
+                    serde_json::to_value(answer).map_err(|_| ReviewContextError::Invalid)?,
+                )
+                .map_err(|_| ReviewContextError::Invalid)?;
+                if answers.insert(id, answer).is_some() {
+                    return Err(ReviewContextError::Invalid);
+                }
+            }
+        }
         let display_reference = Some(document.context.reference);
         Ok(HumanDisplayObservation {
-            answers: Default::default(),
+            answers,
             identity: identity.clone(),
             reviewable: document.reviewable,
             display_reference,
@@ -504,7 +517,9 @@ impl ReviewContextProvider for BregContextProvider {
         let document = self
             .read(&client, request.identity, request.source_profile_id, true)
             .await?;
-        self.display_observation(request.identity, document)
+        let mut view = self.display_observation(request.identity, document)?;
+        view.answers.clear();
+        Ok(view)
     }
     async fn delegated_display_batch(
         &self,
@@ -532,6 +547,14 @@ impl ReviewContextProvider for BregContextProvider {
         let client = self.client.with_bearer_token(token);
         self.display_batch_with_client(identities, source_profile_id, &client)
             .await
+            .into_iter()
+            .map(|result| {
+                result.map(|mut observation| {
+                    observation.answers.clear();
+                    observation
+                })
+            })
+            .collect()
     }
     async fn service_status(
         &self,

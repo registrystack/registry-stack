@@ -662,6 +662,8 @@ impl registry_platform_yaml::Identified for ProposalHookSource {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProposalEventTransition {
+    Asked,
+    Answered,
     Added,
     Started,
     Edited,
@@ -678,6 +680,8 @@ pub enum ProposalEventTransition {
 impl ProposalEventTransition {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Asked => "asked",
+            Self::Answered => "answered",
             Self::Added => "added",
             Self::Started => "started",
             Self::Edited => "edited",
@@ -826,6 +830,7 @@ serialize_tagged_union!(ProposalContextValueSource, tag = "type");
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ProposalOperation {
+    Answer,
     Get,
     List,
     Edit,
@@ -844,6 +849,7 @@ pub enum ProposalOperation {
 impl ProposalOperation {
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::Answer => "answer",
             Self::Get => "get",
             Self::List => "list",
             Self::Edit => "edit",

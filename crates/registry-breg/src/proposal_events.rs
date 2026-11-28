@@ -51,6 +51,8 @@ pub(crate) async fn insert_proposal_lifecycle_event(
             event.transition,
             "started"
                 | "added"
+                | "asked"
+                | "answered"
                 | "edited"
                 | "submitted"
                 | "revised"

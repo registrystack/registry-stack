@@ -4,11 +4,13 @@
 //! admitted independently; a business Record is never used as a Proposal.
 
 use super::*;
+mod answers;
 use crate::model::{
     CompiledAction, CompiledActionExecution, CompiledActionRoute, CompiledProposalPermission,
     CompiledRegistry, HttpMethod, ProposalOperation,
 };
 use crate::postgres::{ProposalAuthority, ProposalAuthorityOperation, RowBoundaryContext};
+pub(super) use answers::answer;
 
 pub(super) fn proposal_problem(error: MutationError) -> Response {
     match error {
@@ -38,6 +40,7 @@ pub(crate) struct ProposalMutationInput<'a> {
     pub executor_lease: Option<ExecutorLease>,
     pub rebase_start_authority: Option<&'a ProposalAuthority>,
     pub attachment: Option<crate::attachment::AttachmentMutation>,
+    pub answer: Option<crate::review_store::asks::AnswerMutation>,
     pub correlation: &'a RequestCorrelation,
     pub human_identity: Option<&'a registry_review_client::HumanIdentity>,
     pub claims: Option<&'a VerifiedRequestClaims>,
@@ -60,8 +63,13 @@ pub(crate) struct ProposalRecordReadAuthority {
     pub context: crate::postgres::ClaimContext,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum ReviewDocumentSource<'a> {
+    Field(&'a str),
+    Ask(Uuid),
+}
 pub(crate) struct ReviewContextDocumentRead<'a> {
-    pub field: &'a str,
+    pub source: ReviewDocumentSource<'a>,
     pub effect_digest: &'a str,
     pub schema_digest: &'a str,
     pub records: &'a BTreeMap<String, ProposalRecordReadAuthority>,
@@ -764,6 +772,7 @@ pub(super) async fn start(
             executor_lease: None,
             rebase_start_authority: None,
             attachment: None,
+            answer: None,
             correlation: &correlation,
             human_identity: claims.human_identity(),
             claims: Some(&claims),
@@ -1165,6 +1174,7 @@ pub(super) async fn transition(
             executor_lease: None,
             rebase_start_authority: rebase_start_authority.as_ref(),
             attachment: None,
+            answer: None,
             correlation: &correlation,
             human_identity: claims.human_identity(),
             claims: Some(&claims),

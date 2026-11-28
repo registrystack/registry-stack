@@ -4,7 +4,7 @@ from typing import TypedDict, NotRequired, Literal, Protocol, TypeVar, Generic, 
 from dataclasses import dataclass
 
 
-EngineReason = Literal['pending-review', 'review-rejected', 'review-changes-requested', 'review-ended', 'stale-revision', 'package-changed', 'dependency-outage', 'invalid-input', 'already-applied', 'limit-reached', 'application-pending', 'attachment-required', 'attachment-pending']
+EngineReason = Literal['pending-review', 'review-rejected', 'review-changes-requested', 'review-ended', 'stale-revision', 'package-changed', 'dependency-outage', 'invalid-input', 'already-applied', 'limit-reached', 'application-pending', 'attachment-required', 'attachment-pending', 'ask-answered', 'ask-closed', 'ask-due-passed']
 RecoveryHint = Literal['refresh', 'revise', 'retry', 'rebase', 'correct-input', 'receipt-only']
 class Availability(TypedDict):
     available: bool

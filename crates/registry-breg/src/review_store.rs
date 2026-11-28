@@ -567,7 +567,7 @@ impl ReviewAuthorityRegistry {
         self.authorities.contains_key(authority)
     }
 
-    fn contains_binding(&self, authority: &str, producer_id: &str) -> bool {
+    pub(crate) fn contains_binding(&self, authority: &str, producer_id: &str) -> bool {
         self.authorities
             .get(authority)
             .is_some_and(|configured| configured.producer_id == producer_id)
@@ -579,7 +579,7 @@ impl ReviewAuthorityRegistry {
             .map(|configured| (configured.producer_id.as_str(), configured.recovery_days))
     }
 
-    fn recovery_days(&self, authority: &str) -> Option<u32> {
+    pub(crate) fn recovery_days(&self, authority: &str) -> Option<u32> {
         self.authorities
             .get(authority)
             .map(|configured| configured.recovery_days)
@@ -682,6 +682,39 @@ impl ReviewAuthorityRegistry {
     }
 
     async fn run_one(
+        &self,
+        client: &mut tokio_postgres::Client,
+        mutations: &crate::postgres::PostgresRecordMutationService,
+    ) -> Result<bool, MutationError> {
+        // Both feeds get a turn even when ordinary work completed or failed.
+        let review = self.run_one_review(client, mutations).await;
+        let mut changed = review.as_ref().copied().unwrap_or(false);
+        let mut unavailable = review.is_err();
+        for authority in self.authorities.values() {
+            let key = format!("asks:{}", authority.authority);
+            if self.feed_due(&key) {
+                let outcome = asks::consume_feed(client, authority, mutations).await;
+                self.record_feed_outcome(&key, outcome.is_ok());
+                match outcome {
+                    Ok(work) => changed |= work,
+                    Err(_) => unavailable = true,
+                }
+            }
+            match asks::deliver_one(client, authority).await {
+                Ok(work) => changed |= work,
+                Err(_) => unavailable = true,
+            }
+        }
+        if changed {
+            Ok(true)
+        } else if unavailable {
+            Err(MutationError::Unavailable)
+        } else {
+            Ok(false)
+        }
+    }
+
+    async fn run_one_review(
         &self,
         client: &mut tokio_postgres::Client,
         mutations: &crate::postgres::PostgresRecordMutationService,
@@ -2068,6 +2101,7 @@ pub(crate) async fn schedule_cancellation(
     proposal_id: Uuid,
     submission_version: i64,
 ) -> Result<(), MutationError> {
+    asks::close_submission(transaction, action_id, proposal_id, submission_version).await?;
     transaction
         .execute(
             &format!(
@@ -2120,6 +2154,9 @@ pub(crate) async fn withdraw_incompatible_proposals(
         )
         .await
         .map_err(|_| MutationError::Unavailable)?;
+    for row in transaction.query("SELECT proposal_id,submission_version FROM registry_internal.registry_proposal_state WHERE action_id=$1 AND proposal_id=ANY($2::uuid[])",&[&action_id,&proposal_ids]).await.map_err(|_|MutationError::Unavailable)? {
+        asks::close_submission(transaction,action_id,row.get(0),row.get(1)).await?;
+    }
     Ok(())
 }
 
@@ -2799,7 +2836,7 @@ pub async fn reconcile_result(
     }
     if !withdrawn && current {
         mutations
-            .record_review_result(
+            .record_review_change(
                 transaction,
                 authority,
                 &entity_id,

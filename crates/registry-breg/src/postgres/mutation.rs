@@ -333,7 +333,7 @@ impl PostgresRecordMutationService {
     /// Carry a review result recorded in `transaction` into the Proposal
     /// lifecycle: a rejection ends the Proposal and a changes-requested
     /// result records `review-returned`, each with its lifecycle event.
-    pub(crate) async fn record_review_result(
+    pub(crate) async fn record_review_change(
         &self,
         transaction: &tokio_postgres::Transaction<'_>,
         authority: &str,
@@ -343,7 +343,7 @@ impl PostgresRecordMutationService {
         status: &str,
     ) -> Result<(), MutationError> {
         self.coordinator
-            .record_review_result(
+            .record_review_change(
                 transaction,
                 &self.registry,
                 authority,

@@ -894,6 +894,7 @@ async fn retain_queue_review(
     fixture.database.admin.execute("INSERT INTO registry_internal.registry_proposal_review_results (action_id,proposal_id,submission_version,authority,result_id,result,status,completed_at,available_until) VALUES ('correct-name',$1,$2,'local-review',$3,$4,$5,$6,$7)", &[&id,&version,&result.result_id,&serde_json::to_value(&result).unwrap(),&status,&result.completed_at,&result.available_until]).await.unwrap();
 }
 
+// Observe relation locks rather than pg_stat_activity SQL text, which PostgreSQL truncates.
 async fn proposal_state_lock_wait(fixture: &client_http::ClientFixture, minimum: i64) -> bool {
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
@@ -901,10 +902,13 @@ async fn proposal_state_lock_wait(fixture: &client_http::ClientFixture, minimum:
                 .database
                 .admin
                 .query_one(
-                    "SELECT count(*) FROM pg_stat_activity
+                    "SELECT count(*) FROM pg_stat_activity waiter
                  WHERE datname=current_database() AND wait_event_type='Lock'
-                   AND query LIKE '%registry_proposal_state%'
-                   AND (query LIKE '%FOR UPDATE%' OR query LIKE '%FOR SHARE%')",
+                   AND wait_event IN ('transactionid','tuple')
+                   AND EXISTS (SELECT 1 FROM pg_locks held
+                       WHERE held.pid=waiter.pid AND held.granted
+                         AND held.relation='registry_internal.registry_proposal_state'::regclass
+                         AND held.mode='RowShareLock')",
                     &[],
                 )
                 .await
@@ -3379,7 +3383,6 @@ async fn proposal_lifecycle_writer_waits(admin: &tokio_postgres::Client, pid: Op
                     JOIN pg_locks pending ON pending.pid=writer.pid AND NOT pending.granted
                     WHERE writer.datname=current_database()
                       AND ($1::integer IS NULL OR writer.pid=$1)
-                      AND writer.query LIKE '%registry_proposal_state%'
                       AND EXISTS (
                           SELECT 1 FROM pg_locks reader
                           WHERE reader.pid=ANY(pg_blocking_pids(writer.pid))

@@ -53,6 +53,7 @@ pub(super) fn target_policies(
                     ProposalOperation::List => "list",
                     ProposalOperation::Edit => "edit",
                     ProposalOperation::Add => "add",
+                    ProposalOperation::Answer => "answer",
                     ProposalOperation::Submit => "submit",
                     ProposalOperation::Revise => "revise",
                     ProposalOperation::Rebase => "rebase",

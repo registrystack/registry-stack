@@ -67,6 +67,7 @@ export declare class BaseRegistryClient {
   readProposalReviewStatusWithProgress(proposal: BRegProposal, cancellation?: ReadCancellation | undefined | null): Promise<CompleteOutcome>
   readProposalReviewContext(proposal: BRegProposal, cancellation?: ReadCancellation | undefined | null): Promise<CompleteOutcome>
   readProposalReviewContextBatch(binding: BRegProposalReviewBinding, ids: Array<string>, cancellation?: ReadCancellation | undefined | null): Promise<CompleteOutcome>
+  answerProposalAsk(proposal: BRegProposal, askId: string, body: any, key: string): Promise<BRegProposal>
   addProposalAddition(proposal: BRegProposal, slot: string, contentType: string, bytes: Buffer, key: string): Promise<BRegProposal>
   downloadProposalAddition(proposal: BRegProposal, addition: string): Promise<RawOutcome>
   uploadProposalAttachment(proposal: BRegProposal, slot: string, contentType: string, bytes: Buffer, key: string): Promise<BRegProposal>

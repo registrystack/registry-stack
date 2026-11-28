@@ -10,7 +10,7 @@ pub(crate) use action::{HookChangeApplication, HookChangeOutcome};
 mod proposal;
 pub(crate) use proposal::{
     link_readable, proposal_http_method, proposal_operation_name, CheckedProposalTaskAuthority,
-    ProposalApplyPreflight,
+    ProposalApplyPreflight, ProposalReadDisclosure,
 };
 pub(crate) use proposal::{PUBLIC_REASON_REFERENCE, REVIEW_PROGRESS_REFERENCE};
 mod timer;

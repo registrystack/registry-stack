@@ -61,7 +61,7 @@ fn validate(answer: &ReviewContextAnswer) -> Result<(), ReviewRuntimeError> {
                 .sha256
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
-            || !bounded(&document.content_type, 128)
+            || !bounded(&document.content_type, 255)
             || document.byte_size == 0
             || document.byte_size > 9_007_199_254_740_991
             || document
@@ -99,6 +99,19 @@ mod tests {
     }
     fn answer() -> ReviewContextAnswer {
         serde_json::from_value(json!({"text":"Private source answer","documents":[],"answeredAt":"2026-11-27T01:00:00Z"})).unwrap()
+    }
+
+    #[test]
+    fn source_answer_documents_accept_the_breg_media_type_bound() {
+        let mut answer = answer();
+        answer.documents = serde_json::from_value(json!([{
+            "id":"00000000-0000-4000-8000-000000000001", "sha256":"a".repeat(64),
+            "contentType":format!("{}/{}", "a".repeat(127), "a".repeat(127)), "byteSize":1
+        }]))
+        .unwrap();
+        assert!(validate(&answer).is_ok());
+        answer.documents[0].content_type.push('a');
+        assert!(validate(&answer).is_err());
     }
 
     #[test]

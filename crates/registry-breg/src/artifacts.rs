@@ -1525,6 +1525,7 @@ pub fn proposal_schema() -> Value {
         "applicationStatus":proposal_application_status_schema(),
         "turn":{"enum":["party","official","nobody"]},
         "decision":proposal_decision_schema(),
+        "asks":proposal_asks_schema(false),
         "handoffRefusal":proposal_handoff_refusal_schema(),
         "blockedReason":{"enum":["package-changed"]},"effectDigest":{"type":"string"},
         "attachments":{"type":"object","maxProperties":8,"additionalProperties":proposal_attachment_schema()},
@@ -1536,6 +1537,42 @@ pub fn proposal_schema() -> Value {
                 "ifMatch":{"type":"string"},"availability":availability_schema()}
         }}
     }})
+}
+
+/// Questions are intrinsic context and never authored context fields.
+pub(crate) fn proposal_asks_schema(review: bool) -> Value {
+    let uuid = json!({"type":"string","format":"uuid"});
+    let instant = json!({"type":"string","format":"date-time"});
+    let text = json!({"type":"string","minLength":1,"maxLength":2000});
+    let wants = json!({"type":"array","maxItems":8,"uniqueItems":true,"items":{
+        "type":"object","additionalProperties":false,"required":["kind"],
+        "properties":{"kind":{"enum":["answer","document"]}}}});
+    let mut answer = json!({"type":"object","additionalProperties":false,
+        "required":["answeredAt"],"properties":{"text":text,"answeredAt":instant}});
+    let mut properties = json!({"id":uuid,"text":text,"wants":wants,
+        "askedAt":instant,"dueAt":instant,"state":{"enum":["open","answered","expired","closed"]}});
+    let mut required = vec!["id", "text", "wants", "askedAt", "state"];
+    if review {
+        answer["required"] = json!(["documents", "answeredAt"]);
+        answer["properties"]["documents"] = json!({"type":"array","maxItems":32,"items":{
+            "type":"object","additionalProperties":false,
+            "required":["id","sha256","contentType","byteSize","verificationStatus"],
+            "properties":{"id":uuid,"sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"},
+                "contentType":{"type":"string","maxLength":255},"byteSize":{"type":"integer","minimum":1,"maximum":crate::contract::MAX_ATTACHMENT_BYTES},
+                "verificationStatus":{"enum":["notRequired","pending","approved","rejected"]},
+                "download":{"type":"object","additionalProperties":false,"required":["method","operation","accessProfile","path"],
+                    "properties":{"method":{"const":"GET"},"operation":{"const":"get-review-context"},"accessProfile":{"type":"string"},"path":{"type":"string"}}}}}});
+    } else {
+        answer["required"] = json!(["additions", "answeredAt"]);
+        answer["properties"]["additions"] =
+            json!({"type":"array","maxItems":32,"uniqueItems":true,"items":uuid});
+        required.push("links");
+        properties["links"] = json!({"type":"object","additionalProperties":false,"properties":{"answer":{
+            "type":"object","additionalProperties":false,"required":["method","path","accessProfile","operation","ifMatch","availability"],
+            "properties":{"method":{"const":"POST"},"operation":{"const":"answer"},"path":{"type":"string"},"accessProfile":{"type":"string"},"ifMatch":{"type":"string"},"availability":availability_schema()}}}});
+    }
+    properties["answer"] = answer;
+    json!({"type":"array","items":{"type":"object","additionalProperties":false,"required":required,"properties":properties}})
 }
 
 pub(crate) fn proposal_schema_with_additions(enabled: bool) -> Value {

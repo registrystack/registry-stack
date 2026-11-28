@@ -156,6 +156,7 @@ fn every_proposal_error_response_declares_its_problem_body() {
         "apply",
         "retry",
         "add",
+        "answer",
         "get-review-status",
         "get-review-context",
         "get-task-grant-context"

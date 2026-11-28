@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 //! Engine-owned Proposal slots. Get and Edit have explicit, separate byte grants.
+use super::proposals::ReviewDocumentSource;
 use super::*;
 use crate::model::{CompiledActionExecution, HttpMethod, ProposalOperation};
 use crate::postgres::{ProposalAuthority, ProposalAuthorityOperation};
@@ -108,7 +109,7 @@ async fn authorize(
     claims: &VerifiedRequestClaims,
     selected: Option<&str>,
     operation: ProposalOperation,
-    context_field: Option<&str>,
+    context_source: Option<ReviewDocumentSource<'_>>,
     addition: bool,
     method: HttpMethod,
     correlation: &RequestCorrelation,
@@ -161,22 +162,26 @@ async fn authorize(
     });
     let allowed = grant.is_some_and(|grant| match operation {
         ProposalOperation::Get => grant.readable_attachments.contains(slot),
-        ProposalOperation::GetReviewContext => context_field.is_some_and(|field| {
-            grant.readable_context_fields.contains(field)
-                && match proposal
-                    .review_context
-                    .as_ref()
-                    .and_then(|context| context.fields.get(field))
-                {
-                    Some(crate::contract::ProposalContextValueSource::Document {
-                        slot: mapped,
-                    }) => !addition && mapped == slot,
-                    Some(crate::contract::ProposalContextValueSource::Additions {
-                        slot: mapped,
-                    }) => addition && mapped == slot,
-                    _ => false,
-                }
-        }),
+        ProposalOperation::GetReviewContext => match context_source {
+            Some(ReviewDocumentSource::Ask(_)) => addition,
+            Some(ReviewDocumentSource::Field(field)) => {
+                grant.readable_context_fields.contains(field)
+                    && match proposal
+                        .review_context
+                        .as_ref()
+                        .and_then(|context| context.fields.get(field))
+                    {
+                        Some(crate::contract::ProposalContextValueSource::Document {
+                            slot: mapped,
+                        }) => !addition && mapped == slot,
+                        Some(crate::contract::ProposalContextValueSource::Additions {
+                            slot: mapped,
+                        }) => addition && mapped == slot,
+                        _ => false,
+                    }
+            }
+            None => false,
+        },
         ProposalOperation::Edit | ProposalOperation::Add => {
             grant.writable_attachments.contains(slot)
         }
@@ -347,6 +352,7 @@ async fn mutate(
         reason: None,
         executor_lease: None,
         rebase_start_authority: None,
+        answer: None,
         attachment: Some(crate::attachment::AttachmentMutation {
             slot_id: slot,
             content_type,
@@ -434,10 +440,7 @@ async fn download_file(
         return concealed(FailedCheck::Visibility);
     };
     let (field, operation) = match &query.review {
-        Some(review) => (
-            Some(review.field.as_str()),
-            ProposalOperation::GetReviewContext,
-        ),
+        Some(review) => (Some(review.source()), ProposalOperation::GetReviewContext),
         None => (None, ProposalOperation::Get),
     };
     let (action_id, authority) = match authorize(
@@ -487,7 +490,7 @@ async fn download_file(
         .review
         .as_ref()
         .map(|review| super::proposals::ReviewContextDocumentRead {
-            field: &review.field,
+            source: review.source(),
             effect_digest: &review.effect_digest,
             schema_digest: &review.schema_digest,
             records: &records,
@@ -528,10 +531,24 @@ struct AttachmentDownloadQuery {
     review: Option<ReviewDownloadQuery>,
 }
 #[derive(Debug)]
+enum ReviewDownloadSelector {
+    Field(String),
+    Ask(Uuid),
+}
+#[derive(Debug)]
 struct ReviewDownloadQuery {
-    field: String,
+    selector: ReviewDownloadSelector,
     effect_digest: String,
     schema_digest: String,
+}
+
+impl ReviewDownloadQuery {
+    fn source(&self) -> ReviewDocumentSource<'_> {
+        match &self.selector {
+            ReviewDownloadSelector::Field(field) => ReviewDocumentSource::Field(field),
+            ReviewDownloadSelector::Ask(ask) => ReviewDocumentSource::Ask(*ask),
+        }
+    }
 }
 
 fn parse_download_query(raw: Option<&str>) -> Result<AttachmentDownloadQuery, QueryParseError> {
@@ -542,6 +559,7 @@ fn parse_download_query(raw: Option<&str>) -> Result<AttachmentDownloadQuery, Qu
     let mut version = None;
     let mut selected = None;
     let mut field = None;
+    let mut ask = None;
     let mut effect_digest = None;
     let mut schema_digest = None;
     for pair in raw.split('&') {
@@ -564,6 +582,13 @@ fn parse_download_query(raw: Option<&str>) -> Result<AttachmentDownloadQuery, Qu
             {
                 field = Some(value)
             }
+            "reviewAskId" if ask.is_none() => {
+                let id = Uuid::parse_str(&value).map_err(|_| QueryParseError::Invalid)?;
+                if id.is_nil() || id.to_string() != value {
+                    return Err(QueryParseError::Invalid);
+                }
+                ask = Some(id);
+            }
             "effectDigest"
                 if effect_digest.is_none()
                     && registry_platform_yaml::Digest::new(&value).is_ok() =>
@@ -579,10 +604,17 @@ fn parse_download_query(raw: Option<&str>) -> Result<AttachmentDownloadQuery, Qu
             _ => return Err(QueryParseError::Invalid),
         }
     }
-    let review = match (field, effect_digest, schema_digest) {
-        (None, None, None) => None,
-        (Some(field), Some(effect_digest), Some(schema_digest)) => Some(ReviewDownloadQuery {
-            field,
+    let review = match (field, ask, effect_digest, schema_digest) {
+        (None, None, None, None) => None,
+        (Some(field), None, Some(effect_digest), Some(schema_digest)) => {
+            Some(ReviewDownloadQuery {
+                selector: ReviewDownloadSelector::Field(field),
+                effect_digest,
+                schema_digest,
+            })
+        }
+        (None, Some(ask), Some(effect_digest), Some(schema_digest)) => Some(ReviewDownloadQuery {
+            selector: ReviewDownloadSelector::Ask(ask),
             effect_digest,
             schema_digest,
         }),
@@ -623,7 +655,9 @@ mod tests {
     fn review_document_query_is_complete_closed_and_exclusive() {
         let valid = format!("submissionVersion=1&reviewContextField=supportingDocument&effectDigest=sha256%3A{}&contextSchemaDigest=sha256%3A{}&accessProfile=reviewer_one", "a".repeat(64), "b".repeat(64));
         let parsed = parse_download_query(Some(&valid)).unwrap();
-        assert_eq!(parsed.review.unwrap().field, "supportingDocument");
+        assert!(
+            matches!(parsed.review.unwrap().selector,ReviewDownloadSelector::Field(field) if field=="supportingDocument")
+        );
         for invalid in [
             "submissionVersion=1&reviewContextField=supportingDocument".to_owned(),
             valid.replace("effectDigest=", "unknown="),

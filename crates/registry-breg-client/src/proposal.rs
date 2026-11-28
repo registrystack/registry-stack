@@ -10,8 +10,18 @@ use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 use zeroize::Zeroizing;
 
 mod additions;
+mod asks;
+pub use asks::{
+    BRegProposalAnswerRequest, BRegProposalAsk, BRegProposalAskAnswer, BRegProposalAskState,
+    BRegProposalAskWant,
+};
+mod review_asks;
 mod review_document;
 pub use additions::{BRegProposalAddition, BRegProposalAdditionSlot};
+pub use review_asks::{
+    BRegProposalReviewAnswer, BRegProposalReviewAnswerDocument, BRegProposalReviewAnswerDownload,
+    BRegProposalReviewAsk,
+};
 
 // Mirrors MAX_PROPOSAL_SNAPSHOT_BYTES in registry-breg::proposal_store.
 // The client does not depend on the runtime.
@@ -45,6 +55,9 @@ pub enum BRegAvailabilityReason {
     ApplicationPending,
     AttachmentRequired,
     AttachmentPending,
+    AskAnswered,
+    AskClosed,
+    AskDuePassed,
 }
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -393,6 +406,8 @@ pub struct BRegProposalReviewContext {
     pub contract: Option<BRegProposalReviewContextContract>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fields: Option<BTreeMap<String, Value>>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub asks: Vec<BRegProposalReviewAsk>,
 }
 /// Exact local interface exported by the governed producer, independent of a review policy pin.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
@@ -601,6 +616,8 @@ pub struct BRegProposal {
     attachments: BTreeMap<String, BRegProposalAttachment>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     additions: BTreeMap<String, BRegProposalAdditionSlot>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    asks: Vec<BRegProposalAsk>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     application: Option<BRegProposalApplication>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -865,6 +882,7 @@ impl BRegProposal {
             }
         }
         self.validate_additions()?;
+        self.validate_asks()?;
         Ok(())
     }
     fn discloses_application_actor(&self) -> bool {
@@ -933,6 +951,9 @@ impl BRegProposal {
     pub fn link(&self, operation: &str) -> Option<&BRegProposalLink> {
         self.links.get(operation)
     }
+    pub fn asks(&self) -> &[BRegProposalAsk] {
+        &self.asks
+    }
     pub fn attachment(&self, id: &str) -> Option<&BRegProposalAttachment> {
         self.attachments.get(id)
     }
@@ -954,6 +975,7 @@ impl BRegProposal {
                     .flat_map(|slot| slot.links.values()),
             )
             .chain(self.addition_links())
+            .chain(self.asks.iter().flat_map(|ask| ask.links.values()))
             .any(|link| link.access_profile != profile)
         {
             return Err(refusal());
@@ -1320,6 +1342,7 @@ impl BaseRegistryClient {
             || document.proposal.authority.is_none()
             || fields.as_ref() != Some(&requested)
             || !valid_review_document(&document.proposal, true, false)
+            || !document.proposal.context.asks.is_empty()
         {
             return Err(refusal());
         }
@@ -1356,6 +1379,7 @@ impl BaseRegistryClient {
         if document.id != id
             || document.action_id != binding.action
             || !valid_review_document(&document, is_context, false)
+            || !review_asks::profiles(&document, &binding.profile)
         {
             return Err(refusal());
         }
@@ -1420,7 +1444,8 @@ impl BaseRegistryClient {
                     if id == *expected
                         && context.id == id
                         && context.action_id == binding.action
-                        && valid_review_document(&context, true, false) =>
+                        && valid_review_document(&context, true, false)
+                        && review_asks::profiles(&context, &binding.profile) =>
                 {
                     values.push(Some(*context))
                 }
@@ -1520,6 +1545,7 @@ impl BaseRegistryClient {
                 .as_deref()
                 .is_some_and(|digest| digest != document.effect_digest)
             || !valid_review_document(&document, operation == "reviewContext", include_progress)
+            || !review_asks::profiles(&document, &link.access_profile)
         {
             return Err(refusal());
         }
@@ -2105,6 +2131,7 @@ fn valid_review_document(
             .as_ref()
             .is_none_or(|policy| policy.check().is_ok())
         && valid_review_projection(document, is_context, include_progress)
+        && review_asks::valid(document)
 }
 
 fn valid_review_projection(
@@ -2121,6 +2148,7 @@ fn valid_review_projection(
             && document.progress_code.is_none()
     } else {
         document.context.fields.is_none()
+            && document.context.asks.is_empty()
             && document
                 .request_id
                 .as_deref()
@@ -2327,8 +2355,13 @@ fn valid_availability(
                 ) | (
                     Reason::StaleRevision | Reason::AlreadyApplied,
                     Recovery::ReceiptOnly
-                ) | (Reason::LimitReached, Recovery::ReceiptOnly)
-                    | (Reason::PackageChanged, Recovery::Rebase)
+                ) | (
+                    Reason::LimitReached
+                        | Reason::AskAnswered
+                        | Reason::AskClosed
+                        | Reason::AskDuePassed,
+                    Recovery::ReceiptOnly
+                ) | (Reason::PackageChanged, Recovery::Rebase)
                     | (Reason::DependencyOutage, Recovery::Retry)
                     | (Reason::StaleRevision, Recovery::Rebase)
                     | (
@@ -2343,7 +2376,15 @@ fn valid_availability(
         && (availability.available
             || match (availability.reason, availability.recovery) {
                 (Some(Reason::AlreadyApplied), _) => state == State::Applied,
-                (Some(Reason::ApplicationPending), _) => state == State::Submitted,
+                (
+                    Some(
+                        Reason::ApplicationPending
+                        | Reason::AskAnswered
+                        | Reason::AskClosed
+                        | Reason::AskDuePassed,
+                    ),
+                    _,
+                ) => state == State::Submitted,
                 (Some(Reason::AttachmentRequired | Reason::AttachmentPending), _) => {
                     state == State::Draft
                 }
@@ -2506,6 +2547,15 @@ fn unavailable(availability: &BRegAvailability) -> BaseRegistryClientError {
         }
         (Some(Reason::AttachmentRequired), Some(Recovery::CorrectInput)) => {
             named!("attachment-required", "correct-input")
+        }
+        (Some(Reason::AskAnswered), Some(Recovery::ReceiptOnly)) => {
+            named!("ask-answered", "receipt-only")
+        }
+        (Some(Reason::AskClosed), Some(Recovery::ReceiptOnly)) => {
+            named!("ask-closed", "receipt-only")
+        }
+        (Some(Reason::AskDuePassed), Some(Recovery::ReceiptOnly)) => {
+            named!("ask-due-passed", "receipt-only")
         }
         (Some(Reason::AttachmentPending), Some(Recovery::Refresh)) => {
             named!("attachment-pending", "refresh")
@@ -4167,6 +4217,23 @@ mod tests {
             origin.parse().unwrap(),
         ))
         .unwrap()
+    }
+    #[test]
+    fn asks_are_known_proposal_members_and_terminal_reasons_are_closed() {
+        let mut value = document();
+        value["asks"] = json!([{"id":"00000000-0000-4000-8000-000000000007","text":"Why?","wants":[{"kind":"answer"}],"askedAt":"2026-11-27T00:00:00Z","state":"open","links":{}}]);
+        assert!(BRegProposal::from_slice(&serde_json::to_vec(&value).unwrap()).is_ok());
+        for reason in ["ask-answered", "ask-closed", "ask-due-passed"] {
+            let available: Result<BRegAvailability, _> = serde_json::from_value(
+                json!({"available":false,"observedRevision":2,"reason":reason,"recovery":"receipt-only"}),
+            );
+            assert!(available.is_ok(), "known ask reason {reason}");
+            assert!(valid_availability(
+                &available.unwrap(),
+                2,
+                BRegProposalState::Submitted
+            ));
+        }
     }
     fn document() -> Value {
         json!({"id":ID,"actionId":"correct-address","actionRevision":REVISION,

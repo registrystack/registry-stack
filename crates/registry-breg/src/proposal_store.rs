@@ -501,6 +501,21 @@ pub(crate) async fn block_manual_application_refusal(
     Ok(())
 }
 
+/// Correlated with the Proposal row `p`. Shared by document reads and the
+/// collection's one-page ask observation, without a remote lookup.
+pub(crate) const OPEN_ASK_SQL: &str = "p.state='submitted' AND EXISTS (
+    SELECT 1 FROM registry_internal.registry_proposal_review_asks a
+    JOIN registry_internal.registry_proposal_review_submissions s
+      USING(action_id,proposal_id,submission_version)
+    WHERE a.action_id=p.action_id AND a.proposal_id=p.proposal_id
+      AND a.submission_version=p.submission_version AND a.state='open'
+      AND a.detail_erased_at IS NULL AND NOT s.withdrawn
+      AND s.accepted_binding->>'requestId'=a.review_request_id::text
+      AND s.authority=a.authority
+      AND (a.due_at IS NULL OR a.due_at>statement_timestamp())
+      AND NOT EXISTS (SELECT 1 FROM registry_internal.registry_proposal_review_ask_answers x
+        WHERE x.authority=a.authority AND x.review_request_id=a.review_request_id AND x.ask_id=a.ask_id))";
+
 pub(crate) struct ProposalDocument {
     pub action_id: String,
     pub proposal_id: Uuid,
@@ -509,6 +524,7 @@ pub(crate) struct ProposalDocument {
     pub input: Option<Map<String, Value>>,
     pub input_targets: Vec<(String, Uuid)>,
     pub blocked_reason: Option<String>,
+    pub ask_open: bool,
     /// When the draft was started, as RFC 3339 UTC text.
     pub created_at: String,
     pub header: ProposalWorkflowHeader,
@@ -532,10 +548,22 @@ pub(crate) async fn load_document(
     proposal_id: Uuid,
     lock: DocumentLock,
 ) -> Result<ProposalDocument, MutationError> {
+    load_document_with_ask(transaction, proposal_id, lock, None).await
+}
+
+/// Reuse the page's ask observation while its Proposal revision still matches.
+/// A changed revision is reobserved inside this existing locked document query.
+pub(crate) async fn load_document_with_ask(
+    transaction: &Transaction<'_>,
+    proposal_id: Uuid,
+    lock: DocumentLock,
+    observed: Option<(i64, bool)>,
+) -> Result<ProposalDocument, MutationError> {
     let sql = format!(
         "SELECT action_id, action_revision, action_title, input, blocked_reason, input_targets,
-                to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')
-           FROM registry_internal.registry_proposal_state WHERE proposal_id=$1{}",
+                to_char(created_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"'),
+                CASE WHEN $2::bigint=p.workflow_revision THEN $3::boolean ELSE ({OPEN_ASK_SQL}) END
+           FROM registry_internal.registry_proposal_state p WHERE proposal_id=$1{}",
         match lock {
             DocumentLock::None => "",
             DocumentLock::Share => " FOR SHARE",
@@ -543,7 +571,14 @@ pub(crate) async fn load_document(
         },
     );
     let row = transaction
-        .query_opt(&sql, &[&proposal_id])
+        .query_opt(
+            &sql,
+            &[
+                &proposal_id,
+                &observed.map(|value| value.0),
+                &observed.map(|value| value.1),
+            ],
+        )
         .await
         .map_err(map_store_error)?
         .ok_or(MutationError::PreconditionFailed)?;
@@ -561,6 +596,7 @@ pub(crate) async fn load_document(
         input,
         blocked_reason: row.get(4),
         created_at: row.get(6),
+        ask_open: row.get(7),
         header,
         input_targets: serde_json::from_value(row.get(5))
             .map_err(|_| MutationError::Unavailable)?,

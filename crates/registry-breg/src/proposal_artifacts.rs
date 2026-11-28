@@ -41,7 +41,9 @@ pub(crate) fn append_proposal_openapi(
             for operation in &grant.operations {
                 if matches!(
                     operation,
-                    ProposalOperation::GetApplicationActor | ProposalOperation::Add
+                    ProposalOperation::GetApplicationActor
+                        | ProposalOperation::Add
+                        | ProposalOperation::Answer
                 ) {
                     continue;
                 }
@@ -217,6 +219,27 @@ pub(crate) fn append_proposal_openapi(
                     merge_operation(paths, path.clone(), method, operation)?;
                 }
             }
+            if permitted(ProposalOperation::Answer) {
+                let mut document = operation_document(
+                    "proposals.answer",
+                    "post",
+                    &BTreeSet::from([grant.profile_id.clone()]),
+                    false,
+                    additions_enabled,
+                );
+                document["parameters"].as_array_mut().expect("parameters").push(json!({
+                    "name":"ask_id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}));
+                document["requestBody"] = json!({"required":true,"content":{"application/json":{"schema":{
+                    "type":"object","additionalProperties":false,"properties":{
+                        "text":{"type":"string","minLength":1,"maxLength":2000},
+                        "additions":{"type":"array","maxItems":32,"uniqueItems":true,"items":{"type":"string","format":"uuid"}}}}}}});
+                merge_operation(
+                    paths,
+                    "/v1/proposals/{proposal_id}/asks/{ask_id}/answer".to_owned(),
+                    "post",
+                    document,
+                )?;
+            }
             if let Some(slot) = &proposal.additions {
                 let profiles = BTreeSet::from([grant.profile_id.clone()]);
                 if permitted(ProposalOperation::Add)
@@ -239,9 +262,9 @@ pub(crate) fn append_proposal_openapi(
                     document["responses"]["415"] = json!({"description":"The slot does not accept this media type (`attachment.content-type`)"});
                     merge_operation(paths, path, "post", document)?;
                 }
-                let reviewer = permitted(ProposalOperation::GetReviewContext) && proposal.review_context.as_ref().is_some_and(|context|
+                let reviewer = permitted(ProposalOperation::GetReviewContext) && (matches!(proposal.review, crate::model::CompiledProposalReview::Required { .. }) || proposal.review_context.as_ref().is_some_and(|context|
                     context.fields.iter().any(|(name, field)| grant.readable_context_fields.contains(name)
-                        && matches!(field, crate::contract::ProposalContextValueSource::Additions { slot: mapped } if mapped == &slot.id)));
+                        && matches!(field, crate::contract::ProposalContextValueSource::Additions { slot: mapped } if mapped == &slot.id))));
                 if (permitted(ProposalOperation::Get)
                     && grant.readable_attachments.contains(&slot.id))
                     || reviewer
@@ -334,7 +357,7 @@ pub(crate) fn append_proposal_openapi(
                     )
                 });
             document["requestBody"] = json!({"required":true,"content":{"application/json":{"schema":task_context_request_schema()}}});
-            document["responses"]["200"]["content"]["application/json"]["schema"] = json!({"type":"object","additionalProperties":false,"required":["request","proposal"],"properties":{"request":task_context_request_schema(),"proposal":review_document_schema(true)}});
+            document["responses"]["200"]["content"]["application/json"]["schema"] = json!({"type":"object","additionalProperties":false,"required":["request","proposal"],"properties":{"request":task_context_request_schema(),"proposal":task_review_document_schema()}});
             document["responses"]
                 .as_object_mut()
                 .expect("operation responses")
@@ -722,6 +745,7 @@ fn append_addition_download_path(
     operation["parameters"].as_array_mut().expect("parameters").push(json!({"name":"addition_id","in":"path","required":true,"schema":{"type":"string","format":"uuid"}}));
     operation["parameters"].as_array_mut().expect("parameters").push(json!({"name":"submissionVersion","in":"query","required":true,"schema":{"type":"integer","minimum":1,"maximum":u32::MAX}}));
     for (name, schema) in [
+        ("reviewAskId", json!({"type":"string","format":"uuid"})),
         (
             "reviewContextField",
             json!({"type":"string","pattern":"^[a-z][a-zA-Z0-9]{0,63}$"}),
@@ -736,7 +760,7 @@ fn append_addition_download_path(
         ),
     ] {
         operation["parameters"].as_array_mut().expect("parameters").push(json!({"name":name,"in":"query","required":false,"schema":schema,
-            "description":"All three review-context query members are required together and select get-review-context authority. Omit all three for Get authority."}));
+            "description":"Use exactly one of reviewContextField or reviewAskId together with effectDigest and contextSchemaDigest for get-review-context authority. reviewAskId admits only a file cited by an answer in the current review binding. Omit all four for Get authority."}));
     }
     operation["responses"]["200"]["content"] = json!({"*/*":{"schema":{"type":"string","contentMediaType":"application/octet-stream","maxLength":crate::contract::MAX_ATTACHMENT_BYTES}}});
     merge_operation(
@@ -790,6 +814,15 @@ fn operation_document(
     document
 }
 
+fn task_review_document_schema() -> Value {
+    let mut schema = review_document_schema(true);
+    schema["properties"]["context"]["properties"]
+        .as_object_mut()
+        .expect("context properties")
+        .remove("asks");
+    schema
+}
+
 fn review_document_schema(context: bool) -> Value {
     let mut properties = json!({"id":{"type":"string","format":"uuid"},"actionId":{"type":"string"},"actionRevision":{"type":"string"},"submissionVersion":{"type":"integer","minimum":1},"revision":{"type":"integer","minimum":1},"effectDigest":{"type":"string"},"subject":{"type":"object","additionalProperties":false,"required":["source","subjectType","id","version","digest"],"properties":{"source":{"type":"string"},"subjectType":{"const":"proposal"},"id":{"type":"string","format":"uuid"},"version":{"type":"string"},"digest":{"type":"string"}}},"context":{"type":"object","additionalProperties":false,"required":["reference"],"properties":{"reference":{"type":"string"}}},"authority":{"type":"string"},"policy":{"type":"object","additionalProperties":false,"required":["id","version","digest"],"properties":{"id":{"type":"string"},"version":{"type":"string"},"digest":{"type":"string"}}},"reviewable":{"type":"boolean"},"result":{"type":"object","additionalProperties":false,"required":["state"],"properties":{"state":{"enum":["pending","approved","rejected","changes-requested","answered","cancelled","superseded","expired"]},"resultId":{"type":"string","format":"uuid"},"completedAt":{"type":"string","format":"date-time"},"availableUntil":{"type":"string","format":"date-time"}}}});
     properties["context"]["properties"]["contract"] = json!({
@@ -803,6 +836,7 @@ fn review_document_schema(context: bool) -> Value {
     });
     if context {
         properties["context"]["properties"]["fields"] = json!({"type":"object"});
+        properties["context"]["properties"]["asks"] = proposal_asks_schema(true);
         properties["context"]["required"] = json!(["reference", "contract", "fields"]);
     } else {
         properties["requestId"] = json!({"type":"string","format":"uuid"});

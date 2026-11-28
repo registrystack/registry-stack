@@ -111,6 +111,20 @@ pub struct RequestLocation {
 }
 
 impl RequestLocation {
+    /// Fixed members of the Proposal ask-answer command. No submitted value is echoed.
+    pub fn proposal_answer_text() -> Self {
+        Self {
+            pointer: "/text".into(),
+            scope: Scope::Input,
+        }
+    }
+    pub fn proposal_answer_additions() -> Self {
+        Self {
+            pointer: "/additions".into(),
+            scope: Scope::Input,
+        }
+    }
+
     /// The `data` member of a create body.
     #[must_use]
     pub fn data() -> Self {

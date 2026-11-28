@@ -3,6 +3,8 @@
 //! Revision-fenced durable Proposal transitions over one frozen neutral plan.
 use super::*;
 mod additions;
+mod asks;
+pub(crate) use asks::ProposalReadDisclosure;
 mod context_projection;
 use crate::api::proposals::ProposalMutationInput;
 use crate::lifecycle::{
@@ -252,6 +254,7 @@ pub(crate) fn proposal_operation_name(operation: ProposalAuthorityOperation) -> 
         ProposalAuthorityOperation::Lifecycle(ProposalOperation::List) => "list",
         ProposalAuthorityOperation::Lifecycle(ProposalOperation::Edit) => "edit",
         ProposalAuthorityOperation::Lifecycle(ProposalOperation::Add) => "add",
+        ProposalAuthorityOperation::Lifecycle(ProposalOperation::Answer) => "answer",
         ProposalAuthorityOperation::Lifecycle(ProposalOperation::Submit) => "submit",
         ProposalAuthorityOperation::Lifecycle(ProposalOperation::Revise) => "revise",
         ProposalAuthorityOperation::Lifecycle(ProposalOperation::Cancel) => "cancel",
@@ -307,15 +310,16 @@ fn validate_recovery_actor(
 }
 
 impl MutationTransaction {
-    /// Carry a review result just recorded for one submission into the
+    /// Carry a review result or newly opened ask for one submission into the
     /// Proposal lifecycle, in the transaction that recorded it. A rejection
     /// of the current submission ends the Proposal in `rejected`; a
     /// changes-requested result leaves it submitted and revisable and records
-    /// `review-returned`. Any other result, or a result for a submission that
+    /// `review-returned`. A new open ask bumps the revision and records `asked`.
+    /// Any other result, or an observation for a submission that
     /// is no longer current, changes nothing. The caller holds the Proposal's
     /// state row lock.
     #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn record_review_result(
+    pub(crate) async fn record_review_change(
         &self,
         tx: &Transaction<'_>,
         registry: &CompiledRegistry,
@@ -326,6 +330,7 @@ impl MutationTransaction {
         status: &str,
     ) -> Result<(), MutationError> {
         let transition = match status {
+            "asked" => "asked",
             "rejected" => "rejected",
             "changes-requested" => "review-returned",
             _ => return Ok(()),
@@ -338,14 +343,17 @@ impl MutationTransaction {
             return Ok(());
         }
         let mut workflow = proposal_store::load(tx, action_id, proposal_id, false).await?;
-        if transition == "rejected" {
+        if matches!(transition, "rejected" | "asked") {
             let previous = i64::try_from(workflow.workflow_revision().get())
                 .map_err(|_| MutationError::Unavailable)?;
             let actor = self.proposal_actor(&format!("review-authority:{authority}"))?;
-            workflow = workflow
-                .reject(transition_context(&actor)?)
-                .map_err(workflow_error)?
-                .into_workflow();
+            workflow = if transition == "asked" {
+                workflow.record_ask(transition_context(&actor)?)
+            } else {
+                workflow.reject(transition_context(&actor)?)
+            }
+            .map_err(workflow_error)?
+            .into_workflow();
             proposal_store::save(tx, action_id, proposal_id, previous, &workflow).await?;
         }
         let document =
@@ -535,6 +543,29 @@ impl MutationTransaction {
         field_set_reference: Option<&'static str>,
         correlation: &RequestCorrelation,
     ) -> Result<(), MutationError> {
+        self.finish_proposal_read_audit_detail(
+            authority,
+            method,
+            document,
+            count,
+            ProposalReadDisclosure {
+                field_set_reference,
+                ..Default::default()
+            },
+            correlation,
+        )
+        .await
+    }
+
+    pub(crate) async fn finish_proposal_read_audit_detail(
+        &self,
+        authority: &ProposalAuthority,
+        method: HttpMethod,
+        document: Option<&ProposalDocument>,
+        count: usize,
+        disclosure: ProposalReadDisclosure,
+        correlation: &RequestCorrelation,
+    ) -> Result<(), MutationError> {
         let reference = document
             .map(|document| {
                 record_reference(
@@ -570,10 +601,11 @@ impl MutationTransaction {
                 result_count: Some(count),
                 // Optional review disclosures use fixed markers; their
                 // released values never reach the journal.
-                field_set_reference: field_set_reference.map(str::to_owned),
+                field_set_reference: disclosure.field_set_reference.map(str::to_owned),
                 correlation: correlation.clone(),
             },
         )?;
+        let entry = disclosure.annotate(entry, correlation);
         self.audit
             .append(entry)
             .await
@@ -653,6 +685,13 @@ impl MutationTransaction {
                 proposal_operation_name(input.operation)
             ),
         };
+        if let Some(answer) = &input.answer {
+            route = format!(
+                "/v1/proposals/{}/asks/{}/answer",
+                input.proposal_id.ok_or(MutationError::InvalidRequest)?,
+                answer.ask_id
+            );
+        }
         let method = if let Some(attachment) = &input.attachment {
             route = format!(
                 "/v1/proposals/{}/{}/{}",
@@ -694,7 +733,7 @@ impl MutationTransaction {
                 }
                 contract
             });
-        let digest=Sha256::digest(canonicalize_json(&json!({
+        let mut canonical_request = json!({
             "proposalId":input.proposal_id,"operation":proposal_operation_name(input.operation),
             "ifMatch":input.expected_etag,"input":input.input,"submissionVersion":input.submission_version,
             "effectDigest":input.effect_digest,"reason":input.reason,
@@ -702,7 +741,14 @@ impl MutationTransaction {
             "attachment":input.attachment.as_ref().map(|attachment|json!({"slot":attachment.slot_id,
                 "contentType":attachment.content_type,"sha256":attachment.sha256(),
                 "byteSize":attachment.bytes.as_ref().map(Vec::len)})),
-        })).map_err(|_|MutationError::InvalidRequest)?).into();
+        });
+        if let Some(answer) = &input.answer {
+            canonical_request["answer"] = json!(answer);
+        }
+        let digest = Sha256::digest(
+            canonicalize_json(&canonical_request).map_err(|_| MutationError::InvalidRequest)?,
+        )
+        .into();
         Ok(resolve_action_binding(
             self.audit.profile(),
             &self.idempotency,
@@ -1389,6 +1435,33 @@ impl MutationTransaction {
                     .map_err(|_| MutationError::Unavailable)?;
                 let context = transition_context(&actor)?;
                 let (workflow, transition) = match operation {
+                    ProposalOperation::Answer => {
+                        if workflow.state() != ProposalState::Submitted {
+                            return Err(MutationError::PreconditionFailed);
+                        }
+                        let frozen = workflow
+                            .current_proposal()
+                            .ok_or(MutationError::PreconditionFailed)?;
+                        if !matches!(
+                            review_progress(tx, document, frozen).await?,
+                            ProposalReviewProgress::Pending | ProposalReviewProgress::Retrying
+                        ) {
+                            return Err(MutationError::PreconditionFailed);
+                        }
+                        self.commit_ask_answer(
+                            tx,
+                            document,
+                            input.answer.as_ref().ok_or(MutationError::InvalidRequest)?,
+                            &actor,
+                        )
+                        .await?;
+                        let workflow = workflow
+                            .record_answer(context)
+                            .map_err(workflow_error)?
+                            .into_workflow();
+                        proposal_store::save(tx, &action.id, id, previous, &workflow).await?;
+                        (workflow, "answered")
+                    }
                     ProposalOperation::Add => {
                         ensure_additions_open(tx, document, &workflow).await?;
                         check_addition_count(tx, action, document).await?;
@@ -2060,7 +2133,7 @@ impl MutationTransaction {
                 TerminalAuditOutcome::Refused,
                 0,
                 &[],
-                None,
+                ProposalReadDisclosure::default(),
             )?;
             if tokio::time::Instant::now() >= deadline {
                 return Err(MutationError::Unavailable);
@@ -2173,10 +2246,7 @@ impl MutationTransaction {
             TerminalAuditOutcome::Committed,
             result_count,
             &changed_inputs,
-            value
-                .pointer("/decision/publicReason")
-                .is_some()
-                .then_some(PUBLIC_REASON_REFERENCE),
+            ProposalReadDisclosure::for_value(&value),
         )?;
         if tokio::time::Instant::now() >= deadline {
             return Err(MutationError::Unavailable);
@@ -2260,7 +2330,7 @@ impl MutationTransaction {
         outcome: TerminalAuditOutcome,
         count: u16,
         changed_inputs: &[String],
-        field_set_reference: Option<&'static str>,
+        disclosure: ProposalReadDisclosure,
     ) -> Result<AuditEntry, MutationError> {
         let terminal = TerminalAudit {
             context: input.authority.common.audit_context().cloned(),
@@ -2280,7 +2350,7 @@ impl MutationTransaction {
             record_reference: None,
             record_revision: None,
             result_count: Some(usize::from(count)),
-            field_set_reference: field_set_reference.map(str::to_owned),
+            field_set_reference: disclosure.field_set_reference.map(str::to_owned),
             correlation: input.correlation.clone(),
         };
         let entry = if outcome == TerminalAuditOutcome::Refused {
@@ -2306,6 +2376,10 @@ impl MutationTransaction {
         {
             record["changedInputs"] = json!(changed_inputs);
         }
+        if let Some(answer) = &input.answer {
+            record["reviewAskId"] = json!(answer.ask_id);
+            record["citedAdditionIds"] = json!(answer.body.additions);
+        }
         record["authorityKind"] = json!(if input.authority.is_system() {
             "system"
         } else {
@@ -2314,10 +2388,13 @@ impl MutationTransaction {
         if let Some(revision) = input.authority.system_grant_revision() {
             record["systemApplyGrantRevision"] = json!(revision);
         }
-        Ok(registry_platform_audit::AuditEntry::response(
-            crate::audit::AUDIT_SCHEMA,
-            input.correlation.request_id().to_string(),
-            record,
+        Ok(disclosure.annotate(
+            registry_platform_audit::AuditEntry::response(
+                crate::audit::AUDIT_SCHEMA,
+                input.correlation.request_id().to_string(),
+                record,
+            ),
+            input.correlation,
         ))
     }
 
@@ -3492,6 +3569,21 @@ impl MutationTransaction {
                     )
                     .await?,
                 );
+                if authority.operation
+                    == ProposalAuthorityOperation::Lifecycle(ProposalOperation::GetReviewContext)
+                    && matches!(
+                        frozen.review_requirement(),
+                        CompiledProposalReview::Required { .. }
+                    )
+                {
+                    let schema = value["context"]["contract"]["schemaDigest"]
+                        .as_str()
+                        .ok_or(MutationError::Unavailable)?
+                        .to_owned();
+                    value["context"]["asks"] = self
+                        .intrinsic_asks(tx, registry, document, authority, frozen, &schema)
+                        .await?;
+                }
             }
             _ => return Err(MutationError::PreconditionFailed),
         }
@@ -3584,6 +3676,20 @@ impl MutationTransaction {
             .then_some(authority),
             None => None,
         };
+        if get_authority.is_some() {
+            self.append_public_asks(
+                tx,
+                registry,
+                document,
+                current,
+                claims,
+                workflow
+                    .as_ref()
+                    .and_then(|workflow| workflow.current_proposal()),
+                &mut value,
+            )
+            .await?;
+        }
         let is_read = matches!(
             current.operation,
             ProposalAuthorityOperation::Lifecycle(ProposalOperation::Get | ProposalOperation::List)
@@ -3791,7 +3897,7 @@ impl MutationTransaction {
                     document.header.state != "draft" && !document.header.current_proposal_erased
                 }
                 ProposalOperation::GetApplicationActor => false,
-                ProposalOperation::Add => false,
+                ProposalOperation::Add | ProposalOperation::Answer => false,
                 ProposalOperation::List => false,
             };
             if !available
@@ -4377,10 +4483,10 @@ async fn current_turn_context(
     } else {
         (ProposalReviewProgress::NotRequired, Value::Null)
     };
-    Ok((
-        state,
-        proposal_turn_context(document.blocked_reason.is_some(), review, &application),
-    ))
+    let mut context =
+        proposal_turn_context(document.blocked_reason.is_some(), review, &application);
+    context.ask_open = document.ask_open;
+    Ok((state, context))
 }
 
 /// Whose move a Proposal waits on: the party that drives it, an official
@@ -4448,12 +4554,9 @@ pub(crate) fn link_readable(outcome: Result<(), MutationError>) -> Result<bool, 
 
 /// The audit marker a replay records when the stored response it serves
 /// again holds a decision's public reason.
-fn replayed_public_reason(body: &[u8]) -> Result<Option<&'static str>, MutationError> {
+fn replayed_public_reason(body: &[u8]) -> Result<ProposalReadDisclosure, MutationError> {
     let response: Value = serde_json::from_slice(body).map_err(|_| MutationError::Unavailable)?;
-    Ok(response
-        .pointer("/decision/publicReason")
-        .is_some()
-        .then_some(PUBLIC_REASON_REFERENCE))
+    Ok(ProposalReadDisclosure::for_value(&response))
 }
 
 /// Why the review authority refused one submission's hand-off for good, as

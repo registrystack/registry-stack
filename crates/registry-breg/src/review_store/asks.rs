@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 //! Source-owned ask detail and answer delivery. Remote calls never hold a transaction.
 use super::*;
+mod delivery;
+mod feed;
+pub(super) use delivery::deliver_one;
+pub(super) use feed::consume_feed;
 
 pub(super) async fn install(client: &impl GenericClient) -> Result<(), MutationError> {
     client.batch_execute(
@@ -91,18 +95,23 @@ pub(super) async fn install(client: &impl GenericClient) -> Result<(), MutationE
     ).await.map_err(|_| MutationError::Unavailable)
 }
 
-#[cfg(test)]
-#[derive(serde::Deserialize)]
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
-struct AnswerBody {
-    text: Option<String>,
+pub(crate) struct AnswerBody {
+    pub(crate) text: Option<String>,
     #[serde(default)]
-    additions: Vec<Uuid>,
+    pub(crate) additions: Vec<Uuid>,
 }
 
-#[cfg(test)]
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct AnswerMutation {
+    pub(crate) ask_id: Uuid,
+    pub(crate) body: AnswerBody,
+}
+
 impl AnswerBody {
-    fn validate(
+    pub(crate) fn validate(
         &self,
         wants: &[registry_review_client::ReviewAskWant],
     ) -> Result<(), &'static str> {
@@ -135,17 +144,27 @@ impl AnswerBody {
     }
 }
 
-#[cfg(test)]
-fn answer_time(now: DateTime<Utc>, asked: DateTime<Utc>) -> Option<DateTime<Utc>> {
+pub(crate) fn answer_time(now: DateTime<Utc>, asked: DateTime<Utc>) -> Option<DateTime<Utc>> {
     let asked = asked.timestamp_micros().checked_add(i64::from(
         !asked.timestamp_subsec_nanos().is_multiple_of(1000),
     ))?;
     DateTime::from_timestamp_micros(now.timestamp_micros().max(asked))
 }
 
-#[cfg(test)]
 fn retryable_status(status: u16) -> bool {
     status == 429 || status >= 500
+}
+
+/// Lifecycle commands hold the Proposal parent lock before closing this version.
+pub(super) async fn close_submission(
+    client: &impl GenericClient,
+    action: &str,
+    proposal: Uuid,
+    version: i64,
+) -> Result<(), MutationError> {
+    client.execute("UPDATE registry_internal.registry_proposal_review_asks SET state='closed',closed_at=GREATEST(transaction_timestamp(),asked_at) WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3 AND state='open'",&[&action,&proposal,&version]).await.map_err(|_|MutationError::Unavailable)?;
+    client.execute("UPDATE registry_internal.registry_proposal_review_ask_answers SET delivery_state='superseded',claim_token=NULL,lease_until=NULL,last_error_code=NULL WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3 AND delivery_state='pending'",&[&action,&proposal,&version]).await.map_err(|_|MutationError::Unavailable)?;
+    Ok(())
 }
 
 #[cfg(test)]

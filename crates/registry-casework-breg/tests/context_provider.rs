@@ -851,3 +851,41 @@ async fn batch_refuses_substitution_and_preserves_per_item_concealment() {
         }
     }
 }
+
+#[tokio::test]
+async fn intrinsic_answers_are_validated_and_transported_beside_authored_fields_under_the_human_bearer(
+) {
+    let server = MockServer::start().await;
+    let export = export();
+    let identity = identity(&export);
+    let provider = provider(&server, export.clone());
+    mocks(&server, "reviewer", "human-bearer", true, DIGEST).await;
+    let ask = uuid::Uuid::from_u128(7);
+    let file = uuid::Uuid::from_u128(8);
+    let download=format!("/v1/proposals/{ID}/additions/{file}?submissionVersion=1&reviewAskId={ask}&effectDigest={}&contextSchemaDigest={}",DIGEST.replace(':',"%3A"),export.contract.schema_digest.as_str().replace(':',"%3A"));
+    let answer = json!({"text":"source answer stays live","documents":[{"id":file,"sha256":"b".repeat(64),"contentType":"text/plain","byteSize":5,"verificationStatus":"approved","download":{"method":"GET","operation":"get-review-context","accessProfile":"reviewer","path":download}}],"answeredAt":"2026-11-27T01:00:00Z"});
+    Mock::given(method("GET")).and(path(format!("/v1/proposals/{ID}/review-context"))).and(query_param("accessProfile","reviewer")).and(header("authorization","Bearer human-bearer")).respond_with(response(json!({"id":ID,"actionId":"correct-address","actionRevision":DIGEST,"submissionVersion":1,"revision":2,"effectDigest":DIGEST,"authority":"provider","policy":{"id":"check","version":"1","digest":DIGEST},"subject":{"source":"source","subjectType":"proposal","id":ID,"version":"1","digest":DIGEST},"context":{"reference":"native-proposal","contract":export.contract,"fields":{"reference":"REF-42"},"asks":[{"id":ask,"text":"Why?","wants":[{"kind":"answer"}],"askedAt":"2026-11-27T00:00:00Z","state":"answered","answer":answer}]},"reviewable":true}))).with_priority(1).mount(&server).await;
+    let display = provider
+        .human_display(HumanDisplayRequest {
+            identity: &identity,
+            source_profile_id: "reviewer",
+            credential: EphemeralCredential::new("human-bearer"),
+        })
+        .await
+        .expect("closed authored schema does not consume intrinsic answers");
+    assert_eq!(
+        display.fields,
+        std::collections::BTreeMap::from([("reference".into(), json!("REF-42"))])
+    );
+    assert_eq!(display.answers.len(), 1);
+    assert_eq!(
+        serde_json::to_value(&display.answers[&ask]).unwrap(),
+        answer
+    );
+    assert!(server
+        .received_requests()
+        .await
+        .unwrap()
+        .iter()
+        .all(|request| request.headers.get("authorization").unwrap() == "Bearer human-bearer"));
+}

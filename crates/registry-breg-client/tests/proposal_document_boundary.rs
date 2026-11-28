@@ -1968,3 +1968,98 @@ async fn submission_read_carries_only_an_allowlisted_handoff_refusal() {
     }
     assert!(accepted.is_empty(), "accepted: {accepted:?}");
 }
+
+#[tokio::test]
+async fn answer_commands_bind_the_selected_ask_and_validate_before_tokens_or_io() {
+    use registry_breg_client::BRegProposalAnswerRequest;
+    let fixture = Fixture::start().await;
+    let ask = "00000000-0000-4000-8000-000000000007";
+    let mut prior = proposal("submitted");
+    prior["asks"] = json!([{"id":ask,"text":"Why?","wants":[{"kind":"answer"}],"askedAt":"2026-11-27T00:00:00Z","state":"open","links":{
+        "answer":{"method":"POST","path":format!("/v1/proposals/{ID}/asks/{ask}/answer"),"operation":"answer","accessProfile":"writer","ifMatch":"\"condition\"","availability":{"available":true,"observedRevision":2}}}}]);
+    let promoted = fixture.proposal(prior.clone()).await;
+    let key = BRegIdempotencyKey::parse("answer-once").unwrap();
+    let tokens = fixture.token.0.load(Ordering::SeqCst);
+    let requests = fixture.requests.load(Ordering::SeqCst);
+    for body in [
+        json!({}),
+        json!({"text":" "}),
+        json!({"text":"explanation","additions":["not-a-uuid"]}),
+    ] {
+        let body: BRegProposalAnswerRequest = serde_json::from_value(body).unwrap();
+        assert_eq!(
+            fixture
+                .client
+                .answer_proposal_ask(&promoted, ask, &body, &key)
+                .await
+                .unwrap_err()
+                .kind(),
+            "invalid-request"
+        );
+    }
+    assert_eq!(fixture.token.0.load(Ordering::SeqCst), tokens);
+    assert_eq!(fixture.requests.load(Ordering::SeqCst), requests);
+    let body = BRegProposalAnswerRequest {
+        text: Some("explanation".into()),
+        additions: vec![],
+    };
+    let mut receipt = prior;
+    receipt["revision"] = json!(3);
+    receipt["asks"][0]["state"] = json!("answered");
+    receipt["asks"][0]["answer"] =
+        json!({"text":"explanation","additions":[],"answeredAt":"2026-11-27T01:00:00Z"});
+    receipt["asks"][0]["links"]["answer"]["availability"] = json!({"available":false,"observedRevision":3,"reason":"ask-answered","recovery":"receipt-only"});
+    fixture.answer(receipt.clone());
+    assert_eq!(
+        fixture
+            .client
+            .answer_proposal_ask(&promoted, ask, &body, &key)
+            .await
+            .unwrap()
+            .value
+            .asks()[0]
+            .answer
+            .as_ref()
+            .unwrap()
+            .text
+            .as_deref(),
+        Some("explanation")
+    );
+    for mutation in 0..6 {
+        let mut invalid = receipt.clone();
+        match mutation {
+            0 => invalid["submissionVersion"] = json!(2),
+            1 => invalid["asks"][0]["answer"]["text"] = json!("another answer"),
+            2 => {
+                invalid["asks"][0]["links"]["answer"]["path"] =
+                    json!("https://other.example.test/answer")
+            }
+            3 => invalid["asks"][0]["links"]["answer"]["accessProfile"] = json!("other"),
+            4 => {
+                invalid["revision"] = json!(4);
+                invalid["asks"][0]["links"]["answer"]["availability"]["observedRevision"] =
+                    json!(4);
+            }
+            _ => invalid["effectDigest"] = json!(format!("sha256:{}", "b".repeat(64))),
+        }
+        fixture.answer(invalid);
+        assert_eq!(
+            fixture
+                .client
+                .answer_proposal_ask(&promoted, ask, &body, &key)
+                .await
+                .unwrap_err()
+                .kind(),
+            "protocol",
+            "mutation {mutation}"
+        );
+    }
+    let inert = BRegProposal::from_slice(&serde_json::to_vec(&receipt).unwrap()).unwrap();
+    let tokens = fixture.token.0.load(Ordering::SeqCst);
+    assert!(fixture
+        .client
+        .answer_proposal_ask(&inert, ask, &body, &key)
+        .await
+        .is_err());
+    assert_eq!(fixture.token.0.load(Ordering::SeqCst), tokens);
+}

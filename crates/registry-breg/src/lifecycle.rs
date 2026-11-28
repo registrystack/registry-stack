@@ -124,6 +124,9 @@ proposal_wire_values!(ProposalAvailabilityReason {
     ApplicationPending => "application-pending",
     AttachmentRequired => "attachment-required",
     AttachmentPending => "attachment-pending",
+    AskAnswered => "ask-answered",
+    AskClosed => "ask-closed",
+    AskDuePassed => "ask-due-passed",
 });
 
 proposal_wire_values!(ProposalLinkRecovery {
@@ -154,6 +157,9 @@ pub enum ProposalLinkRefusal {
     ApplicationPending,
     AttachmentRequired,
     AttachmentPending,
+    AskAnswered,
+    AskClosed,
+    AskDuePassed,
 }
 
 impl ProposalLinkRefusal {
@@ -174,6 +180,9 @@ impl ProposalLinkRefusal {
         Self::ApplicationPending,
         Self::AttachmentRequired,
         Self::AttachmentPending,
+        Self::AskAnswered,
+        Self::AskClosed,
+        Self::AskDuePassed,
     ];
 
     pub const fn pair(self) -> (ProposalAvailabilityReason, ProposalLinkRecovery) {
@@ -196,6 +205,9 @@ impl ProposalLinkRefusal {
             Self::ApplicationPending => (Reason::ApplicationPending, Recovery::Refresh),
             Self::AttachmentRequired => (Reason::AttachmentRequired, Recovery::CorrectInput),
             Self::AttachmentPending => (Reason::AttachmentPending, Recovery::Refresh),
+            Self::AskAnswered => (Reason::AskAnswered, Recovery::ReceiptOnly),
+            Self::AskClosed => (Reason::AskClosed, Recovery::ReceiptOnly),
+            Self::AskDuePassed => (Reason::AskDuePassed, Recovery::ReceiptOnly),
         }
     }
 }

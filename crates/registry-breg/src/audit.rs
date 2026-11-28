@@ -649,6 +649,7 @@ fn proposal_pre_io_record(
             operation,
             "start"
                 | "add"
+                | "answer"
                 | "edit"
                 | "submit"
                 | "revise"

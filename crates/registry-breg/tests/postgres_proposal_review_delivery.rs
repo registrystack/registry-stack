@@ -138,6 +138,7 @@ enum ResultReply {
 }
 
 struct AuthorityState {
+    asks: Mutex<asks::FeedState>,
     gates: [Gate; 2],
     gated: bool,
     first_succeeds: bool,
@@ -169,6 +170,7 @@ impl Authority {
         result_replies: [ResultReply; 2],
     ) -> Self {
         let state = Arc::new(AuthorityState {
+            asks: Mutex::new(Default::default()),
             gates: [Gate::default(), Gate::default()],
             gated,
             first_succeeds,
@@ -184,6 +186,12 @@ impl Authority {
             .route("/v1/review-requests/{id}/cancel", post(cancel_review))
             .route("/v1/review-requests/{id}/result", get(lookup_result))
             .route("/v1/review-results", get(empty_feed))
+            .route("/v1/review-asks", get(asks::feed))
+            .route(
+                "/v1/review-requests/{request}/asks/{ask}/answer",
+                post(asks::answer_remote),
+            )
+            .route("/v1/review-requests/{request}/asks/{ask}", get(asks::read))
             .with_state(state.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}/", listener.local_addr().unwrap());

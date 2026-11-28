@@ -693,6 +693,7 @@ class BaseRegistryClient:
     ) -> dict[str, Any]: ...
     def execute_recovered_proposal_start(self, binding: BRegActionBinding, recovered: BRegRecoveredAction) -> BRegProposal: ...
     def download_proposal_attachment(self, proposal: BRegProposal, slot: str) -> dict[str, Any]: ...
+    def answer_proposal_ask(self, proposal: BRegProposal, ask_id: str, body: BRegProposalAnswerRequest, key: str) -> BRegProposal: ...
     def download_proposal_addition(self, proposal: BRegProposal, addition: str) -> dict[str, Any]: ...
     def add_proposal_addition(self, proposal: BRegProposal, slot: str, content_type: str, bytes: bytes, key: str) -> BRegProposal: ...
     def read_proposal_review_status(self, proposal: BRegProposal) -> dict[str, Any]: ...
@@ -799,3 +800,47 @@ class BRegPreparedProposal:
     @staticmethod
     def from_bytes(value: bytes) -> BRegPreparedProposal: ...
     def to_bytes(self) -> bytes: ...
+
+BRegProposalAskState = Literal['open', 'answered', 'expired', 'closed']
+class BRegProposalAskWant(TypedDict):
+    kind: Literal['answer', 'document']
+class BRegProposalAnswerRequest(TypedDict):
+    text: NotRequired[str]
+    additions: NotRequired[list[str]]
+class BRegProposalAskAnswer(TypedDict):
+    text: NotRequired[str]
+    additions: list[str]
+    answeredAt: str
+class BRegProposalAsk(TypedDict):
+    id: str
+    text: str
+    wants: list[BRegProposalAskWant]
+    askedAt: str
+    dueAt: NotRequired[str]
+    state: BRegProposalAskState
+    answer: NotRequired[BRegProposalAskAnswer]
+    links: dict[str, JsonValue]
+class BRegProposalReviewAnswerDownload(TypedDict):
+    method: Literal['GET']
+    operation: Literal['get-review-context']
+    accessProfile: str
+    path: str
+class BRegProposalReviewAnswerDocument(TypedDict):
+    id: str
+    sha256: str
+    contentType: str
+    byteSize: int
+    verificationStatus: Literal['notRequired', 'pending', 'approved', 'rejected']
+    download: NotRequired[BRegProposalReviewAnswerDownload]
+class BRegProposalReviewAnswer(TypedDict):
+    text: NotRequired[str]
+    documents: list[BRegProposalReviewAnswerDocument]
+    answeredAt: str
+class BRegProposalReviewAsk(TypedDict):
+    id: str
+    text: str
+    wants: list[BRegProposalAskWant]
+    askedAt: str
+    dueAt: NotRequired[str]
+    state: BRegProposalAskState
+    answer: NotRequired[BRegProposalReviewAnswer]

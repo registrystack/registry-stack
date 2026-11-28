@@ -3,6 +3,7 @@
 //! Pool orchestration keeps authenticated external review observations outside
 //! PostgreSQL transactions and connections. The coordinator owns effects.
 use super::*;
+use crate::api::proposals::ReviewDocumentSource;
 use crate::api::proposals::{ProposalListQuery, ProposalMutationInput};
 use crate::api::VerifiedRequestClaims;
 use crate::model::ProposalOperation;
@@ -29,7 +30,7 @@ struct ProposalReviewSnapshot {
 // are the caller's optional `action` and `state` filters: they only narrow rows
 // the collection authority already lists, so applying them here spends the scan
 // budget on candidates that can match without revealing anything further.
-const PROPOSAL_LIST_CANDIDATES: &str = "SELECT p.proposal_id,p.action_id FROM registry_internal.registry_proposal_state p
+const PROPOSAL_LIST_CANDIDATES: &str = "SELECT p.proposal_id,p.action_id,p.workflow_revision,({open_ask}) AS ask_open FROM registry_internal.registry_proposal_state p
                 WHERE p.action_id=ANY($1) AND ($2::uuid IS NULL OR p.proposal_id>$2)
                   AND ($5::text IS NULL OR p.action_id=$5)
                   AND ($6::text IS NULL OR p.state=$6)
@@ -50,6 +51,10 @@ const PROPOSAL_LIST_CANDIDATES: &str = "SELECT p.proposal_id,p.action_id FROM re
                   )))
                 ORDER BY p.proposal_id LIMIT 9";
 
+fn proposal_list_candidates_sql() -> String {
+    PROPOSAL_LIST_CANDIDATES.replace("{open_ask}", proposal_store::OPEN_ASK_SQL)
+}
+
 impl PostgresRecordMutationService {
     #[cfg(feature = "postgres-test")]
     pub async fn pending_manual_list_plan_for_test(
@@ -63,7 +68,10 @@ impl PostgresRecordMutationService {
             .map_err(|_| MutationError::Unavailable)?;
         let row = client
             .query_one(
-                &format!("EXPLAIN (ANALYZE, FORMAT JSON) {PROPOSAL_LIST_CANDIDATES}"),
+                &format!(
+                    "EXPLAIN (ANALYZE, FORMAT JSON) {}",
+                    proposal_list_candidates_sql()
+                ),
                 &[
                     &actions,
                     &Option::<Uuid>::None,
@@ -298,6 +306,7 @@ impl PostgresRecordMutationService {
                     }),
                     rebase_start_authority: None,
                     attachment: None,
+                    answer: None,
                     correlation: &correlation,
                     human_identity: None,
                     claims: None,
@@ -421,18 +430,21 @@ impl PostgresRecordMutationService {
                 else {
                     return Err(MutationError::PreconditionFailed);
                 };
-                let mapped = match proposal
-                    .review_context
-                    .as_ref()
-                    .and_then(|context| context.fields.get(review.field))
-                {
-                    Some(crate::contract::ProposalContextValueSource::Document {
-                        slot: mapped,
-                    }) => addition.is_none() && mapped == slot,
-                    Some(crate::contract::ProposalContextValueSource::Additions {
-                        slot: mapped,
-                    }) => addition.is_some() && mapped == slot,
-                    _ => false,
+                let mapped = match review.source {
+                    ReviewDocumentSource::Ask(_) => addition.is_some(),
+                    ReviewDocumentSource::Field(field) => match proposal
+                        .review_context
+                        .as_ref()
+                        .and_then(|context| context.fields.get(field))
+                    {
+                        Some(crate::contract::ProposalContextValueSource::Document {
+                            slot: mapped,
+                        }) => addition.is_none() && mapped == slot,
+                        Some(crate::contract::ProposalContextValueSource::Additions {
+                            slot: mapped,
+                        }) => addition.is_some() && mapped == slot,
+                        _ => false,
+                    },
                 };
                 if !mapped {
                     return Err(MutationError::PreconditionFailed);
@@ -451,19 +463,40 @@ impl PostgresRecordMutationService {
                         None,
                     )
                     .await?;
-                let disclosed = if let Some(addition) = addition {
-                    let prefix = format!("/v1/proposals/{id}/additions/{addition}?");
-                    context["context"]["fields"][review.field]
-                        .as_array()
-                        .is_some_and(|items| {
-                            items.iter().any(|item| {
-                                item["download"]["path"]
-                                    .as_str()
-                                    .is_some_and(|path| path.starts_with(&prefix))
-                            })
+                let disclosed = match review.source {
+                    ReviewDocumentSource::Field(field) => {
+                        if let Some(addition) = addition {
+                            let prefix = format!("/v1/proposals/{id}/additions/{addition}?");
+                            context["context"]["fields"][field]
+                                .as_array()
+                                .is_some_and(|items| {
+                                    items.iter().any(|item| {
+                                        item["download"]["path"]
+                                            .as_str()
+                                            .is_some_and(|path| path.starts_with(&prefix))
+                                    })
+                                })
+                        } else {
+                            !context["context"]["fields"][field].is_null()
+                        }
+                    }
+                    ReviewDocumentSource::Ask(ask) => addition.is_some_and(|addition| {
+                        let prefix = format!("/v1/proposals/{id}/additions/{addition}?");
+                        context["context"]["asks"].as_array().is_some_and(|asks| {
+                            asks.iter()
+                                .filter(|item| item["id"] == ask.to_string())
+                                .any(|ask| {
+                                    ask["answer"]["documents"].as_array().is_some_and(|files| {
+                                        files.iter().any(|file| {
+                                            file["id"] == addition.to_string()
+                                                && file["download"]["path"]
+                                                    .as_str()
+                                                    .is_some_and(|path| path.starts_with(&prefix))
+                                        })
+                                    })
+                                })
                         })
-                } else {
-                    !context["context"]["fields"][review.field].is_null()
+                    }),
                 };
                 if context["effectDigest"].as_str() != Some(review.effect_digest)
                     || context["context"]["contract"]["schemaDigest"].as_str()
@@ -527,12 +560,18 @@ impl PostgresRecordMutationService {
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
             self.coordinator
-                .finish_proposal_read_audit(
+                .finish_proposal_read_audit_detail(
                     authority,
                     crate::model::HttpMethod::Get,
                     Some(&document),
                     1,
-                    None,
+                    crate::mutation::ProposalReadDisclosure {
+                        ask_download: match (review.map(|review| review.source), addition) {
+                            (Some(ReviewDocumentSource::Ask(ask)), Some(file)) => Some((ask, file)),
+                            _ => None,
+                        },
+                        ..Default::default()
+                    },
                     correlation,
                 )
                 .await?;
@@ -905,15 +944,12 @@ impl PostgresRecordMutationService {
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
             self.coordinator
-                .finish_proposal_read_audit(
+                .finish_proposal_read_audit_detail(
                     authority,
                     crate::model::HttpMethod::Get,
                     Some(&document),
                     1,
-                    value
-                        .pointer("/decision/publicReason")
-                        .is_some()
-                        .then_some(crate::mutation::PUBLIC_REASON_REFERENCE),
+                    crate::mutation::ProposalReadDisclosure::for_value(&value),
                     correlation,
                 )
                 .await?;
@@ -1069,12 +1105,12 @@ impl PostgresRecordMutationService {
                 .await?;
             let Some(expected) = first.progress_binding else {
                 self.coordinator
-                    .finish_proposal_read_audit(
+                    .finish_proposal_read_audit_detail(
                         authority,
                         crate::model::HttpMethod::Get,
                         Some(&first.document),
                         1,
-                        None,
+                        crate::mutation::ProposalReadDisclosure::for_value(&first.value),
                         correlation,
                     )
                     .await?;
@@ -1487,7 +1523,7 @@ impl PostgresRecordMutationService {
             // filter. Row/ownership concealment precedes filtering and counts.
             let candidates = client
                 .query(
-                    PROPOSAL_LIST_CANDIDATES,
+                    &proposal_list_candidates_sql(),
                     &[
                         &action_ids,
                         &after,
@@ -1522,10 +1558,11 @@ impl PostgresRecordMutationService {
                 )
                 .await
                 .map_err(|_| MutationError::Unavailable)?;
-                let document = proposal_store::load_document(
+                let document = proposal_store::load_document_with_ask(
                     guarded.transaction(),
                     id,
                     proposal_store::DocumentLock::Share,
+                    Some((candidate.get(2), candidate.get(3))),
                 )
                 .await?;
                 #[cfg(feature = "postgres-test")]
@@ -1668,7 +1705,7 @@ impl PostgresRecordMutationService {
         }
         for authority in authorities {
             self.coordinator
-                .finish_proposal_read_audit(
+                .finish_proposal_read_audit_detail(
                     authority,
                     crate::model::HttpMethod::Get,
                     None,
@@ -1680,15 +1717,10 @@ impl PostgresRecordMutationService {
                             })
                             .count()
                     }),
-                    value["items"]
-                        .as_array()
-                        .is_some_and(|items| {
-                            items.iter().any(|item| {
-                                item["actionId"].as_str() == Some(authority.common.action_id())
-                                    && item.pointer("/decision/publicReason").is_some()
-                            })
-                        })
-                        .then_some(crate::mutation::PUBLIC_REASON_REFERENCE),
+                    crate::mutation::ProposalReadDisclosure::for_list(
+                        &value,
+                        authority.common.action_id(),
+                    ),
                     correlation,
                 )
                 .await?;

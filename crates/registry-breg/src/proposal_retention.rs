@@ -142,6 +142,9 @@ pub struct ProposalDetailErasure {
     pub idempotency_results: u64,
     pub draft_inputs: u64,
     pub attachment_references: u64,
+    pub review_asks: u64,
+    pub review_answers: u64,
+    pub review_answer_files: u64,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -1315,7 +1318,10 @@ async fn count_request_detail_erasure(
                     ))),
                 (SELECT count(*) FROM registry_internal.registry_proposal_review_results
                   WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3
-                    AND result <> '{}'::jsonb)",
+                    AND result <> '{}'::jsonb),
+                (SELECT count(*) FROM registry_internal.registry_proposal_review_asks WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3 AND text IS NOT NULL),
+                (SELECT count(*) FROM registry_internal.registry_proposal_review_ask_answers WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3 AND detail_erased_at IS NULL),
+                (SELECT count(*) FROM registry_internal.registry_proposal_review_ask_files WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3)",
             &[
                 &scope.action_id,
                 &scope.proposal_id,
@@ -1334,6 +1340,9 @@ async fn count_request_detail_erasure(
         review_submission_requests: count_to_u64(row.get(5))?,
         review_accepted_bindings: count_to_u64(row.get(6))?,
         review_result_payloads: count_to_u64(row.get(7))?,
+        review_asks: count_to_u64(row.get(8))?,
+        review_answers: count_to_u64(row.get(9))?,
+        review_answer_files: count_to_u64(row.get(10))?,
     })
 }
 
@@ -1358,6 +1367,11 @@ async fn erase_proposal_detail_in_transaction(
         )
         .await
         .map_err(map_retention_error)?;
+    // Remove citation references with their source-owned answer detail before
+    // attachment erasure considers whether any bytes are still referenced.
+    let review_answer_files=transaction.execute("DELETE FROM registry_internal.registry_proposal_review_ask_files WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3",&[&scope.action_id,&scope.proposal_id,&scope.submission_version]).await.map_err(map_retention_error)?;
+    let review_answers=transaction.execute("UPDATE registry_internal.registry_proposal_review_ask_answers SET text=NULL,answered_by=NULL,detail_erased_at=transaction_timestamp(),claim_token=NULL,lease_until=NULL,delivery_state=CASE WHEN delivery_state='pending' THEN 'superseded' ELSE delivery_state END WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3 AND detail_erased_at IS NULL",&[&scope.action_id,&scope.proposal_id,&scope.submission_version]).await.map_err(map_retention_error)?;
+    let review_asks=transaction.execute("UPDATE registry_internal.registry_proposal_review_asks SET text=NULL,detail_erased_at=transaction_timestamp() WHERE action_id=$1 AND proposal_id=$2 AND submission_version=$3 AND text IS NOT NULL",&[&scope.action_id,&scope.proposal_id,&scope.submission_version]).await.map_err(map_retention_error)?;
     let proposal_snapshots = transaction
         .execute(
             "UPDATE registry_internal.registry_proposal_submissions
@@ -1532,6 +1546,9 @@ async fn erase_proposal_detail_in_transaction(
         idempotency_results,
         draft_inputs,
         attachment_references,
+        review_asks,
+        review_answers,
+        review_answer_files,
     };
     if erasure != plan.erasure {
         return Err(ProposalRetentionError::Unavailable);
@@ -1617,6 +1634,9 @@ fn retention_terminal_entry(
         .and_then(|count| count.checked_add(erasure.idempotency_results))
         .and_then(|count| count.checked_add(erasure.draft_inputs))
         .and_then(|count| count.checked_add(erasure.attachment_references))
+        .and_then(|count| count.checked_add(erasure.review_asks))
+        .and_then(|count| count.checked_add(erasure.review_answers))
+        .and_then(|count| count.checked_add(erasure.review_answer_files))
         .ok_or(ProposalRetentionError::Unavailable)?;
     terminal_entry(
         profile,
