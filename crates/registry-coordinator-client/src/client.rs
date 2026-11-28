@@ -13,7 +13,7 @@ use reqwest::{
     header::{HeaderMap, ACCEPT, AUTHORIZATION, CONTENT_TYPE},
     Method, RequestBuilder, Response, StatusCode,
 };
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use serde_json::json;
 
 use crate::{
@@ -31,6 +31,24 @@ const PROBLEM_MEDIA_TYPE: &str = "application/problem+json";
 /// The problem type namespace the runtime pins: a problem's `type` is its
 /// code under this base, with each `.` read as a path separator.
 const PROBLEM_TYPE_BASE: &str = "https://id.registrystack.org/problems/registry-coordinator/";
+
+#[derive(Deserialize)]
+struct ProblemWire {
+    #[serde(flatten)]
+    document: ProblemDocument,
+    #[serde(
+        default,
+        rename = "pointer",
+        deserialize_with = "deserialize_problem_pointer"
+    )]
+    _pointer: Option<String>,
+}
+
+fn deserialize_problem_pointer<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    String::deserialize(deserializer).map(Some)
+}
 
 /// A complete authenticated answer. This product does not define a trace field.
 pub struct CoordinatorComplete<T> {
@@ -455,11 +473,10 @@ impl CoordinatorClient {
                 }
             }
         };
-        if parse_json_strict(&bytes).is_err() {
+        let Ok(value) = parse_json_strict(&bytes) else {
             return protocol(status.as_u16(), Failure::Problem);
-        }
-        let Ok(document) = ProblemDocument::parse_exact(&bytes, MAXIMUM_PROBLEM_BYTES as usize)
-        else {
+        };
+        let Ok(ProblemWire { document, .. }) = serde_json::from_value(value) else {
             return protocol(status.as_u16(), Failure::Problem);
         };
         if document.status != status.as_u16()

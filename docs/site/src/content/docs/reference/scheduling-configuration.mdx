@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: 2026-11-27
+last_reviewed: 2026-11-28
 doc_type: reference
 locale: en
 standards_referenced:
@@ -52,7 +52,6 @@ that every value is accepted.
 
 {/* Generated from src/data/generated/scheduling-configuration.json by
     docs/site/scripts/generate-scheduling-configuration.mjs. Run npm run generate from docs/site. */}
-
 
 ## Deployment posture
 
@@ -334,7 +333,8 @@ Every commitment takes its authority from a task grant, described in
 access-token profile: algorithms, token type, audience, scope and actor separation, issuer network
 policy, lifetime, and safe diagnostics.
 
-{/* Evidence: crates/registry-scheduling/src/config.rs OidcConfig, default_scope_claim,
+{/* Evidence: crates/registry-platform-config/src/caller_issuers.rs default_scope_claim;
+    crates/registry-scheduling/src/config.rs OidcConfig,
     default_reads_scope, default_explain_scope,
     a_removed_jwks_uri_names_its_replacement, a_jwks_source_tagged_by_kind_names_type,
     every_deployment_must_name_the_clients_it_admits,

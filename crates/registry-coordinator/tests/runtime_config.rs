@@ -775,7 +775,7 @@ fn binding_identity_never_resolves_secrets_and_pins_audience_and_task_authority(
 }
 
 #[test]
-fn initialized_project_is_four_offline_checkable_files_and_a_gitignore_and_never_overwrites() {
+fn init_writes_seven_entries_for_an_offline_checkable_project_and_never_overwrites() {
     let root = tempfile::tempdir().unwrap();
     let path = root.path().join("flow");
     project::init(&path, None).unwrap();
@@ -788,6 +788,8 @@ fn initialized_project_is_four_offline_checkable_files_and_a_gitignore_and_never
         names,
         [
             ".gitignore",
+            "dev-scenarios.yaml",
+            "dev.yaml",
             "functions.rhai",
             "runtime.yaml",
             "scenarios.yaml",

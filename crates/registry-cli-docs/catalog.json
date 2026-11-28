@@ -39,6 +39,15 @@
           "arguments": [],
           "options": [
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--runtime-config <ABSOLUTE_FILE>",
               "description": "Runtime configuration file",
               "always_required": true,
@@ -121,6 +130,15 @@
           "usage": "adapter effective-contract [OPTIONS] --runtime-config <ABSOLUTE_FILE> --project <DIRECTORY>",
           "arguments": [],
           "options": [
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
             {
               "display": "--runtime-config <ABSOLUTE_FILE>",
               "description": "Runtime configuration file",
@@ -228,6 +246,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--show-values",
               "description": "Include the projected values a dry-run pass would deliver. The default omits every item value",
               "always_required": false,
@@ -280,6 +307,15 @@
               "display": "--runtime <RUNTIME>",
               "description": "The operator runtime config file",
               "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
               "repeatable": false,
               "default_values": [],
               "possible_values": [],
@@ -356,6 +392,15 @@
               "display": "--runtime <RUNTIME>",
               "description": "The operator runtime config file, whose store block names the job store's connection reference",
               "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
               "repeatable": false,
               "default_values": [],
               "possible_values": [],
@@ -500,6 +545,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--show-values",
               "description": "Include the projected values a dry-run pass would deliver. The default omits every item value",
               "always_required": false,
@@ -543,6 +597,15 @@
               "display": "--runtime <RUNTIME>",
               "description": "The operator runtime config file, whose store block names the job store's connection reference",
               "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
               "repeatable": false,
               "default_values": [],
               "possible_values": [],
@@ -610,6 +673,15 @@
               "display": "--runtime <RUNTIME>",
               "description": "The operator runtime config file, whose store block names the job store's connection reference",
               "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
               "repeatable": false,
               "default_values": [],
               "possible_values": [],
@@ -746,6 +818,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--profile <PROFILE>",
               "description": "The profile document; defaults to profile.yaml beside the pack",
               "always_required": false,
@@ -831,6 +912,51 @@
       "constraints": [],
       "subcommands": [
         {
+          "name": "init",
+          "invocation": "adapterctl init",
+          "about": "Write a local Adapter starter and its development plan",
+          "long_about": null,
+          "usage": "adapterctl init [OPTIONS] <DIRECTORY>",
+          "arguments": [
+            {
+              "display": "<DIRECTORY>",
+              "description": "New directory to create",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
+        {
           "name": "check",
           "invocation": "adapterctl check",
           "about": "Check an authored adapter project, its pinned profile and pack, and its fixtures, offline, and print the findings",
@@ -849,8 +975,26 @@
           ],
           "options": [
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--production",
+              "description": "Declare the production posture",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--deny-warnings",
-              "description": "Exit 1 when a warning is reported",
+              "description": "Exit 1 when a warning is reported. Development posture listings do not count",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -938,6 +1082,123 @@
           "subcommands": []
         },
         {
+          "name": "generate",
+          "invocation": "adapterctl generate",
+          "about": "Generate an identity tooling input from the deployment",
+          "long_about": null,
+          "usage": "adapterctl generate [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "identity-facts",
+              "invocation": "adapterctl generate identity-facts",
+              "about": "Write the caller requirements of one configured issuer",
+              "long_about": null,
+              "usage": "adapterctl generate identity-facts [OPTIONS] --runtime-config <ABSOLUTE_FILE> --output <FILE> <PROJECT>",
+              "arguments": [
+                {
+                  "display": "<PROJECT>",
+                  "description": "The authored Adapter project",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Runtime configuration file: its oidc block and the project's access profiles state the facts",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--output <FILE>",
+                  "description": "Write the identity facts to this file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--payments-config <ABSOLUTE_FILE>",
+                  "description": "Absolute path to the payment connection configuration",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--issuer <ID>",
+                  "description": "The issuer entry to describe when the runtime lists more than one",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
           "name": "job",
           "invocation": "adapterctl job",
           "about": "Operate one authored ingestion job",
@@ -999,6 +1260,15 @@
               ],
               "options": [
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--runtime <FILE>",
                   "description": "The operator runtime config; defaults to `job-runtime.yaml` beside the pack",
                   "always_required": false,
@@ -1027,7 +1297,7 @@
                 },
                 {
                   "display": "--deny-warnings",
-                  "description": "Exit 1 when a warning is reported",
+                  "description": "Exit 1 when a warning is reported. Development posture listings do not count",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -1186,7 +1456,7 @@
               "options": [
                 {
                   "display": "--deny-warnings",
-                  "description": "Exit 1 when a warning is reported",
+                  "description": "Exit 1 when a warning is reported. Development posture listings do not count",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -1303,7 +1573,7 @@
                 },
                 {
                   "display": "--deny-warnings",
-                  "description": "Exit 1 when a warning is reported",
+                  "description": "Exit 1 when a warning is reported. Development posture listings do not count",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -1536,6 +1806,24 @@
               ],
               "options": [
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--production",
+                  "description": "Declare the production posture",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--provider-pack <FILE>",
                   "description": "Exact provider pack pinned by a payment connection. Repeat for every active pin",
                   "always_required": false,
@@ -1555,7 +1843,7 @@
                 },
                 {
                   "display": "--deny-warnings",
-                  "description": "Refuse warnings as well as errors",
+                  "description": "Refuse warnings as well as errors. Development posture listings do not count",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -1607,6 +1895,15 @@
                 }
               ],
               "options": [
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
                 {
                   "display": "--provider-pack <FILE>",
                   "description": "Exact provider pack pinned by a payment connection. Repeat for every active pin",
@@ -1695,6 +1992,15 @@
                     }
                   ],
                   "options": [
+                    {
+                      "display": "--posture <POSTURE>",
+                      "description": "Declared posture: development or production. Unset means production",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
                     {
                       "display": "--provider-pack <FILE>",
                       "description": "Provider pack pinned by the payment connection",
@@ -2112,6 +2418,15 @@
           ],
           "options": [
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--runtime <FILE>",
               "description": "Operator runtime configuration: the destinations dialed and the credentials presented come from here and only here. Its `${NAME}` expressions are filled from the process environment",
               "always_required": true,
@@ -2181,13 +2496,22 @@
       "invocation": "breg",
       "about": "Serve one verified Base Registry Engine package",
       "long_about": null,
-      "usage": "breg --runtime-config <ABSOLUTE_FILE>",
+      "usage": "breg [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
       "arguments": [],
       "options": [
         {
           "display": "--runtime-config <ABSOLUTE_FILE>",
           "description": "Runtime configuration file",
           "always_required": true,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "--posture <POSTURE>",
+          "description": "Declared posture: development or production. Unset means production",
+          "always_required": false,
           "repeatable": false,
           "default_values": [],
           "possible_values": [],
@@ -2220,13 +2544,22 @@
       "invocation": "breg-mcp",
       "about": "Serve a citizen-facing MCP gateway over a Base Registry Engine",
       "long_about": null,
-      "usage": "breg-mcp --runtime-config <FILE> <COMMAND>",
+      "usage": "breg-mcp [OPTIONS] --runtime-config <FILE> <COMMAND>",
       "arguments": [],
       "options": [
         {
           "display": "--runtime-config <FILE>",
           "description": "Runtime configuration file",
           "always_required": true,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "--posture <POSTURE>",
+          "description": "Declared posture: development or production. Unset means production",
+          "always_required": false,
           "repeatable": false,
           "default_values": [],
           "possible_values": [],
@@ -2262,6 +2595,15 @@
           "arguments": [],
           "options": [
             {
+              "display": "--production",
+              "description": "Declare production posture",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--format <FORMAT>",
               "description": "Emit the selected command's report in this format",
               "always_required": false,
@@ -2277,7 +2619,7 @@
             },
             {
               "display": "--deny-warnings",
-              "description": "Exit 1 when a warning is reported",
+              "description": "Exit 1 when a warning is reported. Development posture listings do not count",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -2287,6 +2629,15 @@
             {
               "display": "--environment",
               "description": "Fill `${NAME}` expressions in the runtime file from the process environment and check the values they produce. Without it, each expression is checked by syntax and position only",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -2311,9 +2662,18 @@
           "invocation": "breg-mcp serve",
           "about": "Serve the gateway until it is terminated",
           "long_about": null,
-          "usage": "breg-mcp --runtime-config <FILE> serve",
+          "usage": "breg-mcp --runtime-config <FILE> serve [OPTIONS]",
           "arguments": [],
           "options": [
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
             {
               "display": "-h, --help",
               "description": "Print help",
@@ -2334,13 +2694,22 @@
       "invocation": "breg-review",
       "about": "Serve the citizen review page for Base Registry Engine Proposals",
       "long_about": null,
-      "usage": "breg-review --runtime-config <FILE> <COMMAND>",
+      "usage": "breg-review [OPTIONS] --runtime-config <FILE> <COMMAND>",
       "arguments": [],
       "options": [
         {
           "display": "--runtime-config <FILE>",
           "description": "Runtime configuration file",
           "always_required": true,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "--posture <POSTURE>",
+          "description": "Declared posture: development or production. Unset means production.",
+          "always_required": false,
           "repeatable": false,
           "default_values": [],
           "possible_values": [],
@@ -2376,6 +2745,15 @@
           "arguments": [],
           "options": [
             {
+              "display": "--production",
+              "description": "Declare production posture.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--format <FORMAT>",
               "description": "Emit the selected command's report in this format",
               "always_required": false,
@@ -2391,7 +2769,7 @@
             },
             {
               "display": "--deny-warnings",
-              "description": "Exit 1 when a warning is reported",
+              "description": "Exit 1 when a warning is reported. Development posture listings do not count.",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -2401,6 +2779,15 @@
             {
               "display": "--environment",
               "description": "Fill `${NAME}` expressions in the runtime file from the process environment and check the values they produce. Without it, each expression is checked by syntax and position only",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -2425,9 +2812,18 @@
           "invocation": "breg-review serve",
           "about": "Serve the review page until it is terminated",
           "long_about": null,
-          "usage": "breg-review --runtime-config <FILE> serve",
+          "usage": "breg-review --runtime-config <FILE> serve [OPTIONS]",
           "arguments": [],
           "options": [
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
             {
               "display": "-h, --help",
               "description": "Print help",
@@ -3111,7 +3507,7 @@
                 },
                 {
                   "display": "--deny-warnings",
-                  "description": "Exit 1 when the check reports a warning",
+                  "description": "Exit 1 when the check reports a warning. Development posture listings do not count",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -3150,7 +3546,7 @@
         {
           "name": "serve",
           "invocation": "bregctl serve",
-          "about": "Run the production Base Registry Engine service with the selected runtime",
+          "about": "Run Base Registry Engine with the selected runtime",
           "long_about": null,
           "usage": "bregctl serve [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
           "arguments": [],
@@ -3159,6 +3555,15 @@
               "display": "--runtime-config <ABSOLUTE_FILE>",
               "description": "Runtime configuration file passed unchanged to the Base Registry Engine runtime. A symbolic link at any component of this path is refused.",
               "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
               "repeatable": false,
               "default_values": [],
               "possible_values": [],
@@ -3234,6 +3639,15 @@
               "arguments": [],
               "options": [
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
                   "description": "Runtime configuration file to check. A symbolic link at any component of this path is refused.",
                   "always_required": true,
@@ -3244,7 +3658,7 @@
                 },
                 {
                   "display": "--deny-warnings",
-                  "description": "Exit 1 when a warning is reported",
+                  "description": "Exit 1 when a warning is reported. Development posture listings do not count",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -3295,6 +3709,15 @@
               "usage": "bregctl mcp serve [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
               "arguments": [],
               "options": [
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
                   "description": "Runtime configuration file for the service. A symbolic link at any component of this path is refused.",
@@ -3376,6 +3799,15 @@
               "arguments": [],
               "options": [
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
                   "description": "Runtime configuration file to check. A symbolic link at any component of this path is refused.",
                   "always_required": true,
@@ -3386,7 +3818,7 @@
                 },
                 {
                   "display": "--deny-warnings",
-                  "description": "Exit 1 when a warning is reported",
+                  "description": "Exit 1 when a warning is reported. Development posture listings do not count",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -3437,6 +3869,15 @@
               "usage": "bregctl review serve [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
               "arguments": [],
               "options": [
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
                   "description": "Runtime configuration file for the service. A symbolic link at any component of this path is refused.",
@@ -3655,7 +4096,7 @@
             },
             {
               "display": "--deny-warnings",
-              "description": "Exit 1 when a warning is reported",
+              "description": "Exit 1 when a warning is reported. Development posture listings do not count",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -3665,6 +4106,15 @@
             {
               "display": "--runtime-config <FILE>",
               "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -4213,6 +4663,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--access-profile <ACCESS_PROFILE>",
               "description": "Access profile: required for evidence-source; optional exact selection for odrl",
               "always_required": false,
@@ -4306,6 +4765,15 @@
               "environment": null
             },
             {
+              "display": "--issuer <ISSUER_ID>",
+              "description": "The id under authentication.oidc.issuers to describe (identity-facts only). Required when the runtime declares more than one issuer",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--format <FORMAT>",
               "description": "Emit the selected command's report in this format",
               "always_required": false,
@@ -4352,6 +4820,15 @@
             }
           ],
           "options": [
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
             {
               "display": "--clients-file <FILE>",
               "description": "Local clients, profile bindings, and optional seed records (default on first start: dev-clients.yaml in the project; retained for restarts). A symbolic link at any component of this path is refused.",
@@ -4452,6 +4929,15 @@
                 }
               ],
               "options": [
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
                 {
                   "display": "--clients-file <FILE>",
                   "description": "Local clients, profile bindings, and optional seed records (default on first start: dev-clients.yaml in the project; retained for restarts). A symbolic link at any component of this path is refused.",
@@ -5144,6 +5630,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--package <DIRECTORY>",
               "description": "Closed package inspected for integrity only, without activation authority. A symbolic link at any component of this path is refused.",
               "always_required": false,
@@ -5269,6 +5764,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--format <FORMAT>",
               "description": "Emit the selected command's report in this format",
               "always_required": false,
@@ -5343,6 +5847,15 @@
               "display": "--runtime-config <ABSOLUTE_FILE>",
               "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
               "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
               "repeatable": false,
               "default_values": [],
               "possible_values": [],
@@ -5460,6 +5973,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--package <ABSOLUTE_DIRECTORY>",
               "description": "Absolute target package directory. A symbolic link at any component of this path is refused.",
               "always_required": true,
@@ -5549,6 +6071,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--package <ABSOLUTE_DIRECTORY>",
               "description": "Absolute target package directory. A symbolic link at any component of this path is refused.",
               "always_required": true,
@@ -5614,6 +6145,15 @@
               "display": "--runtime-config <ABSOLUTE_FILE>",
               "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
               "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
               "repeatable": false,
               "default_values": [],
               "possible_values": [],
@@ -5812,6 +6352,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--format <FORMAT>",
                   "description": "Emit the selected command's report in this format",
                   "always_required": false,
@@ -5850,6 +6399,15 @@
                   "display": "--runtime-config <ABSOLUTE_FILE>",
                   "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
@@ -5954,6 +6512,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--occurrence-id <UUID>",
                   "description": "Exact retained occurrence identifier",
                   "always_required": true,
@@ -6001,6 +6568,15 @@
                   "display": "--runtime-config <ABSOLUTE_FILE>",
                   "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
@@ -6087,6 +6663,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--expected-control-epoch <EPOCH>",
                   "description": "Durable control epoch observed by the operator",
                   "always_required": true,
@@ -6152,6 +6737,15 @@
                   "display": "--runtime-config <ABSOLUTE_FILE>",
                   "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
@@ -6231,6 +6825,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--format <FORMAT>",
               "description": "Emit the selected command's report in this format",
               "always_required": false,
@@ -6269,6 +6872,15 @@
               "display": "--runtime-config <ABSOLUTE_FILE>",
               "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
               "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
               "repeatable": false,
               "default_values": [],
               "possible_values": [],
@@ -6353,6 +6965,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--format <FORMAT>",
                   "description": "Emit the selected command's report in this format",
                   "always_required": false,
@@ -6391,6 +7012,15 @@
                   "display": "--runtime-config <ABSOLUTE_FILE>",
                   "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
@@ -6481,6 +7111,15 @@
                   "display": "--runtime-config <ABSOLUTE_FILE>",
                   "description": "Runtime configuration file of the disposable schema-test database. A symbolic link at any component of this path is refused.",
                   "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
@@ -6594,6 +7233,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--request-file <ABSOLUTE_FILE>",
                   "description": "Absolute owner-only JSON erasure request file. Read through the parent directory this path resolves to, so a `..` component is refused. The file must carry no group or other permission bits, because it names the records the erasure covers. A symbolic link at any component of this path is refused.",
                   "always_required": true,
@@ -6650,6 +7298,15 @@
                   "display": "--runtime-config <ABSOLUTE_FILE>",
                   "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
@@ -6819,6 +7476,15 @@
               "arguments": [],
               "options": [
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--package <ABSOLUTE_DIRECTORY>",
                   "description": "Absolute closed package directory used only for deterministic planning. A symbolic link at any component of this path is refused.",
                   "always_required": true,
@@ -6937,6 +7603,15 @@
               "usage": "bregctl data export [OPTIONS] --package <ABSOLUTE_DIRECTORY> --breg-url <URL> --access-token-file <ABSOLUTE_FILE> --record-type <ID> --profile <ID> --field <ID> --output <FILE> --checkpoint <FILE>",
               "arguments": [],
               "options": [
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
                 {
                   "display": "--package <ABSOLUTE_DIRECTORY>",
                   "description": "Absolute closed package directory used only for deterministic planning. A symbolic link at any component of this path is refused.",
@@ -7088,6 +7763,15 @@
                   "arguments": [],
                   "options": [
                     {
+                      "display": "--posture <POSTURE>",
+                      "description": "Declared posture: development or production. Unset means production",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
                       "display": "--breg-url <URL>",
                       "description": "Base Registry Engine base URL. HTTP is accepted only for loopback hosts",
                       "always_required": true,
@@ -7201,6 +7885,15 @@
                   "usage": "bregctl data runs cancel [OPTIONS] --breg-url <URL> --access-token-file <ABSOLUTE_FILE> --record-route <API_ROUTE> --profile <ID> --run-id <UUID>",
                   "arguments": [],
                   "options": [
+                    {
+                      "display": "--posture <POSTURE>",
+                      "description": "Declared posture: development or production. Unset means production",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
                     {
                       "display": "--breg-url <URL>",
                       "description": "Base Registry Engine base URL. HTTP is accepted only for loopback hosts",
@@ -7320,6 +8013,15 @@
               "arguments": [],
               "options": [
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--breg-url <URL>",
                   "description": "Base Registry Engine base URL. HTTP is accepted only for loopback hosts",
                   "always_required": true,
@@ -7420,6 +8122,15 @@
               "usage": "bregctl statistics withdraw [OPTIONS] --breg-url <URL> --access-token-file <ABSOLUTE_FILE> --dataset <ID> --period <PERIOD> --version <NUMBER> --reason <REASON> --profile <ID> --idempotency-key <KEY>",
               "arguments": [],
               "options": [
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
                 {
                   "display": "--breg-url <URL>",
                   "description": "Base Registry Engine base URL. HTTP is accepted only for loopback hosts",
@@ -7631,6 +8342,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--limit <COUNT>",
                   "description": "Maximum number of value-free delivery rows to return",
                   "always_required": false,
@@ -7680,6 +8400,15 @@
                   "display": "--runtime-config <ABSOLUTE_FILE>",
                   "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
@@ -7752,6 +8481,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--event-id <UUID>",
                   "description": "Stable event UUID shown by `hook list`",
                   "always_required": true,
@@ -7817,6 +8555,15 @@
                   "display": "--runtime-config <ABSOLUTE_FILE>",
                   "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
@@ -7930,6 +8677,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--action-id <ACTION>",
                   "description": "Limit the value-free listing to one compiled Action",
                   "always_required": false,
@@ -7997,6 +8753,15 @@
                   "display": "--runtime-config <ABSOLUTE_FILE>",
                   "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
@@ -8074,6 +8839,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--action-id <ACTION>",
                   "description": "Compiled Action identifier",
                   "always_required": true,
@@ -8139,6 +8913,15 @@
                   "display": "--runtime-config <ABSOLUTE_FILE>",
                   "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
@@ -8225,6 +9008,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--action-id <ACTION>",
                   "description": "Compiled Action identifier",
                   "always_required": true,
@@ -8296,6 +9088,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--action-id <ACTION>",
                   "description": "Compiled Action identifier",
                   "always_required": true,
@@ -8361,6 +9162,15 @@
                   "display": "--runtime-config <ABSOLUTE_FILE>",
                   "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
@@ -8474,6 +9284,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--before <BEFORE>",
                   "description": "RFC 3339 expiry cutoff, no later than the current time",
                   "always_required": true,
@@ -8557,6 +9376,15 @@
                   "display": "--runtime-config <ABSOLUTE_FILE>",
                   "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
@@ -8652,6 +9480,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--projection <ID>",
                   "description": "Indexed external projection ID declared by the active package",
                   "always_required": true,
@@ -8699,6 +9536,15 @@
                   "display": "--runtime-config <ABSOLUTE_FILE>",
                   "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
@@ -8788,6 +9634,15 @@
                   "display": "--runtime-config <ABSOLUTE_FILE>",
                   "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
@@ -8903,6 +9758,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--authority-id <UUID>",
                   "description": "Identifier `import-authority open` reported",
                   "always_required": true,
@@ -8974,6 +9838,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--format <FORMAT>",
                   "description": "Emit the selected command's report in this format",
                   "always_required": false,
@@ -9012,6 +9885,15 @@
                   "display": "--runtime-config <ABSOLUTE_FILE>",
                   "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
@@ -9098,6 +9980,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--format <FORMAT>",
                   "description": "Emit the selected command's report in this format",
                   "always_required": false,
@@ -9136,6 +10027,15 @@
                   "display": "--runtime-config <ABSOLUTE_FILE>",
                   "description": "Runtime configuration file. A symbolic link at any component of this path is refused.",
                   "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
@@ -9275,6 +10175,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--package <ABSOLUTE_DIRECTORY>",
                   "description": "Absolute directory of the verified successor package the operator plans to apply. A symbolic link at any component of this path is refused.",
                   "always_required": true,
@@ -9328,6 +10237,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--request-file <ABSOLUTE_FILE>",
                   "description": "Absolute owner-only JSON erase-history request file. Read through the parent directory this path resolves to, so a `..` component is refused. The file must carry no group or other permission bits, because it authorizes destroying retained history. A symbolic link at any component of this path is refused.",
                   "always_required": true,
@@ -9372,13 +10290,22 @@
       "invocation": "casework",
       "about": "Run and maintain Registry Casework",
       "long_about": null,
-      "usage": "casework --runtime-config <ABSOLUTE_FILE> <COMMAND>",
+      "usage": "casework [OPTIONS] --runtime-config <ABSOLUTE_FILE> <COMMAND>",
       "arguments": [],
       "options": [
         {
           "display": "--runtime-config <ABSOLUTE_FILE>",
           "description": "Runtime configuration file",
           "always_required": true,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "--posture <POSTURE>",
+          "description": "Declared posture: development or production. Unset means production.",
+          "always_required": false,
           "repeatable": false,
           "default_values": [],
           "possible_values": [],
@@ -9489,6 +10416,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--format <FORMAT>",
               "description": "Write human diagnostics and reports, or one typed JSON report",
               "always_required": false,
@@ -9533,6 +10469,15 @@
             }
           ],
           "options": [
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
             {
               "display": "--template <TEMPLATE>",
               "description": "Starter to create",
@@ -9606,7 +10551,7 @@
             },
             {
               "display": "--deny-warnings",
-              "description": "Refuse authored warnings as well as errors",
+              "description": "Refuse authored warnings as well as errors. Development posture listings do not count",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -9643,6 +10588,15 @@
             {
               "display": "--runtime-config <FILE>",
               "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -9719,6 +10673,15 @@
           ],
           "options": [
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--format <FORMAT>",
               "description": "Write human diagnostics and reports, or one typed JSON report",
               "always_required": false,
@@ -9764,8 +10727,17 @@
           ],
           "options": [
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--deny-warnings",
-              "description": "Refuse authored warnings as well as errors",
+              "description": "Refuse authored warnings as well as errors. Development posture listings do not count",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -9817,6 +10789,15 @@
             }
           ],
           "options": [
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
             {
               "display": "--output <DIRECTORY>",
               "description": "Directory for generated TypeScript and Python contracts",
@@ -9915,6 +10896,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--output <FILE>",
                   "description": "New file for the facts; an existing file is never overwritten",
                   "always_required": true,
@@ -10004,6 +10994,15 @@
                 }
               ],
               "options": [
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production. Generation requires development",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
                 {
                   "display": "--breg-project <PROJECT>",
                   "description": "Authored BReg project inspected through its matching bregctl executable",
@@ -10116,6 +11115,15 @@
               ],
               "options": [
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--provider-id <PROVIDER_ID>",
                   "description": "Declared Casework context provider to pair",
                   "always_required": true,
@@ -10198,6 +11206,15 @@
           "arguments": [],
           "options": [
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--format <FORMAT>",
               "description": "Write human diagnostics and reports, or one typed JSON report",
               "always_required": false,
@@ -10242,6 +11259,15 @@
             }
           ],
           "options": [
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
             {
               "display": "--output <DIRECTORY>",
               "description": "New directory for the exact package closure; required unless --dry-run",
@@ -10331,6 +11357,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--format <FORMAT>",
               "description": "Write human diagnostics and reports, or one typed JSON report",
               "always_required": false,
@@ -10369,6 +11404,15 @@
               "display": "--runtime-config <FILE>",
               "description": "Runtime configuration file",
               "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
               "repeatable": false,
               "default_values": [],
               "possible_values": [],
@@ -10419,6 +11463,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--format <FORMAT>",
               "description": "Write human diagnostics and reports, or one typed JSON report",
               "always_required": false,
@@ -10457,6 +11510,15 @@
               "display": "--runtime-config <FILE>",
               "description": "Runtime configuration file",
               "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
               "repeatable": false,
               "default_values": [],
               "possible_values": [],
@@ -10630,6 +11692,15 @@
             }
           ],
           "options": [
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
             {
               "display": "--project <PROJECT>",
               "description": "Project directory, or a descendant from which the exact product root is found",
@@ -10806,6 +11877,15 @@
           "arguments": [],
           "options": [
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--format <FORMAT>",
               "description": "Write human diagnostics and reports, or one typed JSON report",
               "always_required": false,
@@ -10967,6 +12047,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--format <FORMAT>",
                   "description": "Write human diagnostics and reports, or one typed JSON report",
                   "always_required": false,
@@ -11093,6 +12182,15 @@
               "arguments": [],
               "options": [
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--format <FORMAT>",
                   "description": "Write human diagnostics and reports, or one typed JSON report",
                   "always_required": false,
@@ -11137,6 +12235,15 @@
                 }
               ],
               "options": [
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
                 {
                   "display": "--format <FORMAT>",
                   "description": "Write human diagnostics and reports, or one typed JSON report",
@@ -11192,6 +12299,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--format <FORMAT>",
                   "description": "Write human diagnostics and reports, or one typed JSON report",
                   "always_required": false,
@@ -11237,7 +12353,16 @@
                 },
                 {
                   "display": "--deny-warnings",
-                  "description": "Exit 1 when the check reports a warning",
+                  "description": "Exit 1 when the check reports a warning. Development posture listings do not count",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -11304,6 +12429,15 @@
           "environment": null
         },
         {
+          "display": "--posture <POSTURE>",
+          "description": "Declared posture: development or production. Unset means production.",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
           "display": "--recovery-only",
           "description": "Serve authenticated recovery operations with worker dispatch disabled",
           "always_required": false,
@@ -11359,6 +12493,15 @@
         {
           "display": "--runtime-config <FILE>",
           "description": "Runtime configuration file",
+          "always_required": false,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "--posture <POSTURE>",
+          "description": "Declared posture: development or production. Unset means production.",
           "always_required": false,
           "repeatable": false,
           "default_values": [],
@@ -11545,6 +12688,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "-h, --help",
               "description": "Print help",
               "always_required": false,
@@ -11605,6 +12757,15 @@
             {
               "display": "--runtime-config <FILE>",
               "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -11782,6 +12943,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "-h, --help",
                   "description": "Print help",
                   "always_required": false,
@@ -11917,6 +13087,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "-h, --help",
                   "description": "Print help",
                   "always_required": false,
@@ -11964,6 +13143,15 @@
                 {
                   "display": "--runtime-config <FILE>",
                   "description": "Runtime configuration file",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production.",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -12034,6 +13222,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "-h, --help",
                   "description": "Print help",
                   "always_required": false,
@@ -12065,7 +13262,7 @@
                 },
                 {
                   "display": "--deny-warnings",
-                  "description": "Exit 1 when the check reports a warning",
+                  "description": "Exit 1 when the check reports a warning. Development posture listings do not count",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -12089,6 +13286,15 @@
                 {
                   "display": "--runtime-config <FILE>",
                   "description": "Runtime configuration file",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production.",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -12142,6 +13348,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "-h, --help",
               "description": "Print help",
               "always_required": false,
@@ -12157,7 +13372,7 @@
         {
           "name": "init",
           "invocation": "coordinatorctl init",
-          "about": "Create a reviewed four-file starter and its .gitignore in a new or empty directory",
+          "about": "Create a reviewed starter with a development plan in a new or empty directory",
           "long_about": null,
           "usage": "coordinatorctl init [OPTIONS] --directory <DIRECTORY>",
           "arguments": [],
@@ -12204,6 +13419,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "-h, --help",
               "description": "Print help",
               "always_required": false,
@@ -12215,6 +13439,131 @@
           ],
           "constraints": [],
           "subcommands": []
+        },
+        {
+          "name": "generate",
+          "invocation": "coordinatorctl generate",
+          "about": "Generate an artifact from the runtime configuration",
+          "long_about": null,
+          "usage": "coordinatorctl generate [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--runtime-config <FILE>",
+              "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "identity-facts",
+              "invocation": "coordinatorctl generate identity-facts",
+              "about": "Describe the clients and policies of one configured issuer",
+              "long_about": null,
+              "usage": "coordinatorctl generate identity-facts [OPTIONS] --output <FILE>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--output <FILE>",
+                  "description": "Output file to create",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--issuer <ID>",
+                  "description": "Issuer entry to describe. Required when several entries are configured",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Output format for local reports and authenticated API responses: readable text, or one JSON report",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "--runtime-config <FILE>",
+                  "description": "Runtime configuration file",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
         },
         {
           "name": "check",
@@ -12244,7 +13593,7 @@
             },
             {
               "display": "--deny-warnings",
-              "description": "Refuse warnings, including checks deferred until environment values are supplied",
+              "description": "Refuse warnings, including checks deferred until environment values are supplied. Development posture listings do not count",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -12254,6 +13603,15 @@
             {
               "display": "--environment",
               "description": "Substitute runtime environment expressions; secret values are never resolved",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--production",
+              "description": "Check under the production posture",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -12277,6 +13635,15 @@
             {
               "display": "--runtime-config <FILE>",
               "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -12345,6 +13712,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "-h, --help",
               "description": "Print help",
               "always_required": false,
@@ -12381,6 +13757,15 @@
                 {
                   "display": "--runtime-config <FILE>",
                   "description": "Runtime configuration file",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production.",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -12464,6 +13849,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "-h, --help",
               "description": "Print help",
               "always_required": false,
@@ -12535,6 +13929,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "-h, --help",
               "description": "Print help",
               "always_required": false,
@@ -12590,6 +13993,15 @@
             {
               "display": "--runtime-config <FILE>",
               "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -12659,6 +14071,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "-h, --help",
               "description": "Print help",
               "always_required": false,
@@ -12705,6 +14126,15 @@
             {
               "display": "--runtime-config <FILE>",
               "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -12870,6 +14300,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "-h, --help",
               "description": "Print help",
               "always_required": false,
@@ -12914,6 +14353,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "-h, --help",
               "description": "Print help",
               "always_required": false,
@@ -12951,6 +14399,15 @@
             {
               "display": "--runtime-config <FILE>",
               "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -13056,6 +14513,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "-h, --help",
               "description": "Print help",
               "always_required": false,
@@ -13120,6 +14586,15 @@
             {
               "display": "--runtime-config <FILE>",
               "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -13270,6 +14745,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "-h, --help",
               "description": "Print help",
               "always_required": false,
@@ -13334,6 +14818,15 @@
             {
               "display": "--runtime-config <FILE>",
               "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -13421,6 +14914,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "-h, --help",
               "description": "Print help",
               "always_required": false,
@@ -13494,6 +14996,15 @@
             {
               "display": "--runtime-config <FILE>",
               "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -13581,6 +15092,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "-h, --help",
               "description": "Print help",
               "always_required": false,
@@ -13661,6 +15181,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "-h, --help",
               "description": "Print help",
               "always_required": false,
@@ -13716,6 +15245,15 @@
             {
               "display": "--runtime-config <FILE>",
               "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -13794,6 +15332,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "-h, --help",
               "description": "Print help",
               "always_required": false,
@@ -13858,6 +15405,15 @@
             {
               "display": "--runtime-config <FILE>",
               "description": "Runtime configuration file",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -13954,6 +15510,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "-h, --help",
               "description": "Print help",
               "always_required": false,
@@ -14043,6 +15608,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "-h, --help",
               "description": "Print help",
               "always_required": false,
@@ -14125,6 +15699,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "-h, --help",
               "description": "Print help",
               "always_required": false,
@@ -14144,13 +15727,22 @@
       "invocation": "discovery",
       "about": "Serve one immutable Registry Discovery index",
       "long_about": null,
-      "usage": "discovery --runtime-config <ABSOLUTE_FILE>",
+      "usage": "discovery [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
       "arguments": [],
       "options": [
         {
           "display": "--runtime-config <ABSOLUTE_FILE>",
           "description": "Runtime configuration file",
           "always_required": true,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "--posture <POSTURE>",
+          "description": "Declared posture: development or production. Unset means production",
+          "always_required": false,
           "repeatable": false,
           "default_values": [],
           "possible_values": [],
@@ -14207,6 +15799,37 @@
       ],
       "constraints": [],
       "subcommands": [
+        {
+          "name": "init",
+          "invocation": "discoveryctl init",
+          "about": "Write a local Discovery starter and its development plan",
+          "long_about": null,
+          "usage": "discoveryctl init <DIRECTORY>",
+          "arguments": [
+            {
+              "display": "<DIRECTORY>",
+              "description": "New directory to create",
+              "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "options": [
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": []
+        },
         {
           "name": "api",
           "invocation": "discoveryctl api",
@@ -14818,7 +16441,7 @@
                 },
                 {
                   "display": "--deny-warnings",
-                  "description": "Exit 1 when the check reports a warning",
+                  "description": "Exit 1 when the check reports a warning. Development posture listings do not count",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -14857,15 +16480,24 @@
         {
           "name": "serve",
           "invocation": "discoveryctl serve",
-          "about": "Run the production Discovery service with the selected runtime",
+          "about": "Run the Discovery service with the selected runtime configuration",
           "long_about": null,
-          "usage": "discoveryctl serve --runtime-config <ABSOLUTE_FILE>",
+          "usage": "discoveryctl serve [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
           "arguments": [],
           "options": [
             {
               "display": "--runtime-config <ABSOLUTE_FILE>",
               "description": "Runtime configuration file passed unchanged to the Discovery runtime",
               "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
               "repeatable": false,
               "default_values": [],
               "possible_values": [],
@@ -14920,8 +16552,17 @@
               "environment": null
             },
             {
-              "display": "--allow-loopback",
-              "description": "Accept an http loopback catalog URL, for development",
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--production",
+              "description": "Check under the production posture",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -14953,7 +16594,7 @@
             },
             {
               "display": "--deny-warnings",
-              "description": "Exit 1 when the check reports a warning",
+              "description": "Exit 1 when the check reports a warning. Development posture listings do not count",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -15010,8 +16651,8 @@
               "environment": null
             },
             {
-              "display": "--allow-loopback",
-              "description": "Accept an http loopback catalog URL, for development",
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -15047,13 +16688,22 @@
       "invocation": "documents",
       "about": "Run the Registry Stack Document Store",
       "long_about": null,
-      "usage": "documents --runtime-config <ABSOLUTE_FILE> <COMMAND>",
+      "usage": "documents [OPTIONS] --runtime-config <ABSOLUTE_FILE> <COMMAND>",
       "arguments": [],
       "options": [
         {
           "display": "--runtime-config <ABSOLUTE_FILE>",
           "description": "Runtime configuration file",
           "always_required": true,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "--posture <POSTURE>",
+          "description": "Declared posture: development or production. Unset means production.",
+          "always_required": false,
           "repeatable": false,
           "default_values": [],
           "possible_values": [],
@@ -15218,6 +16868,24 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--production",
+              "description": "Check under the production posture",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--environment",
               "description": "Substitute `${VAR}` references in the runtime configuration from the environment instead of checking them as stand-ins",
               "always_required": false,
@@ -15228,7 +16896,7 @@
             },
             {
               "display": "--deny-warnings",
-              "description": "Refuse the check when it finds a warning",
+              "description": "Refuse the check when it finds a warning. Development posture listings do not count",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -15351,6 +17019,123 @@
           "subcommands": []
         },
         {
+          "name": "generate",
+          "invocation": "documentsctl generate",
+          "about": "Generate bounded contracts for another tool from a checked project",
+          "long_about": null,
+          "usage": "documentsctl generate [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Emit the selected command's report in this format",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "identity-facts",
+              "invocation": "documentsctl generate identity-facts",
+              "about": "Write the identity facts this runtime states about one issuer",
+              "long_about": null,
+              "usage": "documentsctl generate identity-facts [OPTIONS] --runtime-config <ABSOLUTE_FILE> --output <FILE> <PROJECT>",
+              "arguments": [
+                {
+                  "display": "<PROJECT>",
+                  "description": "The project directory holding documents.yaml",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Runtime configuration file: its authentication.oidc block and the project's access profiles state the facts",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--output <FILE>",
+                  "description": "New YAML file to create. Existing files are never overwritten",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--issuer <ISSUER_ID>",
+                  "description": "The id under authentication.oidc.issuers to describe. Required when the runtime declares more than one issuer",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Emit the selected command's report in this format",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
           "name": "plan",
           "invocation": "documentsctl plan",
           "about": "Report what apply would change in the database, writing nothing",
@@ -15362,6 +17147,15 @@
               "display": "--runtime-config <FILE>",
               "description": "Runtime configuration file",
               "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
               "repeatable": false,
               "default_values": [],
               "possible_values": [],
@@ -15517,6 +17311,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--operator-reference <TEXT>",
               "description": "Change or ticket reference; stored only as an activation-scoped keyed hash",
               "always_required": false,
@@ -15573,6 +17376,15 @@
               "display": "--runtime-config <FILE>",
               "description": "Runtime configuration file",
               "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
               "repeatable": false,
               "default_values": [],
               "possible_values": [],
@@ -15657,6 +17469,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--limit <COUNT>",
                   "description": "The most dead letters to report, oldest first",
                   "always_required": false,
@@ -15706,6 +17527,15 @@
                   "display": "--runtime-config <FILE>",
                   "description": "Runtime configuration file",
                   "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production.",
+                  "always_required": false,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
@@ -15810,6 +17640,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--format <FORMAT>",
                   "description": "Emit the selected command's report in this format",
                   "always_required": false,
@@ -15848,6 +17687,15 @@
                   "display": "--runtime-config <FILE>",
                   "description": "Runtime configuration file",
                   "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production.",
+                  "always_required": false,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
@@ -15903,6 +17751,15 @@
                   "display": "--runtime-config <FILE>",
                   "description": "Runtime configuration file",
                   "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production.",
+                  "always_required": false,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
@@ -16024,6 +17881,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--document <FILE>",
                   "description": "Target authority document to validate and activate",
                   "always_required": true,
@@ -16059,13 +17925,22 @@
               "invocation": "evidence authority history",
               "about": "Inspect revisions and digests from committed activation history, without identity values",
               "long_about": null,
-              "usage": "evidence authority history --runtime-config <FILE>",
+              "usage": "evidence authority history [OPTIONS] --runtime-config <FILE>",
               "arguments": [],
               "options": [
                 {
                   "display": "--runtime-config <FILE>",
                   "description": "Runtime configuration file",
                   "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production.",
+                  "always_required": false,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
@@ -16098,6 +17973,15 @@
               "display": "--runtime-config <FILE>",
               "description": "Runtime configuration file",
               "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
               "repeatable": false,
               "default_values": [],
               "possible_values": [],
@@ -16287,6 +18171,15 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--fixture <FIXTURE>",
               "description": "Bundle-relative fixture path referenced by exactly one requirement",
               "always_required": true,
@@ -16351,13 +18244,22 @@
           "invocation": "evidence serve",
           "about": "Start the native Registry Evidence HTTP service",
           "long_about": null,
-          "usage": "evidence serve --runtime-config <FILE>",
+          "usage": "evidence serve [OPTIONS] --runtime-config <FILE>",
           "arguments": [],
           "options": [
             {
               "display": "--runtime-config <FILE>",
               "description": "Runtime configuration file",
               "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
               "repeatable": false,
               "default_values": [],
               "possible_values": [],
@@ -16565,6 +18467,15 @@
               "environment": "EVIDENCE_OID4VCI_RUNTIME_CONFIG"
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--format <FORMAT>",
               "description": "Emit the selected command's report in this format",
               "always_required": false,
@@ -16614,7 +18525,7 @@
           "invocation": "evidence-oid4vci inspect",
           "about": "Validate the deployment and print its derived protocol metadata",
           "long_about": null,
-          "usage": "evidence-oid4vci inspect --runtime-config <FILE>",
+          "usage": "evidence-oid4vci inspect [OPTIONS] --runtime-config <FILE>",
           "arguments": [],
           "options": [
             {
@@ -16625,6 +18536,15 @@
               "default_values": [],
               "possible_values": [],
               "environment": "EVIDENCE_OID4VCI_RUNTIME_CONFIG"
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
             },
             {
               "display": "-h, --help",
@@ -16674,7 +18594,7 @@
           "invocation": "evidence-oid4vci serve",
           "about": "Serve the delivery endpoints until terminated",
           "long_about": null,
-          "usage": "evidence-oid4vci serve --runtime-config <FILE>",
+          "usage": "evidence-oid4vci serve [OPTIONS] --runtime-config <FILE>",
           "arguments": [],
           "options": [
             {
@@ -16685,6 +18605,15 @@
               "default_values": [],
               "possible_values": [],
               "environment": "EVIDENCE_OID4VCI_RUNTIME_CONFIG"
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
             },
             {
               "display": "-h, --help",
@@ -16746,6 +18675,15 @@
               "default_values": [],
               "possible_values": [],
               "environment": "EVIDENCE_OID4VP_RUNTIME_CONFIG"
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
             },
             {
               "display": "--format <FORMAT>",
@@ -16827,7 +18765,7 @@
           "invocation": "evidence-oid4vp serve",
           "about": "Serve the portal and wallet endpoints until terminated",
           "long_about": null,
-          "usage": "evidence-oid4vp serve --runtime-config <FILE>",
+          "usage": "evidence-oid4vp serve [OPTIONS] --runtime-config <FILE>",
           "arguments": [],
           "options": [
             {
@@ -16838,6 +18776,15 @@
               "default_values": [],
               "possible_values": [],
               "environment": "EVIDENCE_OID4VP_RUNTIME_CONFIG"
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
             },
             {
               "display": "-h, --help",
@@ -17292,6 +19239,15 @@
           ],
           "options": [
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--file <FILE>",
               "description": "Check one tooling file on its own, offline: a client profile, reviewed contracts, a ThunderID task connection or session file, a source-import baseline or journal, a source resolution file, or a source export manifest",
               "always_required": false,
@@ -17366,6 +19322,14 @@
               "when": "--production",
               "arguments": [
                 "--target <TARGET>"
+              ]
+            },
+            {
+              "kind": "mutually-exclusive",
+              "when": null,
+              "arguments": [
+                "--file <FILE>",
+                "--posture <POSTURE>"
               ]
             },
             {
@@ -17469,6 +19433,15 @@
           ],
           "options": [
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--target <TARGET>",
               "description": "Complete deployment target to use when compiling an editable project",
               "always_required": false,
@@ -17567,6 +19540,15 @@
             }
           ],
           "options": [
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
             {
               "display": "--target <TARGET>",
               "description": "Explicit deployment target",
@@ -18398,6 +20380,15 @@
               ],
               "options": [
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--evidence-bin <EVIDENCE_BIN>",
                   "description": "Path to the evidence binary; defaults to the `EVIDENCE_BIN` variable, then the `evidence` installed beside evidencectl, then `evidence` on PATH",
                   "always_required": false,
@@ -18526,6 +20517,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--fixture <FIXTURE>",
                   "description": "Exact project-relative fixture path referenced by one definition",
                   "always_required": true,
@@ -18590,6 +20590,15 @@
           "usage": "evidencectl doctor [OPTIONS]",
           "arguments": [],
           "options": [
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
             {
               "display": "--runtime-config <ABSOLUTE_FILE>",
               "description": "Runtime configuration file",
@@ -18838,6 +20847,15 @@
                   "environment": "EVIDENCE_OID4VCI_RUNTIME_CONFIG"
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--deny-warnings",
                   "description": "Exit 1 when a warning is reported",
                   "always_required": false,
@@ -18899,6 +20917,15 @@
                   "default_values": [],
                   "possible_values": [],
                   "environment": "EVIDENCE_OID4VCI_RUNTIME_CONFIG"
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
                 },
                 {
                   "display": "--format <FORMAT>",
@@ -18989,6 +21016,15 @@
                   "default_values": [],
                   "possible_values": [],
                   "environment": "EVIDENCE_OID4VCI_RUNTIME_CONFIG"
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
                 },
                 {
                   "display": "--format <FORMAT>",
@@ -19168,7 +21204,7 @@
                 },
                 {
                   "display": "--deny-warnings",
-                  "description": "Exit 1 when the check reports a warning",
+                  "description": "Exit 1 when the check reports a warning. Development posture listings do not count",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -19911,6 +21947,15 @@
                   "arguments": [],
                   "options": [
                     {
+                      "display": "--posture <POSTURE>",
+                      "description": "Declared posture: development or production. Unset means production.",
+                      "always_required": false,
+                      "repeatable": false,
+                      "default_values": [],
+                      "possible_values": [],
+                      "environment": null
+                    },
+                    {
                       "display": "--profile <PROFILE>",
                       "description": "Owner-only client profile",
                       "always_required": true,
@@ -20205,6 +22250,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--format <FORMAT>",
                   "description": "Emit the selected command's report in this format. `junit` is accepted only by `test` and `fixtures run`",
                   "always_required": false,
@@ -20280,6 +22334,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--format <FORMAT>",
                   "description": "Emit the selected command's report in this format. `junit` is accepted only by `test` and `fixtures run`",
                   "always_required": false,
@@ -20348,6 +22411,15 @@
                 {
                   "display": "--target <TARGET>",
                   "description": "Complete target used by the compiler to compare actual definition revisions",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -21225,6 +23297,15 @@
                   "environment": null
                 },
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--response-format <FORMAT>",
                   "description": "Response format to request and verify",
                   "always_required": false,
@@ -21487,7 +23568,7 @@
             },
             {
               "display": "--deny-warnings",
-              "description": "Treat warnings as a domain refusal",
+              "description": "Treat warnings as a domain refusal. Development posture listings do not count.",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -21543,7 +23624,7 @@
             },
             {
               "display": "--deny-warnings",
-              "description": "Treat warnings as a domain refusal",
+              "description": "Treat warnings as a domain refusal. Development posture listings do not count.",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -21733,13 +23814,22 @@
       "invocation": "messaging",
       "about": "Run and maintain Registry Messaging",
       "long_about": null,
-      "usage": "messaging --runtime-config <ABSOLUTE_FILE> <COMMAND>",
+      "usage": "messaging [OPTIONS] --runtime-config <ABSOLUTE_FILE> <COMMAND>",
       "arguments": [],
       "options": [
         {
           "display": "--runtime-config <ABSOLUTE_FILE>",
           "description": "Runtime configuration file",
           "always_required": true,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "--posture <POSTURE>",
+          "description": "Declared posture: development or production. Unset means production.",
+          "always_required": false,
           "repeatable": false,
           "default_values": [],
           "possible_values": [],
@@ -21771,9 +23861,18 @@
           "invocation": "messaging serve",
           "about": "Run the Messaging HTTP service",
           "long_about": null,
-          "usage": "messaging --runtime-config <ABSOLUTE_FILE> serve",
+          "usage": "messaging --runtime-config <ABSOLUTE_FILE> serve [OPTIONS]",
           "arguments": [],
           "options": [
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
             {
               "display": "-h, --help",
               "description": "Print help",
@@ -21840,6 +23939,15 @@
           "usage": "messagingctl serve [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
           "arguments": [],
           "options": [
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
             {
               "display": "--runtime-config <ABSOLUTE_FILE>",
               "description": "Runtime configuration file passed unchanged to the Messaging runtime",
@@ -22089,6 +24197,15 @@
               "arguments": [],
               "options": [
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
                   "description": "Runtime configuration file: its authentication.oidc block and the package it names state the facts",
                   "always_required": true,
@@ -22101,6 +24218,15 @@
                   "display": "--output <FILE>",
                   "description": "New YAML file to create. Existing files are never overwritten",
                   "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--issuer <ISSUER_ID>",
+                  "description": "The id under authentication.oidc.issuers to describe. Required when the runtime declares more than one issuer",
+                  "always_required": false,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
@@ -22143,6 +24269,24 @@
           "usage": "messagingctl check [OPTIONS] <--runtime-config <FILE>|--package <DIRECTORY>|--project <DIRECTORY>|--dev-state <FILE>>",
           "arguments": [],
           "options": [
+            {
+              "display": "--production",
+              "description": "Check under the production posture",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
             {
               "display": "--dev-state <FILE>",
               "description": "Generated development session state. Checked offline without secrets",
@@ -22190,7 +24334,7 @@
             },
             {
               "display": "--deny-warnings",
-              "description": "Exit 1 when a warning is reported",
+              "description": "Exit 1 when a warning is reported. Development posture listings do not count",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -22301,6 +24445,15 @@
             }
           ],
           "options": [
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
             {
               "display": "--runtime-config <ABSOLUTE_FILE>",
               "description": "Runtime configuration file",
@@ -22521,6 +24674,15 @@
           "arguments": [],
           "options": [
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--runtime-config <ABSOLUTE_FILE>",
               "description": "Runtime configuration file",
               "always_required": true,
@@ -22564,6 +24726,15 @@
           "usage": "messagingctl apply [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
           "arguments": [],
           "options": [
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
             {
               "display": "--runtime-config <ABSOLUTE_FILE>",
               "description": "Runtime configuration file",
@@ -22626,6 +24797,15 @@
           "usage": "messagingctl status [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
           "arguments": [],
           "options": [
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
             {
               "display": "--runtime-config <ABSOLUTE_FILE>",
               "description": "Runtime configuration file",
@@ -22704,6 +24884,15 @@
               "usage": "messagingctl messages list [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
               "arguments": [],
               "options": [
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
                   "description": "Runtime configuration file",
@@ -22788,6 +24977,15 @@
               ],
               "options": [
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
                   "description": "Runtime configuration file",
                   "always_required": true,
@@ -22841,6 +25039,15 @@
                 }
               ],
               "options": [
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
                   "description": "Runtime configuration file",
@@ -22904,6 +25111,15 @@
                 }
               ],
               "options": [
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
                   "description": "Runtime configuration file",
@@ -22979,6 +25195,15 @@
                 }
               ],
               "options": [
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
                 {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
                   "description": "Runtime configuration file",
@@ -23069,6 +25294,15 @@
               "arguments": [],
               "options": [
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--runtime-config <ABSOLUTE_FILE>",
                   "description": "Runtime configuration file",
                   "always_required": true,
@@ -23144,6 +25378,15 @@
             }
           ],
           "options": [
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means development; production is refused.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
             {
               "display": "--port <PORT>",
               "description": "The runtime's loopback port",
@@ -23904,7 +26147,7 @@
                 },
                 {
                   "display": "--deny-warnings",
-                  "description": "Exit 1 when the check reports a warning",
+                  "description": "Exit 1 when the check reports a warning. Development posture listings do not count",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -23947,13 +26190,22 @@
       "invocation": "registry-mcp",
       "about": "Serve explicitly configured native and adapter MCP capabilities",
       "long_about": null,
-      "usage": "registry-mcp --runtime-config <FILE> <COMMAND>",
+      "usage": "registry-mcp [OPTIONS] --runtime-config <FILE> <COMMAND>",
       "arguments": [],
       "options": [
         {
           "display": "--runtime-config <FILE>",
           "description": "Runtime configuration file",
           "always_required": true,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "--posture <POSTURE>",
+          "description": "Declared posture: development or production. Unset means production",
+          "always_required": false,
           "repeatable": false,
           "default_values": [],
           "possible_values": [],
@@ -23989,6 +26241,15 @@
           "arguments": [],
           "options": [
             {
+              "display": "--production",
+              "description": "Declare production posture",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--format <FORMAT>",
               "description": "Emit the selected command's report in this format",
               "always_required": false,
@@ -24013,7 +26274,16 @@
             },
             {
               "display": "--deny-warnings",
-              "description": "Exit 1 when a warning is reported",
+              "description": "Exit 1 when a warning is reported. Development posture listings do not count",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -24038,9 +26308,18 @@
           "invocation": "registry-mcp serve",
           "about": "Serve the configured MCP gateway until it is terminated",
           "long_about": null,
-          "usage": "registry-mcp --runtime-config <FILE> serve",
+          "usage": "registry-mcp --runtime-config <FILE> serve [OPTIONS]",
           "arguments": [],
           "options": [
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
             {
               "display": "-h, --help",
               "description": "Print help",
@@ -24152,6 +26431,24 @@
               "environment": null
             },
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--production",
+              "description": "Check under the production posture",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--environment",
               "description": "Fill `${NAME}` expressions in the runtime file from the process environment and check the values they produce, reading each seal's certificate chain file too (never its key). Without it, each expression is checked by syntax and position only, and no chain file is read",
               "always_required": false,
@@ -24185,7 +26482,7 @@
             },
             {
               "display": "--deny-warnings",
-              "description": "Exit 1 when a warning is reported",
+              "description": "Exit 1 when a warning is reported. Development posture listings do not count",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -24525,6 +26822,15 @@
           "arguments": [],
           "options": [
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production, which refuses test signing",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--bundle <BUNDLE>",
               "description": "Authored bundle or verified package containing a document with a declared seal",
               "always_required": true,
@@ -24803,17 +27109,115 @@
           "subcommands": []
         },
         {
+          "name": "generate",
+          "invocation": "registry-render generate",
+          "about": "Generate files from a deployment's own configuration",
+          "long_about": null,
+          "usage": "registry-render generate <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "identity-facts",
+              "invocation": "registry-render generate identity-facts",
+              "about": "Write the identity facts the deployment states about its issuer: the issuer, the audience, the admitted clients, and the scope each route requires, with the requester clients of its seals",
+              "long_about": "Write the identity facts the deployment states about its issuer: the issuer, the audience, the admitted clients, and the scope each route requires, with the requester clients of its seals. Reads the runtime file as `serve` does and the package it serves. The output file must not exist, and the facts are read back through the facts reader before they are written.",
+              "usage": "registry-render generate identity-facts [OPTIONS] --runtime-config <ABSOLUTE_FILE> --output <FILE> <PACKAGE>",
+              "arguments": [
+                {
+                  "display": "<PACKAGE>",
+                  "description": "The package directory the runtime serves",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "options": [
+                {
+                  "display": "--runtime-config <ABSOLUTE_FILE>",
+                  "description": "Runtime configuration file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--output <FILE>",
+                  "description": "New facts file",
+                  "always_required": true,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--issuer <ISSUER_ID>",
+                  "description": "The id under `authentication.oidc.issuers` to describe. Required when the runtime declares more than one issuer",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help (see a summary with '-h')",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
           "name": "serve",
           "invocation": "registry-render serve",
           "about": "Serve the HTTP rendering API (see the runtime YAML)",
           "long_about": null,
-          "usage": "registry-render serve --runtime-config <ABSOLUTE_FILE>",
+          "usage": "registry-render serve [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
           "arguments": [],
           "options": [
             {
               "display": "--runtime-config <ABSOLUTE_FILE>",
               "description": "Runtime configuration file",
               "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
               "repeatable": false,
               "default_values": [],
               "possible_values": [],
@@ -24837,13 +27241,22 @@
           "invocation": "registry-render healthcheck",
           "about": "Probe a running server's /health",
           "long_about": null,
-          "usage": "registry-render healthcheck --runtime-config <ABSOLUTE_FILE>",
+          "usage": "registry-render healthcheck [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
           "arguments": [],
           "options": [
             {
               "display": "--runtime-config <ABSOLUTE_FILE>",
               "description": "Runtime configuration file",
               "always_required": true,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production",
+              "always_required": false,
               "repeatable": false,
               "default_values": [],
               "possible_values": [],
@@ -25884,8 +28297,178 @@
                 },
                 {
                   "display": "--deny-warnings",
-                  "description": "Exit 1 when any unaccepted warning is reported",
+                  "description": "Exit 1 when any unaccepted warning is reported. Development posture listings do not count",
                   "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--format <FORMAT>",
+                  "description": "Report encoding. Defaults to human even when stdout is piped. Evidence test and fixtures run also accept junit",
+                  "always_required": false,
+                  "repeatable": true,
+                  "default_values": [
+                    "human"
+                  ],
+                  "possible_values": [
+                    "human",
+                    "json"
+                  ],
+                  "environment": null
+                },
+                {
+                  "display": "--install-root <INSTALL_ROOT>",
+                  "description": "Installation generation storage directory",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--bin-dir <BIN_DIR>",
+                  "description": "Directory for the single public rstack executable link",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--asset-dir <ASSET_DIR>",
+                  "description": "Directory of already downloaded, verified release assets",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "-h, --help",
+                  "description": "Print help",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                }
+              ],
+              "constraints": [],
+              "subcommands": []
+            }
+          ]
+        },
+        {
+          "name": "client",
+          "invocation": "rstack client",
+          "about": "Generate application clients from registry projects",
+          "long_about": null,
+          "usage": "rstack client [OPTIONS] <COMMAND>",
+          "arguments": [],
+          "options": [
+            {
+              "display": "--format <FORMAT>",
+              "description": "Report encoding. Defaults to human even when stdout is piped. Evidence test and fixtures run also accept junit",
+              "always_required": false,
+              "repeatable": true,
+              "default_values": [
+                "human"
+              ],
+              "possible_values": [
+                "human",
+                "json"
+              ],
+              "environment": null
+            },
+            {
+              "display": "--install-root <INSTALL_ROOT>",
+              "description": "Installation generation storage directory",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--bin-dir <BIN_DIR>",
+              "description": "Directory for the single public rstack executable link",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--asset-dir <ASSET_DIR>",
+              "description": "Directory of already downloaded, verified release assets",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "-h, --help",
+              "description": "Print help",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            }
+          ],
+          "constraints": [],
+          "subcommands": [
+            {
+              "name": "generate",
+              "invocation": "rstack client generate",
+              "about": "Run the registry-generate bin installed in the application project",
+              "long_about": null,
+              "usage": "rstack client generate [OPTIONS] --register <REGISTER> --output <OUTPUT>",
+              "arguments": [],
+              "options": [
+                {
+                  "display": "--register <REGISTER>",
+                  "description": "Register member and project path, as member=path. Repeat for each register",
+                  "always_required": true,
+                  "repeatable": true,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--products <PRODUCTS>",
+                  "description": "Comma-separated product names",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--author-profile <AUTHOR_PROFILE>",
+                  "description": "Proposal author profile, as member=profile. Repeat to add profiles",
+                  "always_required": false,
+                  "repeatable": true,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--route-prefix <ROUTE_PREFIX>",
+                  "description": "Register route prefix, as member=/prefix. Repeat for each register",
+                  "always_required": false,
+                  "repeatable": true,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
+                  "display": "--output <OUTPUT>",
+                  "description": "TypeScript service file to generate",
+                  "always_required": true,
                   "repeatable": false,
                   "default_values": [],
                   "possible_values": [],
@@ -26001,7 +28584,7 @@
               "options": [
                 {
                   "display": "--deny-warnings",
-                  "description": "Refuse an unaccepted warning",
+                  "description": "Refuse an unaccepted warning. Development posture listings do not count",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -26073,7 +28656,7 @@
                 },
                 {
                   "display": "--ttl <DURATION>",
-                  "description": "Lifetime after readiness, from 1s to 24h. Defaults to 30m",
+                  "description": "Lifetime after readiness, from 1s to 24h. Defaults to 8h",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -26286,13 +28869,22 @@
       "invocation": "scheduling",
       "about": "Run and maintain Registry Scheduling",
       "long_about": null,
-      "usage": "scheduling --runtime-config <ABSOLUTE_FILE> <COMMAND>",
+      "usage": "scheduling [OPTIONS] --runtime-config <ABSOLUTE_FILE> <COMMAND>",
       "arguments": [],
       "options": [
         {
           "display": "--runtime-config <ABSOLUTE_FILE>",
           "description": "Runtime configuration file",
           "always_required": true,
+          "repeatable": false,
+          "default_values": [],
+          "possible_values": [],
+          "environment": null
+        },
+        {
+          "display": "--posture <POSTURE>",
+          "description": "Declared posture: development or production. Unset means production.",
+          "always_required": false,
           "repeatable": false,
           "default_values": [],
           "possible_values": [],
@@ -26324,9 +28916,18 @@
           "invocation": "scheduling serve",
           "about": "Run the Scheduling HTTP service",
           "long_about": null,
-          "usage": "scheduling --runtime-config <ABSOLUTE_FILE> serve",
+          "usage": "scheduling --runtime-config <ABSOLUTE_FILE> serve [OPTIONS]",
           "arguments": [],
           "options": [
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
             {
               "display": "-h, --help",
               "description": "Print help",
@@ -27010,7 +29611,7 @@
                 },
                 {
                   "display": "--deny-warnings",
-                  "description": "Exit 1 when the check reports a warning",
+                  "description": "Exit 1 when the check reports a warning. Development posture listings do not count",
                   "always_required": false,
                   "repeatable": false,
                   "default_values": [],
@@ -27054,6 +29655,15 @@
           "usage": "schedulingctl serve [OPTIONS] --runtime-config <ABSOLUTE_FILE>",
           "arguments": [],
           "options": [
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
             {
               "display": "--runtime-config <ABSOLUTE_FILE>",
               "description": "Runtime configuration file passed unchanged to the Scheduling runtime",
@@ -27163,8 +29773,26 @@
           ],
           "options": [
             {
+              "display": "--production",
+              "description": "Check under the production posture",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--deny-warnings",
-              "description": "Exit 1 when a warning is reported",
+              "description": "Exit 1 when a warning is reported. Development posture listings do not count",
               "always_required": false,
               "repeatable": false,
               "default_values": [],
@@ -27242,6 +29870,15 @@
             }
           ],
           "options": [
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
             {
               "display": "--format <FORMAT>",
               "description": "Emit the selected command's report in this format",
@@ -27412,6 +30049,15 @@
           "arguments": [],
           "options": [
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--runtime-config <FILE>",
               "description": "Runtime configuration file",
               "always_required": true,
@@ -27561,6 +30207,15 @@
           "arguments": [],
           "options": [
             {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
+            {
               "display": "--runtime-config <FILE>",
               "description": "Runtime configuration file",
               "always_required": true,
@@ -27622,6 +30277,15 @@
           "usage": "schedulingctl status [OPTIONS] --runtime-config <FILE>",
           "arguments": [],
           "options": [
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
             {
               "display": "--runtime-config <FILE>",
               "description": "Runtime configuration file",
@@ -27711,6 +30375,15 @@
               ],
               "options": [
                 {
+                  "display": "--posture <POSTURE>",
+                  "description": "Declared posture: development or production. Unset means production.",
+                  "always_required": false,
+                  "repeatable": false,
+                  "default_values": [],
+                  "possible_values": [],
+                  "environment": null
+                },
+                {
                   "display": "--runtime-config <FILE>",
                   "description": "Runtime configuration file",
                   "always_required": true,
@@ -27756,6 +30429,15 @@
           "usage": "schedulingctl intents [OPTIONS] --runtime-config <FILE>",
           "arguments": [],
           "options": [
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
             {
               "display": "--runtime-config <FILE>",
               "description": "Runtime configuration file",

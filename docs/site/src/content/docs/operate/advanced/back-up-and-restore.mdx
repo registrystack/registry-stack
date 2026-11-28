@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-18"
+last_reviewed: "2026-11-28"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -446,7 +446,7 @@ or production systems. Test credentials alone do not prevent delivery to a real 
 {/* Evidence: crates/registry-messaging/src/config.rs;
     release/notes/v0.40.0.md, "Rewrite configuration and rebuild packages" (a package the
     previous release built is refused, apply to a new database);
-    crates/registry-messaging/src/config.rs, TlsTermination::DevelopmentLoopback;
+    crates/registry-platform-config/src/blocks.rs, TlsTermination::DevelopmentLoopback;
     crates/registry-messaging/src/runtime.rs, assemble() and Listeners::serve_until();
     crates/registry-messaging/src/http.rs, Readiness and ready(). */}
 

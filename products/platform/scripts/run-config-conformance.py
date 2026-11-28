@@ -125,7 +125,8 @@ order in the work directory after each mutation write and before the check,
 each program taken from the binary directory, such as a lock that re-pins
 the project from the artifact a mutation just rewrote), `digests` (a
 SHA256SUMS file in the project copy to refresh), `removedKeys`,
-`retiredApiVersions`, and `init`
+`retiredApiVersions`, `postureWarningArtifacts` (a map from development
+warning code to the kind of an auxiliary document the check reads), and `init`
 ({command, file}: the command that starts a project in `{directory}`, and the
 file of this format it writes there, relative to that directory). A format
 with an `init` command gets its `run: init` cells even when its check is not
@@ -1298,7 +1299,7 @@ def parse_report(stdout: str) -> tuple[list[Any] | None, list[str]]:
 
 
 REQUIRED_MEMBERS = ("severity", "code", "path", "message", "suggestedAction")
-ALLOWED_MEMBERS = REQUIRED_MEMBERS + ("artifact", "source", "related", "rank")
+ALLOWED_MEMBERS = REQUIRED_MEMBERS + ("artifact", "source", "related", "rank", "scope", "acceptedReason")
 RELATED_MEMBERS = ("file", "line", "column", "path", "message")
 FINDING_RANKS = ("widens-access", "performance", "hygiene")
 
@@ -1334,6 +1335,22 @@ def shape_problems(diag: Any, kind: str | None) -> list[str]:
             problems.append("artifact is not text")
         elif kind is not None and diag["artifact"] != kind:
             problems.append(f"artifact is not {kind}")
+    if "scope" in diag:
+        scope = diag["scope"]
+        if diag.get("severity") != "warning":
+            problems.append("scope is present on an error")
+        if not isinstance(scope, dict) or set(scope) != {"file", "path"}:
+            problems.append("scope must contain file and path")
+        else:
+            file, path = scope["file"], scope["path"]
+            if not isinstance(file, str) or not file or Path(file).is_absolute() or ".." in Path(file).parts:
+                problems.append("scope.file is not a project-relative path")
+            if not isinstance(path, str) or (path and not path.startswith("/")):
+                problems.append("scope.path is not a JSON pointer")
+    if "acceptedReason" in diag:
+        accepted = diag["acceptedReason"]
+        if "scope" not in diag or not isinstance(accepted, str) or not accepted.strip():
+            problems.append("acceptedReason requires a scope and nonblank text")
     if "source" in diag:
         problems += source_problems(diag["source"])
     if "related" in diag:
@@ -1755,7 +1772,7 @@ def load_registry(path: Path) -> list[Format]:
 
 
 HARNESS_KEYS = {
-    "project", "copies", "set", "write", "values", "prepare", "afterWrite", "digests", "removedKeys", "retiredApiVersions", "init"
+    "project", "copies", "set", "write", "values", "prepare", "afterWrite", "digests", "removedKeys", "retiredApiVersions", "postureWarningArtifacts", "init"
 }
 
 
@@ -1775,6 +1792,13 @@ def load_harness(path: Path) -> dict[str, dict[str, Any]]:
         after_write = harness.get("afterWrite", [])
         if not isinstance(after_write, list) or not all(isinstance(command, str) for command in after_write):
             raise HarnessError(f"{path.name}: {format_id}: `afterWrite` is not a list of commands")
+        warning_artifacts = harness.get("postureWarningArtifacts", {})
+        if not isinstance(warning_artifacts, dict) or not all(
+            isinstance(code, str) and CODE.fullmatch(code) and code.partition(".")[2].startswith("posture.")
+            and isinstance(kind, str) and kind
+            for code, kind in warning_artifacts.items()
+        ):
+            raise HarnessError(f"{path.name}: {format_id}: invalid posture warning artifact map")
         init = harness.get("init")
         if init is not None and not (
             isinstance(init, dict)
@@ -2010,12 +2034,16 @@ def check_variant(
         problems += report
         if diagnostics is not None:
             compared = diagnostics
-            if any(argv[index:index + 2] == ["--posture", "development"] for index in range(len(argv))):
+            development = any(argv[index:index + 2] == ["--posture", "development"] for index in range(len(argv)))
+            if development:
                 compared = [diag for diag in diagnostics if not posture_listing(diag)]
                 posture_warnings = len(diagnostics) - len(compared)
             problems += match_problems(expected, [absolute(d, staged.work) for d in compared])
             for index, diag in enumerate(diagnostics):
-                problems += [f"diagnostic {index}: {p}" for p in shape_problems(diag, fmt.kind)]
+                kind = fmt.kind
+                if development and posture_listing(diag):
+                    kind = fmt.harness.get("postureWarningArtifacts", {}).get(diag["code"], kind)
+                problems += [f"diagnostic {index}: {p}" for p in shape_problems(diag, kind)]
     if case.human:
         code, stdout, stderr = run_command([*argv, *case.args], staged.work, env)
         problems += exit_problem(code, wanted, stderr, "human run: ")

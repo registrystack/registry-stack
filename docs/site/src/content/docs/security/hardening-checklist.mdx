@@ -8,7 +8,7 @@ source_repos:
   - registry-evidence
   - registry-breg
   - registry-casework
-last_reviewed: "2026-11-27"
+last_reviewed: "2026-11-28"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -65,7 +65,7 @@ of the shared audit writer that these products and Registry Render use.
     crates/registry-breg/src/field_encryption.rs, FieldEncryptionService::activate,
     FieldEncryptionService::open_existing, and insert_first_field_key;
     crates/registry-platform-crypto/src/transit_datakey.rs, TransitDataKeyClient;
-    crates/registry-breg/src/startup.rs, FieldEncryptionCustody;
+    crates/registry-breg/src/startup.rs, FieldEncryptionService::open_existing;
     crates/registry-bregctl/src/doctor.rs, startup_diagnostic. */}
 
 ## Secret files

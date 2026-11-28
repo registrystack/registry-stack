@@ -382,7 +382,8 @@ impl NativeCoordinator {
             "kind": "CoordinatorRuntimeConfig",
             "secretProviders": {"file": {"root": root.path()}},
             "database": {"runtimeUrlRef": "secret:file/runtime-database",
-                "migrationUrlRef": "secret:file/migration-database"},
+                "migrationUrlRef": "secret:file/migration-database",
+                "transport": "loopback-plaintext"},
             "namespace": namespace,
             "connections": {
                 "households": {

@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-27"
+last_reviewed: "2026-11-28"
 doc_type: how-to
 persona:
   - consumer or verifier
@@ -152,7 +152,7 @@ For each service, request the resource it names and make sure the token carries 
     crates/registry-casework/src/auth.rs required_scopes, registry_actor_kind;
     crates/registry-scheduling/src/config.rs scheduling:read;
     crates/registry-scheduling/src/auth.rs reads_scope;
-    crates/registry-messaging/src/config.rs default_scope_claim. */}
+    crates/registry-platform-config/src/caller_issuers.rs default_scope_claim. */}
 
 ## Provider behaviour
 

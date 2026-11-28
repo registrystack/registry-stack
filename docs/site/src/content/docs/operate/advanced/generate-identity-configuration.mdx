@@ -5,7 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-07"
+last_reviewed: "2026-11-28"
 doc_type: how-to
 locale: en
 standards_referenced: []
@@ -46,8 +46,10 @@ product's files. It merges the facts, reads your deployment file, and renders th
   An application without room for these claims within 16 token attributes is refused.
 - **Product settings the generator does not derive** are refused when the facts are written. BReg
   refuses an `authentication.authorityClaims.purpose` other than `registry_purpose`. Casework
-  refuses an `authentication.oidc.humanIdentity` other than the claim `registry_actor_kind` with
-  the value `human`. Evidence refuses a member of `authentication.oidc.claims` that renames the
+  refuses the removed `authentication.oidc.humanIdentity` field. Set `actorKind: human` or
+  `clientActorKinds` in the trusted issuer entry, or have the issuer write `registry_actor_kind: human`.
+  For delegated staff reads, put the represented person's claim and value in `representedHuman` on
+  that reader binding. Evidence refuses a member of `authentication.oidc.claims` that renames the
   actor kind, the purpose, the approver or a `registry_grant_` claim, because the issuer writes
   them under those names only. Evidence also refuses two task authorities whose issuers differ but
   derive the same assertion issuer id, and merging refuses two products that state different
@@ -96,7 +98,8 @@ product's files. It merges the facts, reads your deployment file, and renders th
   exponent is odd, with no leading zero in the modulus or the exponent. These are the lengths ThunderID requires at authentication; whether a point lies
   on its curve is not checked.
 
-{/* Evidence: crates/registry-thunderid-tooling/src/identity_generate.rs, generate(), and key_file_refusal(). */}
+{/* Evidence: crates/registry-thunderid-tooling/src/identity_generate.rs, generate(), and key_file_refusal();
+    crates/registry-casework/src/config.rs authentication.oidc.humanIdentity and representedHuman. */}
 
 ## Prerequisites
 

@@ -101,6 +101,8 @@ pub enum BRegHookVerificationError {
         "the webhook id differs from the envelope id. Check that the sender uses the envelope id"
     )]
     IdMismatch,
+    #[error("the hook delivery came from a development peer")]
+    DevelopmentPeer,
 }
 
 impl BRegHookVerificationError {
@@ -121,6 +123,7 @@ impl BRegHookVerificationError {
             Self::InvalidKey { .. } => "invalid-key",
             Self::InvalidEnvelope => "invalid-envelope",
             Self::IdMismatch => "id-mismatch",
+            Self::DevelopmentPeer => "development-peer",
         }
     }
 }
@@ -225,6 +228,7 @@ fn map_receiver_error(code: &str) -> Option<BRegHookVerificationError> {
         "body-too-large" => BodyTooLarge,
         "invalid-envelope" => InvalidEnvelope,
         "id-mismatch" => IdMismatch,
+        "development-peer" => DevelopmentPeer,
         _ => return None,
     })
 }

@@ -103,7 +103,6 @@ impl BregDev {
             String::from_utf8_lossy(&init.stderr)
         );
         extend_generated_contact_project(&project);
-        add_minimal_dev_plan(&project);
 
         let started = rstack
             .command()
@@ -169,20 +168,6 @@ impl BregDev {
         guard.origin = origin;
         guard
     }
-}
-
-/// Adds the minimal example's `rstack dev` plan and scenarios, which name the
-/// `editor` person the generated contact project's profile expects.
-fn add_minimal_dev_plan(project: &Path) {
-    let example =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../products/breg/examples/minimal");
-    std::fs::copy(example.join("dev.yaml"), project.join("dev.yaml")).expect("copy dev plan");
-    std::fs::create_dir(project.join("dev")).expect("create dev directory");
-    std::fs::copy(
-        example.join("dev/scenarios.yaml"),
-        project.join("dev/scenarios.yaml"),
-    )
-    .expect("copy dev scenarios");
 }
 
 fn required_executable(name: &str) -> PathBuf {

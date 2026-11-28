@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-27"
+last_reviewed: "2026-11-28"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -108,7 +108,7 @@ After verifying its signature, a production Coordinator refuses it with
     signed_development_events_follow_posture_after_authentication. */}
 
 {/* Evidence: crates/registry-coordinator/src/http.rs hsts_is_omitted_only_in_development_on_loopback;
-    crates/registry-coordinator/tests/cli_remote.rs doctor_refuses_a_development_peer_only_in_production;
+    crates/registry-coordinator/tests/cli_remote.rs typed_commands_refuse_a_development_peer_only_in_production;
     crates/registry-coordinator-client/src/client.rs send. */}
 
 {/* Evidence: crates/registry-coordinator/src/http.rs http_edge, ready_body;
@@ -355,11 +355,10 @@ redirects.
 
 {/* Evidence: crates/registry-platform-config/src/blocks.rs OidcIssuerConfig;
     crates/registry-coordinator/src/access.rs AccessConfig, IssuerNetworkPolicy,
-    fetch_discovery_for_issuer, declared_jwks_fetch_policy,
-    http_issuer_opt_in_has_a_startup_diagnostic;
+    fetch_discovery_for_issuer, declared_jwks_fetch_policy, issuer_diagnostics;
     crates/registry-coordinator/tests/deployment_surface.rs
     a_remote_http_issuer_is_refused_without_the_opt_in,
-    runtime_reads_the_explicit_http_issuer_opt_in;
+    runtime_reads_the_explicit_http_issuer_opt_in_only_in_development;
     crates/registry-platform-oidc/src/lib.rs
     non_loopback_http_requires_the_named_opt_in_while_loopback_does_not,
     declared_loopback_http_jwks_under_an_https_issuer_is_accepted_without_the_opt_in,
@@ -1053,7 +1052,7 @@ Each residual names the condition under which it applies, its consequence, and t
     a_cross_origin_jwks_must_use_https_even_under_the_http_opt_in,
     discovered_cross_origin_private_or_loopback_jwks_stays_refused,
     cloud_metadata_is_refused_for_declared_and_discovered_key_endpoints;
-    crates/registry-coordinator/src/access.rs http_issuer_opt_in_has_a_startup_diagnostic. */}
+    crates/registry-coordinator/tests/deployment_surface.rs runtime_reads_the_explicit_http_issuer_opt_in_only_in_development. */}
 
 ### COORDINATOR-RES-16: Proposal wait commitments omit the BReg connection
 

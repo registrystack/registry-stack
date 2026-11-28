@@ -5,7 +5,7 @@ status: current
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: "2026-11-27"
+last_reviewed: "2026-11-28"
 doc_type: explanation
 locale: en
 standards_referenced: []
@@ -588,14 +588,14 @@ The residuals refer to these obligations by number.
    When the shared public-key rule refuses a key, the startup log and `bregctl doctor` name the rule
    and, for a rule about one key, the key's position, never a value.
    The algorithm, `use`, `key_ops`, `kid` and key-count rules name no position.
-   {/* Evidence: crates/registry-breg/src/runtime_config.rs, PlaintextDatabase,
+   {/* Evidence: crates/registry-breg/src/runtime_config.rs, DatabaseTransport,
         validate_static_jwks, PublicOrigin::parse;
         crates/registry-breg/tests/runtime_config.rs,
         non_loopback_http_issuer_refusal_names_the_opt_in,
         static_jwks_validation_refuses_unsafe_documents_value_free,
         a_static_key_set_with_unknown_public_members_loads,
         public_origin_accepts_only_explicit_web_origins_and_redacts_debug;
-        crates/registry-bregctl/src/doctor.rs, insecure_http_warning. */}
+        crates/registry-breg/src/runtime_config.rs, insecure_http_startup_diagnostic. */}
 8. Keep the metrics listener private.
    `metricsListener.bind` must be a loopback or private address; it carries no authentication.
    A wildcard bind needs an explicit `metricsListener.networkExposure: container-private`, and the metrics port must not be published.

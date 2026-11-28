@@ -344,7 +344,7 @@ def authoring_refused(start, names, every, linked) -> set[str]:
         else:
             permits = lambda name: (
                 engine_may_reach("registry-adapterctl", name)
-                or name == CLI_REPORT
+                or name in {CLI_REPORT, "registry-rstack-dev"}
                 or (name == IDENTITY_TOOLING and dependency_name == IDENTITY_TOOLING)
             )
         for reached in {dependency, *linked_closure(dependency, linked)}:
