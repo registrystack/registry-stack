@@ -27,6 +27,8 @@ use super::{failed, private, refused, DevResult, DATABASE_NAME, MIGRATION_ROLE, 
 /// The issuer and audience the session's tokens carry.
 pub(super) const ISSUER: &str = "https://issuer.messagingctl-dev.invalid";
 pub(super) const AUDIENCE: &str = "urn:registrystack:messaging-dev";
+/// The id of the one issuer entry a session's runtime declares.
+pub(super) const SESSION_ISSUER_ID: &str = "session";
 /// The key id of the session's signing key.
 const KEY_ID: &str = "messagingctl-dev";
 /// How long a development token stays valid.
@@ -219,9 +221,10 @@ pub(super) fn runtime_document_with_issuer(
 ) -> Result<String, serde_norway::Error> {
     let mut members = runtime_members(project, root, loaded, endpoints);
     if let Some(binding) = borrowed {
-        members["authentication"]["oidc"]["issuer"] = json!(binding.issuer);
-        members["authentication"]["oidc"]["audience"] = json!(binding.resource);
-        members["authentication"]["oidc"]["scopeClaim"] = json!("scope");
+        let entry = &mut members["authentication"]["oidc"]["issuers"][SESSION_ISSUER_ID];
+        entry["issuer"] = json!(binding.issuer);
+        entry["audience"] = json!(binding.resource);
+        entry["scopeClaim"] = json!("scope");
     }
     let members = serde_norway::to_string(&members)?;
     Ok(format!(
@@ -304,14 +307,14 @@ fn runtime_members(
             "migrationUrlRef": "secret:file/migration-database-url",
             "caBundleRef": "secret:file/postgres-ca.pem",
         },
-        "authentication": {"oidc": {
+        "authentication": {"oidc": {"issuers": {SESSION_ISSUER_ID: {
             "issuer": ISSUER,
             "audience": AUDIENCE,
             "allowedClients": "from-package",
             // The session's signing key is generated beside this file, so
             // the runtime reads its key set directly.
             "jwksSource": {"type": "static", "documentRef": "secret:file/jwks.json"},
-        }},
+        }}}},
         "audit": {
             "destination": "file",
             "path": root.join("audit/messaging.ndjson"),

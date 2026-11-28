@@ -738,12 +738,12 @@ fn write_runtime(
             "migrationUrlRef": database_reference,
             "testOnlyPlaintext": true
         },
-        "authentication": {"oidc": {
+        "authentication": {"oidc": {"issuers": {"main": {
             "issuer": "https://identity.example.test",
             "audience": "urn:example:messaging",
             "jwksSource": {"type": "static", "documentRef": format!("secret:env/{jwks_name}")},
             "allowedClients": ["operations-console"]
-        }},
+        }}}},
         "audit": audit
     });
     std::fs::write(

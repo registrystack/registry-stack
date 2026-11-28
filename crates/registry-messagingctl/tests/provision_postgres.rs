@@ -85,12 +85,14 @@ database:
   caBundleRef: secret:file/postgres-ca.pem
 authentication:
   oidc:
-    issuer: https://identity.example.test
-    audience: urn:example:messaging
-    allowedClients: [case-system, operations-console]
-    jwksSource:
-      type: static
-      documentRef: secret:file/jwks.json
+    issuers:
+      main:
+        issuer: https://identity.example.test
+        audience: urn:example:messaging
+        allowedClients: [case-system, operations-console]
+        jwksSource:
+          type: static
+          documentRef: secret:file/jwks.json
 audit:
   destination: file
   path: {audit}

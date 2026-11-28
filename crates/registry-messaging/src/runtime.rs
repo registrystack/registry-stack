@@ -445,14 +445,13 @@ pub async fn assemble(
         &mut transports,
     )?);
 
-    let keys = config.jwks_fetcher(&secrets).await?;
-    let admitted = config.admitted_clients(loaded.package.access_profiles())?;
-    let authenticator = Arc::new(MessagingAuthenticator::new(
-        config.verifier_profile(&admitted),
-        keys,
-        loaded.package.access_profiles().clone(),
-        config.binds_assertion_issuers(),
-    ));
+    let sources = config
+        .issuer_sources(&secrets, loaded.package.access_profiles())
+        .await?;
+    let authenticator = Arc::new(
+        MessagingAuthenticator::new(sources, loaded.package.access_profiles().clone())
+            .map_err(|_| RuntimeConfigError::Oidc)?,
+    );
 
     let audit_secret = resolve_audit_secret(&secrets, config.audit.key.hash_key_ref.as_str())?;
     let audit_profile = AuditProfile::production_from_secret_bytes(zeroize::Zeroizing::new(

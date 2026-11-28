@@ -700,13 +700,13 @@ fn install_runtime_constraints(schema: &mut Value) {
         set_definition_property(schema, definition, property, "pattern", json!("^/"));
     }
     // Every access profile resolves its caller from the matched client, so
-    // a Messaging deployment always states the clients it admits. The shared
-    // block requires the member and also admits the keyword `unrestricted`,
-    // which this runtime refuses in every mode, so the member is restated
-    // as `from-package` or the list, and the shared definition is dropped.
-    if let Some(clients) = schema.pointer_mut("/$defs/OidcConfig/properties/allowedClients") {
+    // every issuer entry states the clients it admits. The shared block
+    // requires the member and also admits the keyword `unrestricted`, which
+    // this runtime refuses in every mode, so the member is restated as
+    // `from-package` or the list, and the shared definition is dropped.
+    if let Some(clients) = schema.pointer_mut("/$defs/IssuerConfig/properties/allowedClients") {
         *clients = json!({
-            "description": "The clients whose access tokens are admitted. Required in every\nfile: `from-package` admits the requester clients of the package's access\nprofiles, and a list of at least one distinct client must cover them. An\nomitted or empty list, an empty or repeated client, and `unrestricted` are\nrefused.",
+            "description": "The clients whose access tokens this issuer admits. Required in every\nentry: `from-package` admits the requester clients of the package's access\nprofiles, and a list of at least one distinct client admits those clients.\nA client belongs to one issuer, and the lists of all entries together must\ncover every client a profile names. An omitted or empty list, an empty or\nrepeated client, and `unrestricted` are refused.",
             "oneOf": [
                 {"type": "string", "const": "from-package"},
                 {
@@ -717,11 +717,6 @@ fn install_runtime_constraints(schema: &mut Value) {
                 },
             ],
         });
-    }
-    if let Some(issuers) =
-        schema.pointer_mut("/$defs/OidcConfig/properties/assertionIssuers/description")
-    {
-        *issuers = json!("Assertion authorities each client may exchange a subject token from,\nkeyed by client identifier. Omitted, no assertion-issuer rule applies;\nwritten, it lists at least one client, each with at least one\nauthority. Once a client is listed, a token it exchanged is accepted\nonly for one of that client's declared authorities, and a client that\nis not listed may exchange from no authority.");
     }
     if let Some(definitions) = schema.pointer_mut("/$defs").and_then(Value::as_object_mut) {
         definitions.remove("OidcAllowedClients");
@@ -843,7 +838,7 @@ mod tests {
         // `allowedClients` is decided in every file: the keyword
         // `from-package` or a non-empty list. The runtime refuses
         // `unrestricted` in every mode, so the schema does not offer it.
-        let oidc = &document["$defs"]["OidcConfig"];
+        let oidc = &document["$defs"]["IssuerConfig"];
         assert_eq!(
             oidc["required"]
                 .as_array()
@@ -865,9 +860,15 @@ mod tests {
         assert_eq!(forms[1]["items"]["minLength"], 1);
         assert!(document["$defs"].get("OidcAllowedClients").is_none());
         assert!(document["$defs"].get("OidcPackageAllowedClients").is_none());
+        for definition in ["OidcConfig", "IssuerConfig"] {
+            assert_eq!(
+                document["$defs"][definition]["additionalProperties"], false,
+                "{definition} refuses unknown keys"
+            );
+        }
         assert_eq!(
-            document["$defs"]["OidcConfig"]["additionalProperties"], false,
-            "unknown keys are refused"
+            document["$defs"]["OidcConfig"]["properties"]["issuers"]["minProperties"], 1,
+            "at least one issuer entry"
         );
         for definition in ["MetricsListenerConfig", "PrivateListenerConfig"] {
             assert!(

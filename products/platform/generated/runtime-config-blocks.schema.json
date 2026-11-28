@@ -468,13 +468,13 @@
       "description": "The shared block `oidc-issuers`: the `issuers` map from an issuer id to an\nentry. A product holds it through the shared-block marker\n`registry-platform-yaml/shared-block/oidc-issuers`.",
       "properties": {
         "issuers": {
-          "additionalProperties": false,
+          "additionalProperties": {
+            "$ref": "#/$defs/CallerIssuerCore_OidcAllowedClients"
+          },
           "description": "The issuers a token may come from, by issuer id.",
           "minProperties": 1,
-          "patternProperties": {
-            "^[a-z][a-z0-9_-]{0,63}$": {
-              "$ref": "#/$defs/CallerIssuerCore_OidcAllowedClients"
-            }
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
           },
           "type": "object"
         }
@@ -682,6 +682,11 @@
         "private-address",
         "container-private"
       ],
+      "type": "string"
+    },
+    "LocalId": {
+      "description": "A local identifier: a lowercase letter, then up to 63 lowercase letters, digits, `_`, or `-`.",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
       "type": "string"
     },
     "MetricsListenerConfig": {

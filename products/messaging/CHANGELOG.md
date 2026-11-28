@@ -14,6 +14,13 @@
 - BREAKING: Successful `/ready` replies include `posture` and `developmentSettings` in JSON. Migration: No change for probes that read the status code.
 - BREAKING: Audit lines include the process posture. Migration: Audit readers with a closed line parser accept the posture member.
 - BREAKING: Development responses carry `Registry-Posture: development`, and production peers refuse development responses. Migration: Point production runtimes at production peers.
+- BREAKING: The runtime accepts tokens from an issuer set. `authentication.oidc` holds `issuers`, keyed by issuer id, and each entry carries `issuer`, `audience`, `allowedClients`, `jwksSource`, `allowInsecureHttp`, `scopeClaim`, `accessTokenType`, `actorKind`, `clientActorKinds` and `assertionIssuers`. A client belongs to one issuer, and the lists of all entries together cover every client an access profile names. Migration: Move the members of `authentication.oidc` under `authentication.oidc.issuers.<id>`. Messaging still refuses `allowedClients: unrestricted`.
+- BREAKING: An access token typed `JWT` is accepted only when the entry states `accessTokenType: jwt`, and an ID token stays refused in either setting. Migration: State `accessTokenType: jwt` for an issuer that does not type its access tokens `at+jwt`.
+- BREAKING: A token that grants only OpenID Connect scopes, or none, is refused unless the issuer or client declares an actor kind. Migration: Declare `actorKind` or `clientActorKinds` for the entry, or issue tokens that carry the profile's scopes.
+- A runtime declares the kind of a caller with `actorKind` for an issuer or `clientActorKinds` for named clients. A token without a kind claim is an unspecified caller and reaches an access profile unless the profile pins a kind, which refuses it with 403 `profile.not-authorized`.
+- A development refusal body names the `failedCheck`. A production body is unchanged.
+- `messagingctl generate identity-facts` takes `--issuer ISSUER_ID`, required when the runtime has more than one entry. A missing or unknown id is refused with `identity.facts.issuer-required` or `identity.facts.unknown-issuer`. The facts describe the entry that was named.
+- `messagingctl check` lists the production settings the runtime states explicitly as `explicitProductionSettings`.
 
 - Messaging counts every refused request by the check that refused it, in
   `messaging_request_refusals_total{check}` on the metrics listener, published

@@ -60,25 +60,43 @@ database:
   # transport: verified-tls
 authentication:
   oidc:
-    issuer: https://identity.example.test/realms/registry
-    audience: urn:example:messaging
-    # The claim carrying the accepted OAuth scopes; `scope` when
-    # omitted. An issuer that emits `registry_scopes` names it here.
-    # scopeClaim: registry_scopes
-    # The OAuth clients this runtime admits. The list is never empty, and
-    # every client an access profile in messaging.yaml names must be listed.
-    allowedClients: [case-system, operations-console]
-    # `assertionIssuers` maps a client id to the assertion authorities it may
-    # exchange a subject token from. A deployment that performs no token
-    # exchange leaves it empty, and an exchanged token is then refused.
-    # assertionIssuers:
-    #   case-system: [https://issuer.example.test/assertions]
-    # Signing keys come from issuer discovery by default. Declare the static
-    # alternative when the runtime cannot reach the issuer's discovery
-    # document.
-    # jwksSource:
-    #   type: static
-    #   documentRef: secret:file/jwks.json
+    # The issuers whose access tokens this runtime accepts, each under an id
+    # of your choice. A client belongs to one issuer. The entries' clients
+    # together cover every client an access profile in messaging.yaml names.
+    issuers:
+      main:
+        issuer: https://identity.example.test/realms/registry
+        audience: urn:example:messaging
+        # The access-token type admitted: `at+jwt` when omitted. An issuer
+        # that types its access tokens `JWT` is named here. An ID token is
+        # refused under either type, so the audience names this service and
+        # no client.
+        # accessTokenType: at+jwt
+        # The claim carrying the accepted OAuth scopes; `scope` when
+        # omitted. An issuer that emits `registry_scopes` names it here.
+        # scopeClaim: registry_scopes
+        # The OAuth clients this issuer admits: a list, or `from-package` for
+        # the clients the access profiles in messaging.yaml name. The list is
+        # never empty, and `unrestricted` is refused.
+        allowedClients: [case-system, operations-console]
+        # The caller kind of every token from this issuer, or of each named
+        # client's tokens, when the issuer does not emit one. Write one of
+        # the two. A token that names another kind is refused.
+        # actorKind: service
+        # clientActorKinds:
+        #   case-system: service
+        # `assertionIssuers` maps a client id to the assertion authorities it
+        # may exchange a subject token from. A deployment that performs no
+        # token exchange leaves it empty, and an exchanged token is then
+        # refused.
+        # assertionIssuers:
+        #   case-system: [https://issuer.example.test/assertions]
+        # Signing keys come from issuer discovery by default. Declare the
+        # static alternative when the runtime cannot reach the issuer's
+        # discovery document.
+        # jwksSource:
+        #   type: static
+        #   documentRef: secret:file/jwks.json
 audit:
   destination: file
   path: /var/lib/registry-messaging/audit.ndjson

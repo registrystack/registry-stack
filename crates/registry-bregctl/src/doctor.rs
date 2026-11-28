@@ -393,7 +393,7 @@ fn startup_diagnostic(error: StartupError) -> Diagnostic {
         StartupError::AuthenticationClientsUnlisted => (
             "startup.authentication.clients-unlisted",
             "authentication",
-            "the project names clients in requesterClients, trusted actors, or consent recipients that authentication.oidc.allowedClients does not list; list each of them in allowedClients, because the keyword unrestricted lists none",
+            "the project names clients in requesterClients, trusted actors, or consent recipients that no authentication.oidc.issuers entry lists in allowedClients; list each of them in the allowedClients of an entry, because the keyword unrestricted lists none",
         ),
         StartupError::EventDestinations(_) => unreachable!("handled above"),
         StartupError::RetainedHookBindings { .. } => {
@@ -1128,6 +1128,18 @@ mod tests {
         let unlisted = startup_diagnostic(StartupError::AuthenticationClientsUnlisted);
         assert_eq!(unlisted.code, "startup.authentication.clients-unlisted");
         assert_eq!(unlisted.path, "authentication");
+        assert!(
+            unlisted.message.contains("authentication.oidc.issuers"),
+            "{}",
+            unlisted.message
+        );
+        assert!(
+            !unlisted
+                .message
+                .contains("authentication.oidc.allowedClients"),
+            "{}",
+            unlisted.message
+        );
         for fix in [
             "requesterClients",
             "trusted actors",

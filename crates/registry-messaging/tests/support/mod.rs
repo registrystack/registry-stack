@@ -22,7 +22,7 @@ use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use jsonwebtoken::{Algorithm, EncodingKey, Header};
 use registry_messaging::activation::ApplyRequest;
 use registry_messaging::audit::MessagingAudit;
-use registry_messaging::auth::MessagingAuthenticator;
+use registry_messaging::auth::{IssuerSource, MessagingAuthenticator};
 use registry_messaging::config::{AdmittedClients, RuntimeConfig};
 use registry_messaging::dispatch::{dispatcher, Transports};
 use registry_messaging::http::{metrics_router, router, HttpState, Readiness};
@@ -37,7 +37,7 @@ use registry_messaging::runtime::apply_activation;
 use registry_messaging::store::PostgresStore;
 use registry_messaging_core::{AccessProfile, AccessProfiles, Package, IDEMPOTENCY_KEY_HEADER};
 use registry_platform_audit::{AuditProfile, AuditWriter};
-use registry_platform_oidc::{JwksFetcher, JwksFetcherConfig, TokenVerifierConfig};
+use registry_platform_oidc::{DeclaredKinds, JwksFetcher, JwksFetcherConfig, TokenVerifierConfig};
 use serde_json::{json, Value};
 use tower::ServiceExt as _;
 use uuid::Uuid;
@@ -342,11 +342,9 @@ impl Harness {
         let admitted = config
             .admitted_clients(package.access_profiles())
             .expect("the clients the runtime file admits");
-        let authenticator = Arc::new(MessagingAuthenticator::new(
-            verifier(&admitted),
-            keys(),
+        let authenticator = Arc::new(authenticator(
+            &admitted["main"],
             package.access_profiles().clone(),
-            false,
         ));
         let app = router(HttpState {
             posture: registry_platform_config::PostureReport::new(
@@ -391,6 +389,8 @@ impl Harness {
         self.config
             .admitted_clients(self.package.access_profiles())
             .expect("the clients the runtime file admits")
+            .remove("main")
+            .expect("the main issuer entry")
     }
 
     pub async fn publish(&self) {}
@@ -522,12 +522,7 @@ impl Harness {
             posture: registry_platform_config::PostureReport::new(
                 registry_messaging::config::DEFAULT_POSTURE,
             ),
-            authenticator: Arc::new(MessagingAuthenticator::new(
-                verifier(&self.admitted()),
-                keys(),
-                profiles,
-                false,
-            )),
+            authenticator: Arc::new(authenticator(&self.admitted(), profiles)),
             readiness: Readiness::Store {
                 store: self.store.clone(),
                 database_id: self.config.database_id().to_owned(),
@@ -567,11 +562,9 @@ impl Harness {
             posture: registry_platform_config::PostureReport::new(
                 registry_messaging::config::DEFAULT_POSTURE,
             ),
-            authenticator: Arc::new(MessagingAuthenticator::new(
-                verifier(&self.admitted()),
-                keys(),
+            authenticator: Arc::new(authenticator(
+                &self.admitted(),
                 self.package.access_profiles().clone(),
-                false,
             )),
             readiness: Readiness::Store {
                 store: self.store.clone(),
@@ -722,12 +715,12 @@ fn write_runtime(root: &Path, package: &Path, database: &str, providers: Value) 
             "migrationUrlRef": database,
             "testOnlyPlaintext": true
         },
-        "authentication": {"oidc": {
+        "authentication": {"oidc": {"issuers": {"main": {
             "issuer": ISSUER,
             "audience": AUDIENCE,
             "jwksSource": {"type": "static", "documentRef": format!("secret:env/{jwks_name}")},
             "allowedClients": "from-package"
-        }},
+        }}}},
         "audit": {
             "path": root.join("audit").join("messaging.jsonl"),
             "hashKeyRef": format!("secret:env/{audit_name}")
@@ -753,6 +746,20 @@ fn verifier(admitted: &AdmittedClients) -> TokenVerifierConfig {
     )
     .with_scope_claim("registry_scopes")
     .with_allowed_clients(admitted.as_slice().to_vec())
+}
+
+/// The authenticator over the runtime's one issuer entry.
+fn authenticator(admitted: &AdmittedClients, profiles: AccessProfiles) -> MessagingAuthenticator {
+    MessagingAuthenticator::new(
+        vec![IssuerSource::new(
+            "main",
+            verifier(admitted),
+            keys(),
+            DeclaredKinds::None,
+        )],
+        profiles,
+    )
+    .expect("one issuer entry")
 }
 
 fn keys() -> Arc<JwksFetcher> {

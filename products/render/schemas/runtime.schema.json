@@ -506,13 +506,13 @@
       "description": "Serving-adapter OIDC configuration. The pure rendering library never reads it.",
       "properties": {
         "issuers": {
-          "additionalProperties": false,
+          "additionalProperties": {
+            "$ref": "#/$defs/IssuerRuntime"
+          },
           "description": "The issuers a token may come from, by issuer id.",
           "minProperties": 1,
-          "patternProperties": {
-            "^[a-z][a-z0-9_-]{0,63}$": {
-              "$ref": "#/$defs/IssuerRuntime"
-            }
+          "propertyNames": {
+            "$ref": "#/$defs/LocalId"
           },
           "type": "object"
         },

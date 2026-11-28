@@ -33,6 +33,10 @@ use registry_thunderid_tooling::identity_facts::{
 const PRODUCT: &str = "breg";
 /// The claim BReg reads scopes from unless the runtime names another.
 const DEFAULT_SCOPE_CLAIM: &str = "scope";
+/// The claim the hosted generator derives an actor kind under.
+const ACTOR_KIND_CLAIM: &str = identity_facts::ACTOR_KIND_CLAIM;
+/// The runtime's code for a requester client no issuer entry lists.
+const CLIENTS_UNLISTED_CODE: &str = "breg.runtime.clients-unlisted";
 /// The code of the refusal for two or more issuer entries and no `--issuer`.
 pub(crate) const ISSUER_REQUIRED_CODE: &str = "identity.facts.issuer-required";
 /// The code of the refusal for an `--issuer` that names no entry.
@@ -79,6 +83,8 @@ pub(crate) fn authority_claims(compiled: &CompiledRegistry) -> Result<AuthorityC
 pub(crate) enum FactsError {
     /// The configuration or project cannot be stated as facts.
     Unstatable(String),
+    /// A profile names a requester client no issuer entry admits.
+    ClientsUnlisted(String),
     /// The runtime declares several issuer entries and none was named.
     IssuerRequired(String),
     /// The named issuer is not an entry of the runtime.
@@ -93,6 +99,7 @@ impl FactsError {
         match self {
             Self::IssuerRequired(_) => ISSUER_REQUIRED_CODE,
             Self::UnknownIssuer(_) => UNKNOWN_ISSUER_CODE,
+            Self::ClientsUnlisted(_) => CLIENTS_UNLISTED_CODE,
             Self::Unstatable(_) | Self::Encode => "identity-facts.unstatable",
             Self::Write(_) => "identity-facts.output-failed",
         }
@@ -103,6 +110,7 @@ impl fmt::Display for FactsError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Unstatable(message)
+            | Self::ClientsUnlisted(message)
             | Self::IssuerRequired(message)
             | Self::UnknownIssuer(message) => formatter.write_str(message),
             Self::Encode => formatter.write_str("the identity facts could not be encoded"),
@@ -206,9 +214,8 @@ impl<'a> Grant<'a> {
                 .then(|| self.requester_clients.clone()),
             exchange: None,
             selected_by: BTreeMap::new(),
-            // The profile admits a caller of this kind only, however the
-            // caller reaches it, so the facts state a requirement and not a
-            // selector.
+            // A human or service profile admits a caller of this kind only,
+            // so the facts state a requirement and not a selector.
             actor_kind: self.actor_kind.map(facts_actor_kind),
             required_claims: required_claims(principal, &self.claims)
                 .into_iter()
@@ -267,7 +274,8 @@ fn required_claims(principal: &str, claims: &BTreeSet<&str>) -> BTreeSet<String>
 fn facts_actor_kind(kind: ActorKindSource) -> FactsActorKind {
     match kind {
         ActorKindSource::Human => FactsActorKind::Human,
-        ActorKindSource::Agent => FactsActorKind::Agent,
+        // Profiles that require an agent never reach here; see `facts`.
+        ActorKindSource::Agent => unreachable!("agent profiles are left out of the facts"),
         ActorKindSource::Service => FactsActorKind::Service,
     }
 }
@@ -294,14 +302,24 @@ fn selected<'a>(
 }
 
 /// The facts a runtime configuration and the project it serves state for one
-/// issuer entry. When the runtime declares several entries, a profile that
+/// issuer entry, and the ids of the access profiles left out of them.
+///
+/// A profile that requires an agent is left out: BReg refuses every direct
+/// token on it and reaches it only through a delegated or task-grant token,
+/// which hosted generation does not issue. A grant naming it is then refused
+/// by the generator as an unknown profile. When the runtime declares several entries, a profile that
 /// names requester clients is stated with those the entry admits, and left
 /// out when it admits none of them.
+pub(crate) struct Stated {
+    pub facts: IdentityFacts,
+    pub omitted_agent_profiles: BTreeSet<String>,
+}
+
 pub(crate) fn facts(
     config: &RuntimeConfig,
     compiled: &CompiledRegistry,
     issuer: Option<&str>,
-) -> Result<IdentityFacts, FactsError> {
+) -> Result<Stated, FactsError> {
     let entry = selected(config, issuer)?;
     let several_issuers = config.authentication().oidc().issuers().count() > 1;
     let verifier = entry.token_verifier_config();
@@ -314,7 +332,11 @@ pub(crate) fn facts(
     let authentication = config.authentication();
     let scope_claim = verifier.scope_claim.as_str();
     let claim_names = authentication.authority_claim_config();
-    let kind_claim = claim_names.actor_kind_claim();
+    if claim_names.actor_kind_claim() != ACTOR_KIND_CLAIM {
+        return Err(unstatable(format!(
+            "authentication.authorityClaims.contextual.actorKind is not the default `{ACTOR_KIND_CLAIM}`, which hosted generation does not support yet; set it to `{ACTOR_KIND_CLAIM}`"
+        )));
+    }
     if claim_names
         .purpose_claim()
         .is_some_and(|claim| claim != PURPOSE_CLAIM)
@@ -333,21 +355,32 @@ pub(crate) fn facts(
     // The verifier accepts the scope claim as a space-separated string or an
     // array of strings. The facts state the array, which needs no separator.
     if scope_claim != DEFAULT_SCOPE_CLAIM {
+        refuse_reserved_scope_claim(&facts, scope_claim, entry.id())?;
         facts
             .claims
             .insert(scope_claim.to_owned(), ClaimType::StringArray);
     }
-    // The claim the runtime reads a principal's kind from. A token that
-    // carries none authenticates with no kind, so a generated client states
-    // one under the name the runtime reads.
+    // The generator derives a kind for every principal. A token that carries
+    // none authenticates with no kind, so every generated client states one.
     facts
         .claims
-        .insert(kind_claim.to_owned(), ClaimType::String);
+        .insert(ACTOR_KIND_CLAIM.to_owned(), ClaimType::String);
 
     let mut profiles: BTreeMap<String, FactsProfile> = BTreeMap::new();
+    let mut omitted_agent_profiles = BTreeSet::new();
     for grant in compiled_grants(compiled) {
+        if grant.actor_kind == Some(ActorKindSource::Agent) {
+            omitted_agent_profiles.insert(grant.id.to_owned());
+            continue;
+        }
         let mut stated = grant.facts()?;
+        // A renamed scope claim is how the issuer selects this profile: the
+        // principal must carry exactly the scopes the profile requires there.
+        if scope_claim != DEFAULT_SCOPE_CLAIM {
+            stated.selected_by = BTreeMap::from([(scope_claim.to_owned(), stated.scopes.clone())]);
+        }
         if several_issuers && !stated.requester_clients.as_ref().is_none_or(Vec::is_empty) {
+            refuse_clients_no_entry_admits(config, &stated)?;
             let requesters: Vec<String> = stated
                 .requester_clients
                 .iter()
@@ -392,15 +425,16 @@ pub(crate) fn facts(
                 stated.id
             )));
         }
-        if let Some(client) = stated
+        if stated
             .requester_clients
             .iter()
             .flatten()
-            .find(|client| !allowed.admits(client))
+            .any(|client| !allowed.admits(client))
         {
             return Err(unstatable(format!(
-                "the access profile `{}` names the client `{client}`, which authentication.oidc.allowedClients does not admit",
-                stated.id
+                "the access profile `{}` names a requester client that authentication.oidc.issuers.{}.allowedClients does not admit",
+                stated.id,
+                entry.id()
             )));
         }
     }
@@ -437,7 +471,70 @@ pub(crate) fn facts(
             "the facts derived from the configuration are not valid: {error}"
         ))
     })?;
-    Ok(facts)
+    Ok(Stated {
+        facts,
+        omitted_agent_profiles,
+    })
+}
+
+/// Refuse a scope claim name the facts reader reserves. The reader exposes no
+/// check of its own, so the name is declared in an otherwise valid document and
+/// the reader decides.
+fn refuse_reserved_scope_claim(
+    base: &IdentityFacts,
+    scope_claim: &str,
+    entry: &str,
+) -> Result<(), FactsError> {
+    let reads = |facts: &IdentityFacts| {
+        facts
+            .to_yaml()
+            .map_err(|_| FactsError::Encode)
+            .map(|yaml| identity_facts::read("identity-facts", yaml.as_bytes()).is_ok())
+    };
+    let mut probe = base.clone();
+    if !reads(&probe)? {
+        // The base itself is refused: the final read-back reports it.
+        return Ok(());
+    }
+    probe
+        .claims
+        .insert(scope_claim.to_owned(), ClaimType::StringArray);
+    if reads(&probe)? {
+        return Ok(());
+    }
+    Err(unstatable(format!(
+        "authentication.oidc.issuers.{entry}.scopeClaim names a claim hosted generation reserves for its own use; name a dedicated scope claim"
+    )))
+}
+
+/// Refuse a profile that names a requester client no issuer entry of the
+/// runtime admits, as the runtime does at startup.
+fn refuse_clients_no_entry_admits(
+    config: &RuntimeConfig,
+    stated: &FactsProfile,
+) -> Result<(), FactsError> {
+    let oidc = config.authentication().oidc();
+    let admitted_somewhere = |client: &String| {
+        oidc.issuers().any(|entry| {
+            entry.admits_every_client()
+                || entry
+                    .token_verifier_config()
+                    .allowed_clients
+                    .contains(client)
+        })
+    };
+    if stated
+        .requester_clients
+        .iter()
+        .flatten()
+        .all(admitted_somewhere)
+    {
+        return Ok(());
+    }
+    Err(FactsError::ClientsUnlisted(format!(
+        "the access profile `{}` names a requester client that no authentication.oidc.issuers entry's allowedClients admits",
+        stated.id
+    )))
 }
 
 /// Refuse a claim BReg reads as a JSON value other than a string.

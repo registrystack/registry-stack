@@ -3558,6 +3558,191 @@ async fn a_401_carries_a_bearer_challenge() {
 }
 
 #[tokio::test]
+async fn the_development_body_names_the_failed_check_and_production_does_not() {
+    let registry = Arc::new(
+        compile_project(
+            &parse_project_yaml(PROJECT.as_bytes()).expect("project parses"),
+            &[],
+            CompileProfile::Authoring,
+        )
+        .expect("project compiles"),
+    );
+    let idp = MockIdp::start().await;
+    let authenticator = Arc::new(
+        authenticator(&registry, &idp, authority_claims()).expect("authentication config"),
+    );
+    // A purpose the `caseworker` profile does not admit: the concealed answer.
+    let mut wrong_purpose = valid_claims();
+    wrong_purpose["purpose"] = json!("another-purpose");
+    let wrong_purpose = idp.mint_token(wrong_purpose);
+    let requests = [
+        (
+            "/v1/records/cases/{RECORD_ID}",
+            None,
+            401,
+            "credential-missing",
+        ),
+        (
+            "/v1/records/cases/{RECORD_ID}?accessProfile=caseworker",
+            Some(wrong_purpose.as_str()),
+            404,
+            "purpose",
+        ),
+    ];
+
+    for posture in [
+        registry_platform_config::Posture::Development,
+        registry_platform_config::Posture::Production,
+    ] {
+        let service = Arc::new(
+            HttpService::new(
+                Arc::clone(&registry),
+                read_identity(),
+                Arc::new(RecordingReadService::default()),
+                Arc::new(Ready),
+                cursor_codec(),
+            )
+            .with_declared_posture_for_test(
+                registry_platform_config::DeclaredPosture {
+                    posture,
+                    source: registry_platform_config::PostureSource::Default,
+                },
+            ),
+        );
+        let router = authenticated_router(service, Arc::clone(&authenticator));
+        // The router alone, and the router as startup serves it, where the
+        // request-timeout boundary renders the final body.
+        let served = registry_breg::startup::serving_router_for_test(
+            router.clone(),
+            std::time::Duration::from_secs(5),
+            posture,
+        );
+        for (app, (path, token, status, check)) in [router, served]
+            .into_iter()
+            .flat_map(|app| requests.map(|request| (app.clone(), request)))
+        {
+            let mut request = Request::builder()
+                .uri(path.replace("{RECORD_ID}", RECORD_ID))
+                .body(Body::empty())
+                .expect("request");
+            if let Some(token) = token {
+                request.headers_mut().insert(AUTHORIZATION, bearer(token));
+            }
+            let response = app.clone().oneshot(request).await.expect("response");
+            assert_eq!(response.status().as_u16(), status, "{posture:?} {path}");
+            let body = body_json(response).await;
+            match posture {
+                registry_platform_config::Posture::Development => {
+                    assert_eq!(body["failedCheck"], check, "{body}");
+                }
+                registry_platform_config::Posture::Production => {
+                    assert!(body.get("failedCheck").is_none(), "{body}");
+                }
+            }
+            assert!(
+                !body.to_string().contains("purpose\":\"another"),
+                "the member names the check, never a claim value: {body}"
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_same_token_reaches_the_same_profile_in_both_postures() {
+    let registry = Arc::new(
+        compile_project(
+            &parse_project_yaml(PROJECT.as_bytes()).expect("project parses"),
+            &[],
+            CompileProfile::Authoring,
+        )
+        .expect("project compiles"),
+    );
+    let idp = MockIdp::start().await;
+    let authenticator = Arc::new(
+        authenticator(&registry, &idp, authority_claims()).expect("authentication config"),
+    );
+    let mut without_kind = valid_claims();
+    without_kind
+        .as_object_mut()
+        .expect("claims are an object")
+        .remove("registry_actor_kind");
+    // A purpose the `caseworker` profile does not admit.
+    let mut other_purpose = valid_claims();
+    other_purpose["purpose"] = json!("another-purpose");
+    let tokens = [
+        idp.mint_token(valid_claims()),
+        idp.mint_token(without_kind),
+        idp.mint_token(other_purpose),
+    ];
+    let paths = [
+        format!("/v1/records/cases/{RECORD_ID}"),
+        format!("/v1/records/cases/{RECORD_ID}?accessProfile=public"),
+        format!("/v1/records/cases/{RECORD_ID}?accessProfile=caseworker"),
+    ];
+
+    let mut reached = Vec::new();
+    for posture in [
+        registry_platform_config::Posture::Development,
+        registry_platform_config::Posture::Production,
+    ] {
+        let records = Arc::new(RecordingReadService::default());
+        let service = Arc::new(
+            HttpService::new(
+                Arc::clone(&registry),
+                read_identity(),
+                records.clone(),
+                Arc::new(Ready),
+                cursor_codec(),
+            )
+            .with_declared_posture_for_test(
+                registry_platform_config::DeclaredPosture {
+                    posture,
+                    source: registry_platform_config::PostureSource::Default,
+                },
+            ),
+        );
+        let app = authenticated_router(service, Arc::clone(&authenticator));
+        let mut outcomes = Vec::new();
+        for token in &tokens {
+            for path in &paths {
+                let request = Request::builder()
+                    .uri(path)
+                    .header(AUTHORIZATION, bearer(token))
+                    .body(Body::empty())
+                    .expect("request");
+                let response = app.clone().oneshot(request).await.expect("response");
+                let profile = records
+                    .requests
+                    .lock()
+                    .expect("record requests")
+                    .drain(..)
+                    .map(|request| request.context.selected_profile().to_owned())
+                    .collect::<Vec<_>>();
+                outcomes.push((path.clone(), response.status(), profile));
+            }
+        }
+        reached.push(outcomes);
+    }
+
+    let [development, production] = reached.as_slice() else {
+        panic!("two postures were served");
+    };
+    assert_eq!(development, production);
+    assert!(
+        production
+            .iter()
+            .any(|(_, status, profile)| *status == StatusCode::OK && profile == &["public"]),
+        "a token reached a profile: {production:?}"
+    );
+    assert!(
+        production
+            .iter()
+            .any(|(_, status, profile)| { *status == StatusCode::NOT_FOUND && profile.is_empty() }),
+        "a profile the token does not fit was refused: {production:?}"
+    );
+}
+
+#[tokio::test]
 async fn a_jwt_typed_token_is_admitted_when_the_issuer_states_it() {
     let harness = TwoIssuers::new().await;
     let response = harness.read(&first_token(&harness, AUDIENCE, "JWT")).await;

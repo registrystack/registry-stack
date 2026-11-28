@@ -70,7 +70,7 @@ elif change == "metrics-on-public-socket":
 elif change == "pinned-digest":
     document["package"]["expectedDigest"] = "sha256:" + "0" * 64
 elif change == "unadmitted-client":
-    document["authentication"]["oidc"]["allowedClients"] = ["case-system"]
+    document["authentication"]["oidc"]["issuers"]["main"]["allowedClients"] = ["case-system"]
 elif change != "none":
     raise SystemExit(f"unknown change {change}")
 (root / "runtime.yaml").write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
@@ -187,7 +187,7 @@ expect_refusal unknown-key /listener/port config.unknown-key
 expect_refusal environment-in-credential /database/runtimeUrlRef config.substitution-not-allowed
 expect_refusal metrics-on-public-socket /metricsListener/bind messaging.runtime.invalid-metrics-listener
 expect_refusal pinned-digest /package/expectedDigest messaging.package.digest-mismatch
-expect_refusal unadmitted-client /authentication/oidc/allowedClients messaging.runtime.profile-client-not-allowed
+expect_refusal unadmitted-client /authentication/oidc/issuers/main/allowedClients messaging.runtime.profile-client-not-allowed
 
 # messages checks its arguments before any database, and a database it cannot
 # reach is an operational failure, never an empty list.

@@ -180,6 +180,10 @@ struct GenerateIdentityFactsArgs {
     /// New YAML file to create. Existing files are never overwritten.
     #[arg(long, value_name = "FILE")]
     output: PathBuf,
+    /// The id under authentication.oidc.issuers to describe. Required when
+    /// the runtime declares more than one issuer.
+    #[arg(long, value_name = "ISSUER_ID")]
+    issuer: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -1150,15 +1154,20 @@ fn generate_identity_facts(args: &GenerateIdentityFactsArgs, declared: DeclaredP
         Ok(loaded) => loaded,
         Err(error) => return config_refusal(&error),
     };
-    let facts = match identity_facts::facts(&config, &loaded) {
+    let facts = match identity_facts::facts(&config, &loaded, args.issuer.as_deref()) {
         Ok(facts) => facts,
         Err(error) => {
-            return Outcome::refused(
-                DOMAIN_REFUSAL_EXIT,
-                "identity.facts.unstatable",
-                "/",
-                error.to_string(),
-            )
+            return match error.issuer_code() {
+                Some(code) => {
+                    Outcome::refused(DOMAIN_REFUSAL_EXIT, code, "--issuer", error.to_string())
+                }
+                None => Outcome::refused(
+                    DOMAIN_REFUSAL_EXIT,
+                    "identity.facts.unstatable",
+                    "/",
+                    error.to_string(),
+                ),
+            }
         }
     };
     match identity_facts::write(&facts, &args.output) {
@@ -1463,6 +1472,15 @@ fn check(args: &CheckArgs, declared: DeclaredPosture) -> Outcome {
     checked["runtimeConfig"] = json!(path);
     checked["filesChecked"] = json!(report.files_checked());
     checked["diagnostics"] = report.to_json_value();
+    // The settings the operator stated on purpose are facts for a reviewer,
+    // not findings, so they never change the verdict. An empty list says none
+    // were stated.
+    let named = path.display().to_string();
+    checked["explicitProductionSettings"] = json!(runtime
+        .explicit_settings()
+        .iter()
+        .map(|found| found.report_line(Some(&named)))
+        .collect::<Vec<_>>());
     if let Some(config) = runtime.config() {
         if !runtime.defers_within("/listener") {
             checked["listener"] = json!(config.listener.bind.socket_addr().to_string());
@@ -2511,6 +2529,19 @@ fn render_check(report: &Value, stdout: &mut dyn io::Write) -> io::Result<()> {
             retention["receiptRetentionDays"]
         )?;
     }
+    for setting in report["explicitProductionSettings"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        writeln!(
+            stdout,
+            "Explicit production setting {} at {}. {}.",
+            text(&setting["code"]),
+            text(&setting["pointer"]),
+            text(&setting["summary"])
+        )?;
+    }
     Ok(())
 }
 
@@ -2756,9 +2787,11 @@ database:
   migrationUrlRef: secret:env/MESSAGING_MIGRATION_URL
 authentication:
   oidc:
-    issuer: https://identity.example.test
-    audience: urn:example:messaging
-    allowedClients: [operations-console]
+    issuers:
+      main:
+        issuer: https://identity.example.test
+        audience: urn:example:messaging
+        allowedClients: [operations-console]
 audit:
   path: {root}/audit/messaging.jsonl
   hashKeyRef: secret:env/MESSAGING_AUDIT_KEY
@@ -2838,6 +2871,68 @@ audit:
         assert!(stderr.is_empty());
         assert!(
             stdout.ends_with("0 errors, 0 warnings in 2 files\n"),
+            "{stdout}"
+        );
+    }
+
+    #[test]
+    fn a_check_lists_the_explicit_production_settings_the_runtime_states() {
+        let (_root, path) = project("");
+        let (exit, report) = check_json(&path);
+        assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+        assert_eq!(report["explicitProductionSettings"], json!([]));
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        let marker = "        allowedClients: [operations-console]\n";
+        assert!(text.contains(marker), "{text}");
+        std::fs::write(
+            &path,
+            text.replace(
+                marker,
+                &format!("{marker}        accessTokenType: JWT\n        scopeClaim: scp\n"),
+            ),
+        )
+        .unwrap();
+        let (exit, report) = check_json(&path);
+        assert_eq!(exit, ExitCode::SUCCESS, "{report}");
+        let settings = report["explicitProductionSettings"].as_array().unwrap();
+        let listed: Vec<(&str, &str)> = settings
+            .iter()
+            .map(|line| {
+                (
+                    line["code"].as_str().unwrap(),
+                    line["pointer"].as_str().unwrap(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            listed,
+            [
+                (
+                    "platform.posture.jwt-access-token",
+                    "/authentication/oidc/issuers/main/accessTokenType"
+                ),
+                (
+                    "platform.posture.scope-claim",
+                    "/authentication/oidc/issuers/main/scopeClaim"
+                ),
+            ]
+        );
+        assert!(settings.iter().all(|line| line["line"].is_u64()));
+        assert!(settings
+            .iter()
+            .all(|line| line["file"] == json!(path.display().to_string())));
+        // A setting is a fact for the reviewer, never a finding.
+        assert_eq!(report["diagnostics"], json!([]));
+
+        let (exit, stdout, _) = run(&[
+            OsStr::new("check"),
+            OsStr::new("--runtime-config"),
+            path.as_os_str(),
+        ]);
+        assert_eq!(exit, ExitCode::SUCCESS);
+        assert!(
+            stdout.contains("Explicit production setting platform.posture.jwt-access-token at /authentication/oidc/issuers/main/accessTokenType."),
             "{stdout}"
         );
     }

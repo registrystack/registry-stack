@@ -465,8 +465,23 @@ pub trait CallerIssuerEntry {
 )]
 pub struct CallerIssuers<E> {
     /// The issuers a token may come from, by issuer id.
-    #[cfg_attr(feature = "schema", schemars(extend("minProperties" = 1)))]
+    #[cfg_attr(feature = "schema", schemars(schema_with = "issuer_map_schema::<E>"))]
     issuers: BTreeMap<LocalId, E>,
+}
+
+/// The `issuers` map: at least one entry, each keyed by a local issuer id.
+#[cfg(feature = "schema")]
+fn issuer_map_schema<E: schemars::JsonSchema>(
+    generator: &mut schemars::SchemaGenerator,
+) -> schemars::Schema {
+    let id = generator.subschema_for::<LocalId>();
+    let entry = generator.subschema_for::<E>();
+    schemars::json_schema!({
+        "type": "object",
+        "minProperties": 1,
+        "propertyNames": id,
+        "additionalProperties": entry,
+    })
 }
 
 impl<E> CallerIssuers<E> {

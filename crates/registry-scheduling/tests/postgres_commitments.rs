@@ -3628,6 +3628,158 @@ async fn confirm_appointment_refuses_indistinguishably_for_missing_and_unauthori
     assert_eq!(existing_problem["code"], "operation.not-authorized");
 }
 
+/// A caller whose grant covers the offering but who does not own a hold is
+/// refused as not authorized whatever state the hold is in: Scheduling checks
+/// the caller owns a hold before it reads the hold's state. The owner meets
+/// the state the hold is in.
+#[tokio::test]
+async fn a_grant_covered_non_owner_is_refused_before_the_hold_state_is_read() {
+    let fx = fixture().await;
+    let other = agent_token_for("principal-other");
+    let hold_for = |key: &'static str, from: i64, to: i64| {
+        let fx = &fx;
+        async move {
+            let slot = first_slot(fx, OFFERING, from, to).await;
+            let (status, hold) = fx
+                .post("/v1/holds", &fx.agent, key, admission(fx, OFFERING, slot))
+                .await;
+            assert_eq!(status, StatusCode::CREATED, "{hold}");
+            hold["holdId"].as_str().unwrap().to_owned()
+        }
+    };
+    let confirm = |hold_id: &str| json!({"hold": hold_id, "admission": null});
+    let assert_not_authorized = |label: &str, (status, problem): (StatusCode, Value)| {
+        assert_eq!(status, StatusCode::FORBIDDEN, "{label}: {problem}");
+        assert_eq!(problem["code"], "operation.not-authorized", "{label}");
+    };
+
+    // A live hold is the control: not owning it is refused.
+    let live = hold_for("non-owner-live", 90, 200).await;
+    assert_not_authorized(
+        "confirm a live hold",
+        fx.post(
+            "/v1/appointments",
+            &other,
+            "non-owner-confirm-live",
+            confirm(&live),
+        )
+        .await,
+    );
+    assert_not_authorized(
+        "release a live hold",
+        fx.delete(&format!("/v1/holds/{live}"), &other).await,
+    );
+
+    // A hold past its expiry that the sweeper has not yet closed is one the
+    // owner is told expired.
+    let expired = hold_for("non-owner-expired", 300, 440).await;
+    begin_current_test_writer(&fx.admin).await;
+    fx.admin
+        .execute(
+            "UPDATE scheduling_claims SET hold_expires_at=$1 WHERE claim_id=$2::text::uuid",
+            &[&(pinned_now() - TimeDelta::minutes(1)), &expired],
+        )
+        .await
+        .expect("lapse the hold");
+    commit_current_test_writer(&fx.admin).await;
+    assert_not_authorized(
+        "confirm an expired hold",
+        fx.post(
+            "/v1/appointments",
+            &other,
+            "non-owner-confirm-expired",
+            confirm(&expired),
+        )
+        .await,
+    );
+    assert_not_authorized(
+        "release an expired hold",
+        fx.delete(&format!("/v1/holds/{expired}"), &other).await,
+    );
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "owner-confirm-expired",
+            confirm(&expired),
+        )
+        .await;
+    assert_eq!(status, StatusCode::GONE, "{problem}");
+    assert_eq!(problem["code"], "hold.expired");
+
+    // A released hold is closed. The owner is told so.
+    let released = hold_for("non-owner-released", 500, 640).await;
+    let (status, _) = fx
+        .delete(&format!("/v1/holds/{released}"), &fx.agent)
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_not_authorized(
+        "confirm a released hold",
+        fx.post(
+            "/v1/appointments",
+            &other,
+            "non-owner-confirm-released",
+            confirm(&released),
+        )
+        .await,
+    );
+    assert_not_authorized(
+        "release a released hold",
+        fx.delete(&format!("/v1/holds/{released}"), &other).await,
+    );
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "owner-confirm-released",
+            confirm(&released),
+        )
+        .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{problem}");
+    assert_eq!(problem["code"], "hold.released");
+
+    // A hold admitted under a policy that has since moved is one the owner
+    // is told is stale. This case runs last: it moves the policy under the
+    // fixture.
+    let stale = hold_for("non-owner-stale", 700, 840).await;
+    let mut replacement = read_policy(POLICY).expect("the replacement policy");
+    replacement.project.version = "2".to_owned();
+    let replacement_digest = replacement.policy_digest();
+    fx.store
+        .apply_policy(
+            SCHEDULING_ID,
+            &replacement_digest,
+            &["north-counter".to_owned(), "two-counter".to_owned()],
+            &replacement,
+        )
+        .await
+        .expect("publish a second policy revision");
+    assert_not_authorized(
+        "confirm a hold under a stale policy",
+        fx.post(
+            "/v1/appointments",
+            &other,
+            "non-owner-confirm-stale",
+            confirm(&stale),
+        )
+        .await,
+    );
+    assert_not_authorized(
+        "release a hold under a stale policy",
+        fx.delete(&format!("/v1/holds/{stale}"), &other).await,
+    );
+    let (status, problem) = fx
+        .post(
+            "/v1/appointments",
+            &fx.agent,
+            "owner-confirm-stale",
+            confirm(&stale),
+        )
+        .await;
+    assert_eq!(status, StatusCode::PRECONDITION_FAILED, "{problem}");
+    assert_eq!(problem["code"], "policy.changed");
+}
+
 /// Every closing writer advances the claim's revision, so the history event
 /// that closes a claim is distinguishable from the one that opened it. The
 /// expiry sweeper closes a hold exactly as release and cancellation do, and

@@ -1249,7 +1249,14 @@ impl SchedulingService {
         // its capacity to a second booking. A closed or expired hold
         // consumes nothing, so it keeps the store's replay and refusal
         // answers.
+        // The state of a hold is read only for a caller that manages it: the
+        // store refuses any other caller first.
         if confirmation_request.is_none()
+            && hold.is_managed_by_caller(
+                &caller.issuer,
+                &caller.subject,
+                source_manager.as_ref(),
+            )
             && offering.mode == SchedulingMode::ExactTime
             && hold.state == ClaimState::Active
             && hold.hold_expires_at.is_some_and(|expiry| expiry > now)

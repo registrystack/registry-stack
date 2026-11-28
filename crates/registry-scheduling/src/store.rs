@@ -719,9 +719,25 @@ impl ClaimRow {
     /// Whether a commitment carries the authority that manages this claim.
     /// Source-bound claims never fall back to their creating actor.
     fn is_managed_by(&self, commitment: &Commitment<'_>) -> bool {
+        self.is_managed_by_caller(
+            commitment.actor_issuer,
+            commitment.actor_subject,
+            commitment.source_manager.as_ref(),
+        )
+    }
+
+    /// Whether the verified `issuer` and `subject`, with the source authority
+    /// they presented, manage this claim.
+    #[must_use]
+    pub fn is_managed_by_caller(
+        &self,
+        issuer: &str,
+        subject: &str,
+        source_manager: Option<&SourceBoundManager>,
+    ) -> bool {
         match &self.source_manager {
-            Some(expected) => commitment.source_manager.as_ref() == Some(expected),
-            None => self.is_owned_by(commitment.actor_issuer, commitment.actor_subject),
+            Some(expected) => source_manager == Some(expected),
+            None => self.is_owned_by(issuer, subject),
         }
     }
 
@@ -1965,11 +1981,6 @@ impl PostgresStore {
         if hold.policy_revision != commitment.policy_revision {
             return Err(AdmissionRefusal::PolicyChanged.into());
         }
-        if !hold.is_managed_by(&commitment) {
-            // Confirming another caller's hold is never a state error: it is
-            // an authorization refusal the audit entries record.
-            return Err(CommitError::Unauthorized);
-        }
         let placement = supply.confirm(&hold, request, &locked.snapshot, &commitment)?;
         self.recheck_grant(&commitment)?;
         let mut claim = transaction
@@ -2077,14 +2088,11 @@ impl PostgresStore {
             transaction.commit().await?;
             return Ok(replay);
         }
-        let hold = active_claim(&transaction, hold_id, LedgerKind::Hold).await?;
+        let hold = managed_hold(&transaction, hold_id, &commitment).await?;
         guard_revisions(&transaction, &commitment).await?;
         evaluate_hold_state(&hold_ledger_claim(&hold), self.observed_now())?;
         if hold.policy_revision != commitment.policy_revision {
             return Err(AdmissionRefusal::PolicyChanged.into());
-        }
-        if !hold.is_managed_by(&commitment) {
-            return Err(CommitError::Unauthorized);
         }
         Err(StoreError::Corrupt.into())
     }
@@ -2102,16 +2110,7 @@ impl PostgresStore {
             transaction.commit().await?;
             return Ok(replay);
         }
-        let hold = transaction
-            .claim_in_transaction(hold_id)
-            .await?
-            .ok_or(AdmissionRefusal::HoldReleased)?;
-        if hold.kind != LedgerKind::Hold || hold.state != ClaimState::Active {
-            return Err(AdmissionRefusal::HoldReleased.into());
-        }
-        if !hold.is_managed_by(&commitment) {
-            return Err(CommitError::Unauthorized);
-        }
+        let hold = managed_hold(&transaction, hold_id, &commitment).await?;
         self.recheck_grant(&commitment)?;
         if !transaction
             .close_claim(hold_id, ClaimState::Released, None, hold.revision)
@@ -3202,9 +3201,7 @@ async fn lock_commitment(
             }
             None
         }
-        ClaimLock::Hold(hold_id) => {
-            Some(active_claim(transaction, hold_id, LedgerKind::Hold).await?)
-        }
+        ClaimLock::Hold(hold_id) => Some(managed_hold(transaction, hold_id, commitment).await?),
         ClaimLock::Appointment(appointment_id) => {
             Some(active_claim(transaction, appointment_id, LedgerKind::Booking).await?)
         }
@@ -3215,6 +3212,29 @@ async fn lock_commitment(
         claim,
         current_anchors,
     })
+}
+
+/// The active hold a commitment acts on, locked, once the caller is known to
+/// manage it. The caller is checked against the stored hold before its state
+/// is read, so a caller that does not manage a hold learns nothing of its
+/// state, whatever that state is. A hold that is gone, closed, or of another
+/// kind is answered as released to the caller that manages it.
+async fn managed_hold(
+    transaction: &deadpool_postgres::Transaction<'_>,
+    hold_id: Uuid,
+    commitment: &Commitment<'_>,
+) -> Result<ClaimRow, CommitError> {
+    let hold = transaction
+        .claim_in_transaction(hold_id)
+        .await?
+        .ok_or(AdmissionRefusal::HoldReleased)?;
+    if !hold.is_managed_by(commitment) {
+        return Err(CommitError::Unauthorized);
+    }
+    if hold.kind != LedgerKind::Hold || hold.state != ClaimState::Active {
+        return Err(AdmissionRefusal::HoldReleased.into());
+    }
+    Ok(hold)
 }
 
 /// The active claim of `kind` a commitment acts on, locked. A claim that is

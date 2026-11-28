@@ -184,6 +184,22 @@ mod tests {
     }
 
     #[test]
+    fn the_issuer_set_schema_types_its_keys_as_local_ids() {
+        let document: Value = serde_json::from_str(&shared_blocks_document().unwrap()).unwrap();
+        let issuers = &document["$defs"]["CallerIssuers_CallerIssuerCore_OidcAllowedClients"]
+            ["properties"]["issuers"];
+        assert_eq!(
+            issuers["propertyNames"]["$ref"], "#/$defs/LocalId",
+            "{issuers:#}"
+        );
+        assert_eq!(
+            issuers["additionalProperties"]["$ref"], "#/$defs/CallerIssuerCore_OidcAllowedClients",
+            "{issuers:#}"
+        );
+        assert!(issuers.get("patternProperties").is_none(), "{issuers:#}");
+    }
+
+    #[test]
     fn a_static_jwks_document_requires_the_provider_its_reference_names() {
         let requirement = |pattern: &str, provider: &str, definition: &str| {
             serde_json::json!({

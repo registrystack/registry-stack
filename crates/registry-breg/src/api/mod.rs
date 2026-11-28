@@ -116,6 +116,7 @@ pub fn router(service: Arc<HttpService>) -> Router {
         .merge(probe_routes(service))
         .layer(middleware::from_fn(metadata::no_store))
         .layer(middleware::from_fn(crate::correlation::observe))
+        .layer(name_failed_check(posture))
         .layer(security_headers(CspBuilder::restrictive(), posture))
 }
 
@@ -318,7 +319,18 @@ pub(crate) fn authenticated_router_with_listener(
     };
     app.layer(middleware::from_fn(metadata::no_store))
         .layer(middleware::from_fn(crate::correlation::observe))
+        .layer(name_failed_check(posture))
         .layer(headers)
+}
+
+/// The development-only `failedCheck` member of a refusal body. It sits
+/// outside the layer that renders the problem body and records the refusal,
+/// so it reads the final body. Under production it leaves every response as
+/// it is.
+fn name_failed_check(
+    posture: registry_platform_config::Posture,
+) -> registry_platform_httpsec::refusal_detail::NameFailedCheckLayer {
+    registry_platform_httpsec::refusal_detail::name_failed_check(posture)
 }
 
 async fn review_completion(

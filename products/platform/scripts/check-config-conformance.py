@@ -529,15 +529,19 @@ ROWS: tuple[Row, ...] = (
         loader_sources=("crates/registry-messaging/src",),
         runtime_schema="products/messaging/generated/runtime/runtime.schema.json",
         shared_blocks=(
+            "AccessTokenType",
             "DatabaseConfig",
+            "DeclaredActorKind",
             "EnvironmentSecretProviderConfig",
             "FileSecretProviderConfig",
+            "IssuerActorKind",
             "JwksSource",
             "ListenerBind",
             "MetricsListenerConfig",
             "ListenerNetworkExposure",
             "PackageConfig",
             "PrivateListenerConfig",
+            "ScopeClaimName",
             "SecretProvidersConfig",
             "SecretReference",
             "TlsTermination",
@@ -555,18 +559,6 @@ ROWS: tuple[Row, ...] = (
             "runtime_package_digest_pin_names_the_found_digest",
         ),
         rust_blocks=(
-            RustBlock(
-                "crates/registry-messaging/src/config.rs",
-                "OidcConfig",
-                "provider",
-                "OidcIssuerConfig",
-            ),
-            RustBlock(
-                "crates/registry-messaging/src/config.rs",
-                "OidcConfig",
-                "clients",
-                "OidcPackageClientsConfig",
-            ),
             RustBlock(
                 "crates/registry-messaging/src/config.rs",
                 "AuditConfig",
