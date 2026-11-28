@@ -10337,9 +10337,18 @@
           "invocation": "casework serve",
           "about": "Run the Casework HTTP service",
           "long_about": null,
-          "usage": "casework --runtime-config <ABSOLUTE_FILE> serve",
+          "usage": "casework --runtime-config <ABSOLUTE_FILE> serve [OPTIONS]",
           "arguments": [],
           "options": [
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
             {
               "display": "-h, --help",
               "description": "Print help",
@@ -16735,9 +16744,18 @@
           "invocation": "documents serve",
           "about": "Run the Document Store HTTP service",
           "long_about": null,
-          "usage": "documents --runtime-config <ABSOLUTE_FILE> serve",
+          "usage": "documents --runtime-config <ABSOLUTE_FILE> serve [OPTIONS]",
           "arguments": [],
           "options": [
+            {
+              "display": "--posture <POSTURE>",
+              "description": "Declared posture: development or production. Unset means production.",
+              "always_required": false,
+              "repeatable": false,
+              "default_values": [],
+              "possible_values": [],
+              "environment": null
+            },
             {
               "display": "-h, --help",
               "description": "Print help",

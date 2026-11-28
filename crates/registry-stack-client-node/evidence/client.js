@@ -206,11 +206,9 @@ class EvidenceClient extends native.EvidenceClient {
    * that work below this wrapper is intentional: JavaScript never receives a
    * key set or a subject-continuity store to accidentally retain.
    */
-  static fromProfile(path, privateKeyJwk) {
+  static fromProfile(path, privateKeyJwk, refuseDevelopmentPeer) {
     try {
-      const client = privateKeyJwk === undefined
-        ? native.EvidenceClient.fromProfile(path)
-        : native.EvidenceClient.fromProfile(path, privateKeyJwk);
+      const client = native.EvidenceClient.fromProfile(path, privateKeyJwk, refuseDevelopmentPeer);
       Object.setPrototypeOf(client, this.prototype);
       return client;
     } catch (error) {
@@ -218,9 +216,9 @@ class EvidenceClient extends native.EvidenceClient {
     }
   }
 
-  static fromProfileWithAuthorization(path, authorization) {
+  static fromProfileWithAuthorization(path, authorization, refuseDevelopmentPeer) {
     try {
-      const client = native.EvidenceClient.fromProfileWithAuthorization(path, authorization);
+      const client = native.EvidenceClient.fromProfileWithAuthorization(path, authorization, refuseDevelopmentPeer);
       Object.setPrototypeOf(client, this.prototype);
       return client;
     } catch (error) {

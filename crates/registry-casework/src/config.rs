@@ -2359,12 +2359,8 @@ mod tests {
     fn assert_unsafe_runtime(error: registry_platform_config::RuntimeConfigError) {
         let diagnostic = error.deciding_diagnostic();
         assert_eq!(diagnostic.code, "platform.runtime-config.unsafe-file");
-        assert!(diagnostic
-            .message
-            .contains("owned by root or the runtime user"));
-        assert!(diagnostic
-            .suggested_action
-            .contains("remove group and other write permission"));
+        assert!(diagnostic.message.contains("is writable by its group"));
+        assert!(diagnostic.suggested_action.contains("chmod g-w "));
     }
 
     #[cfg(unix)]
@@ -2389,7 +2385,11 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = write_ownership_test_runtime(directory.path());
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660)).unwrap();
-        let result = RuntimeConfig::loader(TEST_POSTURE).load::<serde_json::Value>(&path);
+        let production = DeclaredPosture {
+            posture: registry_platform_config::Posture::Production,
+            ..TEST_POSTURE
+        };
+        let result = RuntimeConfig::loader(production).load::<serde_json::Value>(&path);
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
 
         assert_unsafe_runtime(result.expect_err("a group-writable runtime is refused"));
@@ -2405,7 +2405,11 @@ mod tests {
         std::fs::create_dir(&writable).unwrap();
         std::fs::set_permissions(&writable, std::fs::Permissions::from_mode(0o770)).unwrap();
         let path = write_ownership_test_runtime(&writable);
-        let result = RuntimeConfig::loader(TEST_POSTURE).load::<serde_json::Value>(&path);
+        let production = DeclaredPosture {
+            posture: registry_platform_config::Posture::Production,
+            ..TEST_POSTURE
+        };
+        let result = RuntimeConfig::loader(production).load::<serde_json::Value>(&path);
         std::fs::set_permissions(&writable, std::fs::Permissions::from_mode(0o700)).unwrap();
 
         assert_unsafe_runtime(

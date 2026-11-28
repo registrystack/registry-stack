@@ -5,7 +5,7 @@ use crate::{
     runtime::RuntimeConfig, scenarios, CoordinatorError, Result,
 };
 use clap::{Args, CommandFactory, Parser, Subcommand, ValueEnum};
-use registry_platform_config::{declared_with_production_alias, DeclaredPosture, PostureSource};
+use registry_platform_config::{declared_with_production_alias, DeclaredPosture};
 use registry_platform_httputil::{validate_response_headers, PeerPolicy, ResponseHeaderError};
 use serde_json::{json, Value};
 use std::{
@@ -908,7 +908,6 @@ fn refusal_advice(problem: ProblemCode) -> Option<&'static str> {
         ProblemCode::RetryRefused => "Inspect the run: retry-same applies only to held work before its original deadline; cancel the run when no further execution is appropriate.",
         ProblemCode::RunDefinitionIncompatible => "This service's Coordinator version cannot interpret the run's pinned definition, so it holds the run and refuses to retry, reconcile or cancel it; only a Coordinator release that accepts that definition can.",
         ProblemCode::ReceiptExpired => "Consult the receiving product's own records for the original command rather than inferring it was not sent, and cancel the run when no further execution is appropriate.",
-        ProblemCode::EventDevelopmentPeer => "Deliver production events to a production Coordinator, or use a development Coordinator for development events.",
         ProblemCode::EventInvalid => "Correct the producer event contract or the reviewed trigger's event schema and input mapping before retrying delivery.",
         ProblemCode::EventTooLarge => "Project fewer or smaller fields into the producer's event so it fits the 131072-byte event value profile, then redeliver it.",
         ProblemCode::EventUnauthenticated => "Sign the webhook ID, timestamp and exact body with the key configured for this trigger URL, within 300 seconds.",
@@ -1576,9 +1575,7 @@ fn serve(
     };
     let mut command = std::process::Command::new(binary);
     command.arg("--runtime-config").arg(runtime_config);
-    if declared.source == PostureSource::Flag {
-        command.arg("--posture").arg(declared.posture.as_str());
-    }
+    command.arg("--posture").arg(declared.posture.as_str());
     replace_with_service(command, "coordinator")
 }
 

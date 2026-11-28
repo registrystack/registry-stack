@@ -8117,6 +8117,53 @@ recordTypes:
 }
 
 #[test]
+fn package_bytes_do_not_depend_on_the_declared_posture() {
+    let project = packaging_project();
+    let fingerprint = "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+    let expected = prepare_packaging_candidate(&project, fingerprint);
+    let receipt = project.path().join("schema-test-receipt.json");
+    fs::write(
+        &receipt,
+        schema_test_receipt_bytes(&expected, &["package-record-list"]),
+    )
+    .unwrap();
+
+    let package = |posture, output: &Path| {
+        let result = bregctl(&[
+            "--format",
+            "json",
+            "package",
+            path(project.path()),
+            "--test-receipt",
+            path(&receipt),
+            "--output",
+            path(output),
+            "--posture",
+            posture,
+        ]);
+        assert!(result.status.success(), "{result:?}");
+        json_stdout(&result)
+    };
+    let development = project.path().join("development-package");
+    let production = project.path().join("production-package");
+    let development_report = package("development", &development);
+    let production_report = package("production", &production);
+    assert_eq!(
+        development_report["packageDigest"],
+        production_report["packageDigest"]
+    );
+    assert_eq!(tree(&development), tree(&production));
+    assert_eq!(
+        development_report["posture"],
+        json!({"source": "flag", "value": "development"})
+    );
+    assert_eq!(
+        production_report["posture"],
+        json!({"source": "flag", "value": "production"})
+    );
+}
+
+#[test]
 fn production_package_publishes_the_unsigned_package_in_one_step() {
     let project = packaging_project();
     let build = project.path().join("build");

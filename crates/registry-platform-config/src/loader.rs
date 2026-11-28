@@ -316,17 +316,21 @@ impl<T> std::fmt::Debug for LoadedRuntimeConfig<T> {
 }
 
 /// Require a runtime configuration path owned by root or the effective user,
-/// with neither the file nor an ancestor writable by group or others. A
+/// with neither the file nor an ancestor writable by others. Production also
+/// refuses group write permission. A
 /// root-owned sticky ancestor is allowed. The path must be absolute,
 /// lexically normalized, and contain no symbolic-link component.
 ///
 /// This checks only the path and its metadata. It neither opens nor parses the
 /// file, so a caller with its own stable-read boundary can apply the shared
 /// path policy before that read without consuming the bytes twice.
-pub fn require_trusted_runtime_path(path: &Path) -> Result<(), RuntimeConfigError> {
+pub fn require_trusted_runtime_path(
+    path: &Path,
+    posture: Posture,
+) -> Result<(), RuntimeConfigError> {
     validate_absolute_lexical_path(path)
         .and_then(|()| reject_symlink_components(path))
-        .and_then(|()| require_trusted_ownership(path))
+        .and_then(|()| require_trusted_ownership(path, posture))
         .map_err(|error| error.in_file(path))
 }
 
@@ -608,7 +612,10 @@ impl RuntimeConfigLoader {
 
     fn read(&self, path: &Path) -> Result<Vec<u8>, RuntimeConfigError> {
         if self.trusted_ownership {
-            require_trusted_runtime_path(path)?;
+            let posture = self
+                .posture
+                .map_or(Posture::Production, |declared| declared.posture);
+            require_trusted_runtime_path(path, posture)?;
         } else {
             validate_absolute_lexical_path(path)?;
             reject_symlink_components(path)?;
@@ -1057,7 +1064,7 @@ fn reject_symlink_components(path: &Path) -> Result<(), RuntimeConfigError> {
 }
 
 #[cfg(unix)]
-fn require_trusted_ownership(path: &Path) -> Result<(), RuntimeConfigError> {
+fn require_trusted_ownership(path: &Path, posture: Posture) -> Result<(), RuntimeConfigError> {
     use std::os::unix::fs::{MetadataExt as _, PermissionsExt as _};
 
     let effective_user = rustix::process::geteuid().as_raw();
@@ -1069,23 +1076,66 @@ fn require_trusted_ownership(path: &Path) -> Result<(), RuntimeConfigError> {
         let last = index + 1 == count;
         let owner = metadata.uid();
         let mode = metadata.permissions().mode();
-        let trusted_owner = owner == 0 || owner == effective_user;
-        let not_writable_by_others = mode & 0o022 == 0;
         let root_sticky = !last && owner == 0 && mode & 0o1000 != 0;
-        if !trusted_owner || !(not_writable_by_others || root_sticky) {
-            return Err(unsafe_file(
-                "the runtime configuration and every directory above it must be owned by root \
-                 or the runtime user and not writable by group or others",
-                "Give the file and every directory above it to root or the runtime user, and \
-                 remove group and other write permission.",
-            ));
-        }
+        require_trusted_entry(
+            &current,
+            posture,
+            effective_user,
+            owner,
+            mode,
+            root_sticky,
+            last,
+        )?;
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn require_trusted_entry(
+    path: &Path,
+    posture: Posture,
+    effective_user: u32,
+    owner: u32,
+    mode: u32,
+    root_sticky: bool,
+    last: bool,
+) -> Result<(), RuntimeConfigError> {
+    let mask = match posture {
+        Posture::Production => 0o022,
+        Posture::Development => 0o002,
+    };
+    let entry = path.display();
+    if owner != 0 && owner != effective_user {
+        return Err(RuntimeConfigError::file_level(
+            CODE_UNSAFE_FILE,
+            format!("`{entry}` is owned by another user"),
+            format!(
+                "Run `chown {effective_user} {entry}`, or move the file under a directory that root or the runtime user owns."
+            ),
+        ));
+    }
+    if !root_sticky && mode & mask != 0 {
+        let (who, permission) = if mode & 0o002 != 0 {
+            ("others", "o-w")
+        } else {
+            ("its group", "g-w")
+        };
+        let action = if permission == "g-w" && !last {
+            format!("Run `chmod g-w {entry}`, or declare development with `--posture development` if this is a development machine.")
+        } else {
+            format!("Run `chmod {permission} {entry}`.")
+        };
+        return Err(RuntimeConfigError::file_level(
+            CODE_UNSAFE_FILE,
+            format!("`{entry}` is writable by {who}"),
+            action,
+        ));
     }
     Ok(())
 }
 
 #[cfg(not(unix))]
-fn require_trusted_ownership(_path: &Path) -> Result<(), RuntimeConfigError> {
+fn require_trusted_ownership(_path: &Path, _posture: Posture) -> Result<(), RuntimeConfigError> {
     Err(unsafe_file(
         "trusted ownership of the runtime configuration cannot be checked on this platform",
         "Run the runtime on a platform with Unix file ownership.",

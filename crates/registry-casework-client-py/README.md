@@ -141,3 +141,5 @@ reference, queue, ownership, and `sort` (`due`, `subject`, or `reference`).
 calls apply only the revision-fenced preview ID. Keep filters and caller
 profiles unchanged across snapshot cursors; after `410 review.result-expired`,
 start again without one.
+
+The client accepts development-marked responses by default. Set `refuse_development_peer=True` when constructing the client to reject them.

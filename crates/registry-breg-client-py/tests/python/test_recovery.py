@@ -163,6 +163,17 @@ class RecoveryTests(unittest.TestCase):
         self.thread.join()
         self.server.server_close()
 
+    def test_development_peer_refusal_is_an_explicit_option(self) -> None:
+        for refuse in (False, True):
+            with self.subTest(refuse=refuse):
+                self.assertIsInstance(
+                    BaseRegistryClient(
+                        "https://breg.example.invalid/",
+                        refuse_development_peer=refuse,
+                    ),
+                    BaseRegistryClient,
+                )
+
     def test_create_recovery_is_pure_until_explicit_execution(self) -> None:
         original = self.client.registry_contract("company-writer").select_create(
             "records.company.create", "company-writer"

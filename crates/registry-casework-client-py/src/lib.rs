@@ -491,7 +491,7 @@ impl CaseworkClient {
     }
 
     #[new]
-    #[pyo3(signature = (base_url, attempt_timeout_seconds=None, connect_timeout_seconds=None, maximum_response_bytes=None, user_agent=None, trusted_root_certificates=None, maximum_mutation_retries=None))]
+    #[pyo3(signature = (base_url, attempt_timeout_seconds=None, connect_timeout_seconds=None, maximum_response_bytes=None, user_agent=None, trusted_root_certificates=None, maximum_mutation_retries=None, refuse_development_peer=false))]
     #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>,
@@ -502,6 +502,7 @@ impl CaseworkClient {
         user_agent: Option<String>,
         trusted_root_certificates: Option<Vec<u8>>,
         maximum_mutation_retries: Option<&Bound<'_, PyAny>>,
+        refuse_development_peer: bool,
     ) -> PyResult<Self> {
         let base_url = Url::parse(base_url).map_err(|_| {
             binding_error(
@@ -510,10 +511,12 @@ impl CaseworkClient {
                 "Casework client configuration is invalid",
             )
         })?;
-        let mut config = CaseworkClientConfig::new(
-            base_url,
-            casework_client_sdk::PeerPolicy::AcceptDevelopmentPeer,
-        );
+        let peer_policy = if refuse_development_peer {
+            casework_client_sdk::PeerPolicy::RefuseDevelopmentPeer
+        } else {
+            casework_client_sdk::PeerPolicy::AcceptDevelopmentPeer
+        };
+        let mut config = CaseworkClientConfig::new(base_url, peer_policy);
         if let Some(value) = attempt_timeout_seconds {
             config = config.with_attempt_timeout(duration(py, value)?);
         }

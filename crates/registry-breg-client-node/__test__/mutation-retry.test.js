@@ -136,3 +136,14 @@ test('a request refused before any exchange reports the outcome known', async ()
     },
   );
 });
+
+test('strict development-peer policy is an explicit boolean option', () => {
+  const baseUrl = 'https://breg.example.invalid/';
+  for (const refuseDevelopmentPeer of [false, true]) {
+    assert.ok(new BaseRegistryClient({ baseUrl, refuseDevelopmentPeer }));
+  }
+  assert.throws(
+    () => new BaseRegistryClient({ baseUrl, refuseDevelopmentPeer: 'true' }),
+    (error) => error.kind === 'configuration',
+  );
+});

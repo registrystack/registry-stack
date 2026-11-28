@@ -274,3 +274,5 @@ compares them byte for byte against the committed `index.js` and `index.d.ts`,
 so a change to the `#[napi]` surface that is not reflected in the committed
 declaration file, or a napi-rs CLI change to the loader, fails this check
 rather than silently drifting.
+
+The client accepts development-marked responses by default. Set `refuseDevelopmentPeer: true` when constructing the client to reject them.

@@ -524,11 +524,11 @@ pub fn config_from_parts(
     user_agent: Option<String>,
     maximum_response_bytes: Option<u64>,
     trusted_root_certificates: Option<Vec<u8>>,
+    peer_policy: breg_client_sdk::PeerPolicy,
 ) -> Result<BaseRegistryClientConfig, ConfigError> {
     let base_url =
         Url::parse(base_url).map_err(|_| ConversionError::new("base_url must be a valid URL"))?;
-    let mut config =
-        BaseRegistryClientConfig::new(base_url, breg_client_sdk::PeerPolicy::AcceptDevelopmentPeer);
+    let mut config = BaseRegistryClientConfig::new(base_url, peer_policy);
     if let Some(provider) = authorization_provider(authorization, roots)? {
         config = config.with_token_provider(provider);
     }

@@ -17,15 +17,24 @@ impl RenderClient {
         constructor,
         ts_args_type = "config: import('./client').RenderClientConfig"
     )]
-    pub fn new(config: Value) -> Result<Self> {
-        let config: RenderClientConfig = serde_json::from_value(config)
-            .map_err(|_| Error::from_reason("Render client configuration is invalid"))?;
-        CoreClient::new(
-            config,
-            registry_render_client::PeerPolicy::AcceptDevelopmentPeer,
-        )
-        .map(|inner| Self { inner })
-        .map_err(mapped)
+    pub fn new(mut config: Value) -> Result<Self> {
+        let invalid = || Error::from_reason("Render client configuration is invalid");
+        let refuse_development_peer = config
+            .as_object_mut()
+            .ok_or_else(invalid)?
+            .remove("refuseDevelopmentPeer")
+            .map(|value| value.as_bool().ok_or_else(invalid))
+            .transpose()?
+            .unwrap_or(false);
+        let config: RenderClientConfig = serde_json::from_value(config).map_err(|_| invalid())?;
+        let peer_policy = if refuse_development_peer {
+            registry_render_client::PeerPolicy::RefuseDevelopmentPeer
+        } else {
+            registry_render_client::PeerPolicy::AcceptDevelopmentPeer
+        };
+        CoreClient::new(config, peer_policy)
+            .map(|inner| Self { inner })
+            .map_err(mapped)
     }
     #[napi(ts_return_type = "Promise<import('./client').RenderedDocument>")]
     pub async fn render(

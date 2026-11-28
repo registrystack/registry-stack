@@ -118,7 +118,12 @@ fn unmanaged_serve_falls_back_to_path_without_a_binary_override() {
             .lines()
             .skip(1)
             .collect::<Vec<_>>(),
-        ["--runtime-config", "/tmp/path.yaml"]
+        [
+            "--runtime-config",
+            "/tmp/path.yaml",
+            "--posture",
+            "production"
+        ]
     );
 }
 
@@ -159,9 +164,14 @@ fn managed_serve_uses_the_selected_generation_instead_of_path() {
             .lines()
             .skip(1)
             .collect::<Vec<_>>(),
-        ["--runtime-config", "/tmp/managed.yaml"]
+        [
+            "--runtime-config",
+            "/tmp/managed.yaml",
+            "--posture",
+            "development"
+        ]
     );
-    // The declaration travels through the inherited environment, not argv.
+    // The child receives both the inherited declaration and the resolved flag.
     assert_eq!(
         fs::read_to_string(posture_capture).unwrap(),
         "development\n"

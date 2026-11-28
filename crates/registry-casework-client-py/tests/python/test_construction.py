@@ -10,6 +10,17 @@ from registry_casework_client import CaseworkClient, CaseworkClientError  # noqa
 
 
 class ConstructionTests(unittest.TestCase):
+    def test_development_peer_refusal_is_an_explicit_option(self) -> None:
+        for refuse in (False, True):
+            with self.subTest(refuse=refuse):
+                self.assertIsInstance(
+                    CaseworkClient(
+                        "https://casework.example.invalid/",
+                        refuse_development_peer=refuse,
+                    ),
+                    CaseworkClient,
+                )
+
     def test_constructs_without_retaining_credentials(self) -> None:
         client = CaseworkClient("https://casework.example.invalid/tenant")
         self.assertIsInstance(client, CaseworkClient)

@@ -20,6 +20,7 @@
     - ['`location.closed`', '409', 'A closure covers the requested start. Choose a start outside the closure.']
     - ['`operation.not-authorized`', '403', 'The caller''s task grant does not name this operation, the deployment''s client does not match the grant''s client, or configured fresh status says the exact grant is inactive, mismatched, unlisted, or incompletely bound.']
     - ['`party.capacity-inadequate`', '422', 'The party is larger than the offering can ever serve, or its size falls outside the published units.']
+    - ['`platform.task-grant.development-assertion`', '401', 'A verified bearer token is marked as development and the runtime is in production.']
     - ['`policy.changed`', '412', 'The policy revision changed before the request committed. Reload the catalogue and try again with the current revision.']
     - ['`precondition.failed`', '412', 'A source busy reconciliation does not follow the observation stream already applied for that source, or a busy record crosses the reconciliation coverage boundary. Reload the source state and send a reconciliation that observes after the latest applied one. A stale revision answers `policy.changed` or `revision.mismatch` instead.']
     - ['`precondition.required`', '428', 'The mutation requires the revision the caller loaded, or the duplicate key the offering keys on.']

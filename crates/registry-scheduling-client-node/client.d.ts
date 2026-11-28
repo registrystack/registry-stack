@@ -10,6 +10,7 @@ export type JsonValue = JsonScalar | ReadonlyArray<JsonValue> | { readonly [key:
 
 export interface SchedulingClientConfig {
   baseUrl: string
+  refuseDevelopmentPeer?: boolean
   attemptTimeoutMilliseconds?: SafeInteger
   connectTimeoutMilliseconds?: SafeInteger
   maximumResponseBytes?: SafeInteger

@@ -158,7 +158,7 @@ function configurationValue(options) {
   }
   const allowed = new Set([
     'baseUrl',
-    'allowDevelopmentPeer',
+    'refuseDevelopmentPeer',
     'attemptTimeoutMilliseconds',
     'connectTimeoutMilliseconds',
     'maximumResponseBytes',
@@ -177,7 +177,7 @@ function configurationValue(options) {
         throw inputError('configuration');
       }
       copy[key] = value;
-    } else if (key === 'allowDevelopmentPeer') {
+    } else if (key === 'refuseDevelopmentPeer') {
       if (typeof value !== 'boolean') throw inputError('configuration');
       copy[key] = value;
     } else if (key === 'baseUrl') {

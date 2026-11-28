@@ -46,13 +46,13 @@ export declare class EvidenceClient {
    * error. Profile paths and file-backed secrets remain inside the core
    * client and are likewise redacted there.
    */
-  static fromProfile(path: string, privateKeyJwk?: any): EvidenceClient
+  static fromProfile(path: string, privateKeyJwk?: any, refuseDevelopmentPeer?: boolean): EvidenceClient
   /**
    * Build a profile-driven client with a context-bound staff exchange.
    * The profile's discovered authority and pinned OAuth request parameters
    * must match the immutable provider before the first token is acquired.
    */
-  static fromProfileWithAuthorization(path: string, authorization: any): EvidenceClient
+  static fromProfileWithAuthorization(path: string, authorization: any, refuseDevelopmentPeer?: boolean): EvidenceClient
   /**
    * Close the expectations for one request and generate its nonce. No I/O
    * happens here. The returned request is good for exactly one exchange:

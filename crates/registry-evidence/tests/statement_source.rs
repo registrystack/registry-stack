@@ -949,8 +949,11 @@ async fn a_source_compiled_without_an_extract_materializes_but_refuses_to_run() 
         .input("region", "region_code", InputKind::String)
         .parameter("region", json!({"jsonpath":"$.region"}));
     let package = prepared_pack(&plan);
-    let programs = compile_sources(&package.bundle)
-        .expect("the offline pack plan compiles without runtime bindings");
+    let programs = compile_sources(
+        &package.bundle,
+        registry_evidence::config::Posture::Production,
+    )
+    .expect("the offline pack plan compiles without runtime bindings");
     let program = programs
         .get("licence-register")
         .expect("the synthetic offline source");

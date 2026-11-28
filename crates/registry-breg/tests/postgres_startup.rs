@@ -814,7 +814,10 @@ async fn operator_services_preserve_a_posture_mismatch() {
             declared: Production,
         }
     );
-    assert_eq!(timers.problem_code(), "breg.activation.posture-mismatch");
+    assert_eq!(
+        timers.problem_code(),
+        "platform.activation.posture-mismatch"
+    );
     assert_eq!(
         timers,
         TimerOperatorError::PostureMismatch {
@@ -3323,9 +3326,10 @@ impl StartupFixture {
         let raw = fs::read_to_string(&path).expect("runtime config reads");
         fs::write(
             &path,
-            raw.replace(
-                "    jwksCache:\n",
-                "    jwksSource:\n      type: static\n      documentRef: secret:file/oidc-jwks\n    jwksCache:\n",
+            raw.replacen(
+                "\n        jwksCache:\n",
+                "\n        jwksSource:\n          type: static\n          documentRef: secret:file/oidc-jwks\n        jwksCache:\n",
+                1,
             ),
         )
         .expect("static JWKS runtime config writes");

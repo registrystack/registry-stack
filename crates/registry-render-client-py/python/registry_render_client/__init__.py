@@ -51,9 +51,9 @@ def _json(value):
 
 
 class RenderClient:
-    def __init__(self, config):
+    def __init__(self, config, refuse_development_peer=False):
         try:
-            self._native = _RenderClient(_json(config))
+            self._native = _RenderClient(_json(config), refuse_development_peer)
         except (ValueError, TypeError, RuntimeError, RenderClientError) as error:
             raise _mapped(error, "configuration") from None
 

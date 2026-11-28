@@ -166,11 +166,17 @@ async fn captured(deployment: &Deployment) -> Vec<(String, i64, Value)> {
 }
 
 #[tokio::test]
-async fn production_capture_matches_the_original_envelope_bytes() {
+async fn both_postures_capture_the_original_envelope_bytes() {
+    for declared in ["production", "development"] {
+        assert_canonical_capture(declared).await;
+    }
+}
+
+async fn assert_canonical_capture(declared: &str) {
     const HTTP_VERIFIER: &str = "contentVerification:\n  type: http\n  url: http://127.0.0.1:9/verify\n  authorizationRef: secret:file/verifier-token\n  policyId: documents-default\n";
     let mut deployment = Deployment::new(DATABASE_STORAGE, HTTP_VERIFIER).await;
     deployment.secret("verifier-token", "synthetic-verifier-token");
-    let posture = registry_platform_config::declared_from(Some("production"), None).unwrap();
+    let posture = registry_platform_config::declared_from(Some(declared), None).unwrap();
     let config =
         registry_documents::config::RuntimeConfig::load_with_posture(&deployment.runtime, posture)
             .unwrap();
@@ -210,7 +216,7 @@ async fn production_capture_matches_the_original_envelope_bytes() {
         version = version,
         digest = digest,
     );
-    assert_eq!(stored, recorded.as_bytes());
+    assert_eq!(stored, recorded.as_bytes(), "{declared}");
 }
 
 async fn delivery_count(deployment: &Deployment) -> i64 {
@@ -251,7 +257,7 @@ async fn a_verdict_captures_one_delivery_per_matching_observer_with_the_closed_p
     assert_eq!(*deliveries, 1);
     assert_eq!(ready["type"], "document-version-ready");
     assert_eq!(ready["source"], SOURCE);
-    assert_eq!(ready["posture"], "development");
+    assert!(ready.get("posture").is_none());
     assert_eq!(ready["dataschema"], DOCUMENT_VERSION_READY_EVENT_SCHEMA_ID);
     assert_eq!(
         ready["subject"],
@@ -793,9 +799,15 @@ async fn delivery_refuses_a_posture_mismatch_without_sending() {
 }
 
 #[tokio::test]
-async fn production_restart_dead_letters_a_development_capture_without_sending() {
+async fn production_restart_delivers_a_development_capture_unchanged() {
     const HTTP_VERIFIER: &str = "contentVerification:\n  type: http\n  url: http://127.0.0.1:9/verify\n  authorizationRef: secret:file/verifier-token\n  policyId: documents-default\n";
     let receiver = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/document-events"))
+        .respond_with(ResponseTemplate::new(204))
+        .expect(1)
+        .mount(&receiver)
+        .await;
     let mut deployment = Deployment::new(DATABASE_STORAGE, HTTP_VERIFIER).await;
     deployment.secret("verifier-token", "synthetic-verifier-token");
     deployment.bind_hooks(&format!("{}/document-events", receiver.uri()));
@@ -805,7 +817,10 @@ async fn production_restart_dead_letters_a_development_capture_without_sending()
     upload(&api, 7).await;
     assert_eq!(prepared.verify_due().await, 1);
     let events = captured(&deployment).await;
-    assert_eq!(events[0].2["posture"], "development");
+    assert!(events[0].2.get("posture").is_none());
+    let stored: Vec<u8> = deployment
+        .scalar("SELECT payload FROM registry_outbox")
+        .await;
     drop(api);
     drop(prepared);
     // Move the test activation to production while retaining the captured row.
@@ -818,17 +833,15 @@ async fn production_restart_dead_letters_a_development_capture_without_sending()
         .unwrap();
     assert_eq!(
         prepared.deliver_hooks_once().await.unwrap(),
-        DeliveryOutcome::DeadLettered
+        DeliveryOutcome::Delivered
     );
     assert_eq!(
         prepared.deliver_hooks_once().await.unwrap(),
         DeliveryOutcome::Idle
     );
-    assert!(receiver.received_requests().await.unwrap().is_empty());
-    let terminal: String = deployment.scalar(
-        "SELECT state || ':' || attempt || ':' || dead_letter_reason FROM registry_webhook_delivery_state",
-    ).await;
-    assert_eq!(terminal, "dead-lettered:1:payload-refused");
+    let requests = receiver.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert_signed_delivery(&requests[0], &stored, &[HOOK_KEY.as_bytes()]);
 }
 
 #[tokio::test]
@@ -933,34 +946,9 @@ async fn a_failing_destination_is_retried_then_dead_lettered_without_touching_th
     let (prepared, api) = start(&deployment, &verifier).await;
     let (document, _) = upload(&api, 8).await;
     assert_eq!(prepared.verify_due().await, 1);
-    let captured: Vec<u8> = deployment
+    let stored: Vec<u8> = deployment
         .scalar("SELECT payload FROM registry_outbox")
         .await;
-    let mut legacy: Value = serde_json::from_slice(&captured).unwrap();
-    assert_eq!(
-        legacy.as_object_mut().unwrap().remove("posture"),
-        Some(json!("development"))
-    );
-    let stored = registry_platform_canonical_json::canonicalize_json(&legacy).unwrap();
-    use sha2::Digest as _;
-    let digest = sha2::Sha256::digest(&stored).to_vec();
-    let schema = &deployment.schema;
-    deployment
-        .admin
-        .execute(
-            &format!("UPDATE {schema}.registry_outbox SET payload = $1"),
-            &[&stored],
-        )
-        .await
-        .unwrap();
-    deployment
-        .admin
-        .execute(
-            &format!("UPDATE {schema}.registry_webhook_deliveries SET payload_digest = $1"),
-            &[&digest],
-        )
-        .await
-        .unwrap();
     // Opt the fixture into shared operator replay so the dead letter retains its payload.
     deployment
         .execute("UPDATE registry_webhook_deliveries SET operator_replay = true")

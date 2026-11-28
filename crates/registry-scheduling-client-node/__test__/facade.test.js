@@ -1087,3 +1087,15 @@ test('receipt observation refuses an invalid key or request before any exchange'
   await assert.rejects(client.appointmentReceipt('token', 'key', { admission: ADMISSION, extra: true }), (error) => error.kind === 'invalid-request');
   assert.equal(requests.length, 0);
 });
+
+test('strict development-peer policy is an explicit boolean option', () => {
+  const { SchedulingClient } = require('../client');
+  const baseUrl = 'https://scheduling.example.invalid/';
+  for (const refuseDevelopmentPeer of [false, true]) {
+    assert.ok(new SchedulingClient({ baseUrl, refuseDevelopmentPeer }));
+  }
+  assert.throws(
+    () => new SchedulingClient({ baseUrl, refuseDevelopmentPeer: 'true' }),
+    (error) => error.kind === 'configuration',
+  );
+});

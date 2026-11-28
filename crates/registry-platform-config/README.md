@@ -49,8 +49,9 @@ absolute path, through the shared configuration reader in
   out instead.
 
 A product may also require trusted ownership: every ancestor directory and
-the file owned by root or the runtime user and not writable by group or
-others, except a root-owned sticky directory.
+the file must be owned by root or the runtime user. Production refuses group
+and other write permission. Development allows group write permission. Both
+postures allow a root-owned sticky ancestor.
 
 Every refusal names the file, the field, and the fix, and never repeats a
 configured value. A `RuntimeConfigError` carries the reader's diagnostics

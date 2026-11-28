@@ -963,6 +963,10 @@ fn authentication_error_problem(error: AuthenticationError) -> HttpError {
         AuthenticationError::Refused(check) | AuthenticationError::Claims(check) => {
             HttpError::refused(RefusalCode::AuthenticationRefused, check)
         }
+        AuthenticationError::DevelopmentAssertion => HttpError::refused(
+            RefusalCode::DevelopmentAssertion,
+            FailedCheck::TaskGrantClaims,
+        ),
         AuthenticationError::Profile(check) => {
             HttpError::refused(RefusalCode::ProfileNotAuthorized, check)
         }
@@ -1656,6 +1660,22 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn a_development_assertion_answers_with_one_bearer_challenge_and_claims_check() {
+        let response =
+            authentication_error_problem(AuthenticationError::DevelopmentAssertion).into_response();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert_eq!(response.headers()[WWW_AUTHENTICATE], "Bearer");
+        assert_eq!(
+            response.extensions().get::<RefusalNote>().unwrap().check,
+            FailedCheck::TaskGrantClaims
+        );
+        assert_eq!(
+            body_json(response).await["code"],
+            registry_platform_oidc::DEVELOPMENT_ASSERTION_CODE
+        );
+    }
+
     #[test]
     fn a_problem_code_is_a_refusal_exactly_when_it_refuses_authority() {
         let refusals: Vec<_> = ProblemCode::ALL
@@ -1669,6 +1689,7 @@ mod tests {
                 "authentication.refused",
                 "grant.lifetime-too-long",
                 "operation.not-authorized",
+                "platform.task-grant.development-assertion",
                 "profile.not-authorized"
             ]
         );

@@ -440,6 +440,9 @@ impl RegistryAuthenticator {
             .get(&*caller.issuer_id)
             .ok_or_else(|| invalid_claims(FailedCheck::TokenIssuer))?;
         let verified = &caller.token;
+        if registry_platform_oidc::refuses_development_assertion(verified, self.peer_policy) {
+            return Err(grant_context_check(GrantContextError::DevelopmentAssertion));
+        }
         if !accepted_audience(verified.claims.aud.as_ref(), &rules.audience) {
             return Err(invalid_claims(FailedCheck::TokenAudience));
         }

@@ -95,11 +95,14 @@ A refused `request` entry opens no transaction; a refused `response` entry after
 Production is the default.
 Development responses carry `Registry-Posture: development`, and audit lines carry the process posture.
 Production peers refuse development neighbours.
-Scheduling refuses development task-grant status answers and task assertions in production.
+Scheduling refuses development task-grant status answers in production.
+A verified bearer token marked as development gets a 401 with
+`platform.task-grant.development-assertion` and a `Bearer` challenge.
 Activate a fresh database to change the deployment posture.
 
 {/* Evidence: crates/registry-scheduling/src/runtime.rs open_audit;
-    crates/registry-scheduling/src/http.rs http_edge;
+    crates/registry-scheduling/src/http.rs http_edge,
+    a_development_assertion_answers_with_one_bearer_challenge_and_claims_check;
     crates/registry-scheduling/src/store/activation.rs posture_mismatch. */}
 
 ## Operator obligations

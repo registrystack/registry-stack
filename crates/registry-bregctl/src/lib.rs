@@ -19141,7 +19141,7 @@ mod tests {
             let report: Value = serde_json::from_slice(&stdout).unwrap();
             assert_eq!(report["status"], "complete");
             let diagnostic = &report["diagnostics"][0];
-            assert_eq!(diagnostic["code"], "breg.activation.posture-mismatch");
+            assert_eq!(diagnostic["code"], "platform.activation.posture-mismatch");
             assert_eq!(diagnostic["severity"], "warning");
             assert_eq!(diagnostic["message"], posture_mismatch_message(recorded));
             assert_eq!(

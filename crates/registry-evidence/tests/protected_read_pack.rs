@@ -20,7 +20,8 @@ async fn protected_read_pack_replays_exact_requests_and_retains_lookup_outcomes(
     .expect("the protected-read package has an exact closure");
     let bundle = Bundle::load_as_found(&root, &verified)
         .expect("the protected read uses a current pack binding");
-    let programs = compile_sources(&bundle).expect("the pack compiles without credentials");
+    let programs = compile_sources(&bundle, registry_evidence::config::Posture::Production)
+        .expect("the pack compiles without credentials");
     let requirement = &bundle.config.requirements[0];
     let fixture =
         serde_json::to_value(&bundle.fixtures[requirement.fixtures.as_ref().unwrap().as_str()])

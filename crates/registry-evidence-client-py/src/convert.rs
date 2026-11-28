@@ -950,6 +950,7 @@ pub fn config_from_parts_with_authorization(
         trusted_root_certificates,
         maximum_response_bytes,
         max_metadata_bytes,
+        evidence_client_sdk::PeerPolicy::AcceptDevelopmentPeer,
     )
 }
 
@@ -966,6 +967,7 @@ pub fn config_from_parts_with_authorization_durations(
     trusted_root_certificates: Option<Vec<u8>>,
     maximum_response_bytes: Option<u64>,
     max_metadata_bytes: Option<u64>,
+    peer_policy: evidence_client_sdk::PeerPolicy,
 ) -> Result<EvidenceClientConfig, ConfigError> {
     let base_url = parse_url(base_url, "`base_url`").map_err(ConfigError::Shape)?;
 
@@ -992,7 +994,7 @@ pub fn config_from_parts_with_authorization_durations(
         token_provider,
         trusted_jwks,
         revoked_key_ids,
-        evidence_client_sdk::PeerPolicy::AcceptDevelopmentPeer,
+        peer_policy,
     );
 
     if let Some(timeout) = request_timeout {

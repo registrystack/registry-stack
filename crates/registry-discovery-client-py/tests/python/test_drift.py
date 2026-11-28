@@ -135,6 +135,7 @@ class DriftTest(unittest.TestCase):
                 "connect_timeout_seconds",
                 "maximum_response_bytes",
                 "trusted_root_certificates",
+                "refuse_development_peer",
             ],
         )
 

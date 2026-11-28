@@ -553,7 +553,6 @@
               "deployment.activation-changed",
               "deployment.refused",
               "evaluation.uncertain",
-              "event.development-peer",
               "event.invalid",
               "event.too-large",
               "event.unauthenticated",
@@ -619,7 +618,6 @@
               "https://id.registrystack.org/problems/registry-coordinator/deployment/activation-changed",
               "https://id.registrystack.org/problems/registry-coordinator/deployment/refused",
               "https://id.registrystack.org/problems/registry-coordinator/evaluation/uncertain",
-              "https://id.registrystack.org/problems/registry-coordinator/event/development-peer",
               "https://id.registrystack.org/problems/registry-coordinator/event/invalid",
               "https://id.registrystack.org/problems/registry-coordinator/event/too-large",
               "https://id.registrystack.org/problems/registry-coordinator/event/unauthenticated",
@@ -1857,7 +1855,6 @@
                       "properties": {
                         "code": {
                           "enum": [
-                            "event.development-peer",
                             "event.invalid",
                             "input.invalid",
                             "request.invalid"
@@ -1869,7 +1866,7 @@
                 }
               }
             },
-            "description": "A problem: event.development-peer, event.invalid, input.invalid, request.invalid."
+            "description": "A problem: event.invalid, input.invalid, request.invalid."
           },
           "401": {
             "content": {

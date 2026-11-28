@@ -168,6 +168,7 @@ export type BaseRegistryAuthorization =
 
 export interface BaseRegistryClientConfig {
   baseUrl: string
+  refuseDevelopmentPeer?: boolean
   authorization?: BaseRegistryAuthorization
   attemptTimeoutMilliseconds?: SafeInteger
   connectTimeoutMilliseconds?: SafeInteger

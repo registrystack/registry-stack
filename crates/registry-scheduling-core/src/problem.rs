@@ -13,8 +13,7 @@
 //!
 //! The `request.*` family carries the request-edge rejections (a route that
 //! does not exist, a method the route refuses, a body too large or not JSON)
-//! under this product's own prefix, exactly as Casework does: no shared
-//! platform problem prefix exists in the Registry Stack catalog.
+//! under this product's own prefix, as Casework does.
 
 use crate::naming::SCHEDULING_PROBLEM_TYPE_BASE;
 
@@ -36,6 +35,7 @@ pub const IDEMPOTENCY_KEY_REUSED_PROBLEM: &str = "idempotency.key-reused";
 pub const LOCATION_CLOSED_PROBLEM: &str = "location.closed";
 pub const OPERATION_NOT_AUTHORIZED_PROBLEM: &str = "operation.not-authorized";
 pub const PARTY_CAPACITY_INADEQUATE_PROBLEM: &str = "party.capacity-inadequate";
+pub const DEVELOPMENT_ASSERTION_PROBLEM: &str = "platform.task-grant.development-assertion";
 pub const POLICY_CHANGED_PROBLEM: &str = "policy.changed";
 pub const PRECONDITION_FAILED_PROBLEM: &str = "precondition.failed";
 pub const PRECONDITION_REQUIRED_PROBLEM: &str = "precondition.required";
@@ -74,6 +74,7 @@ pub enum ProblemCode {
     LocationClosed,
     OperationNotAuthorized,
     PartyCapacityInadequate,
+    PlatformTaskGrantDevelopmentAssertion,
     PolicyChanged,
     PreconditionFailed,
     PreconditionRequired,
@@ -113,6 +114,7 @@ impl ProblemCode {
         Self::LocationClosed,
         Self::OperationNotAuthorized,
         Self::PartyCapacityInadequate,
+        Self::PlatformTaskGrantDevelopmentAssertion,
         Self::PolicyChanged,
         Self::PreconditionFailed,
         Self::PreconditionRequired,
@@ -152,6 +154,7 @@ impl ProblemCode {
             Self::LocationClosed => LOCATION_CLOSED_PROBLEM,
             Self::OperationNotAuthorized => OPERATION_NOT_AUTHORIZED_PROBLEM,
             Self::PartyCapacityInadequate => PARTY_CAPACITY_INADEQUATE_PROBLEM,
+            Self::PlatformTaskGrantDevelopmentAssertion => DEVELOPMENT_ASSERTION_PROBLEM,
             Self::PolicyChanged => POLICY_CHANGED_PROBLEM,
             Self::PreconditionFailed => PRECONDITION_FAILED_PROBLEM,
             Self::PreconditionRequired => PRECONDITION_REQUIRED_PROBLEM,
@@ -198,7 +201,7 @@ impl ProblemCode {
     pub const fn http_status(self) -> u16 {
         match self {
             Self::CursorInvalid | Self::RequestInvalid => 400,
-            Self::AuthenticationRefused => 401,
+            Self::AuthenticationRefused | Self::PlatformTaskGrantDevelopmentAssertion => 401,
             Self::GrantLifetimeTooLong
             | Self::OperationNotAuthorized
             | Self::ProfileNotAuthorized => 403,
@@ -235,6 +238,7 @@ impl ProblemCode {
     pub const fn title(self) -> &'static str {
         match self {
             Self::AuthenticationRefused => "Authentication refused",
+            Self::PlatformTaskGrantDevelopmentAssertion => "Development task assertion",
             Self::BookingDuplicateActive => "Duplicate active booking",
             Self::CancellationCutoffPassed => "Cancellation cutoff passed",
             Self::CapabilityUnmatched => "Capability unmatched",
@@ -278,6 +282,7 @@ impl ProblemCode {
             Self::AuthenticationRefused => {
                 "The bearer credential is missing, invalid, or expired. Sign in again."
             }
+            Self::PlatformTaskGrantDevelopmentAssertion => "A production registry refuses task assertions issued in development.",
             Self::BookingDuplicateActive => {
                 "An active booking already holds this party's duplicate key. Cancel it, or wait until it has passed, before booking again."
             }
@@ -378,7 +383,7 @@ mod tests {
 
     #[test]
     fn the_vocabulary_is_complete_and_closed() {
-        assert_eq!(ProblemCode::ALL.len(), 34);
+        assert_eq!(ProblemCode::ALL.len(), 35);
         for code in ProblemCode::ALL {
             assert_eq!(ProblemCode::from_code(code.code()), Some(*code));
         }

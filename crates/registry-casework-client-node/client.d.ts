@@ -8,6 +8,7 @@ export type JsonObject = { readonly [key: string]: JsonValue }
 
 export interface CaseworkClientConfig {
   baseUrl: string
+  refuseDevelopmentPeer?: boolean
   attemptTimeoutMilliseconds?: SafeInteger
   connectTimeoutMilliseconds?: SafeInteger
   maximumResponseBytes?: SafeInteger

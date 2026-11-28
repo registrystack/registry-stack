@@ -29,6 +29,8 @@ const INVALID_ARGUMENTS: &str = "Scheduling client arguments are invalid";
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct SchedulingClientConfig {
     base_url: String,
+    #[serde(default)]
+    refuse_development_peer: bool,
     attempt_timeout_milliseconds: Option<f64>,
     connect_timeout_milliseconds: Option<f64>,
     maximum_response_bytes: Option<f64>,
@@ -104,10 +106,12 @@ impl SchedulingClient {
                 "Scheduling client configuration is invalid",
             )
         })?;
-        let mut core = CoreConfig::new(
-            base_url,
-            registry_scheduling_client::PeerPolicy::AcceptDevelopmentPeer,
-        );
+        let peer_policy = if config.refuse_development_peer {
+            registry_scheduling_client::PeerPolicy::RefuseDevelopmentPeer
+        } else {
+            registry_scheduling_client::PeerPolicy::AcceptDevelopmentPeer
+        };
+        let mut core = CoreConfig::new(base_url, peer_policy);
         if let Some(value) = config.attempt_timeout_milliseconds {
             core = core.with_attempt_timeout(Duration::from_millis(whole_number(value)?));
         }

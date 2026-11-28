@@ -96,6 +96,7 @@ function configurationValue(config) {
   }
   const allowed = new Set([
     'baseUrl',
+    'refuseDevelopmentPeer',
     'attemptTimeoutMilliseconds',
     'connectTimeoutMilliseconds',
     'maximumResponseBytes',
@@ -111,7 +112,10 @@ function configurationValue(config) {
       throw normalized({}, 'configuration');
     }
     const value = descriptor.value;
-    if (key === 'baseUrl' || key === 'userAgent' || key === 'trustedRootCertificates') {
+    if (key === 'refuseDevelopmentPeer') {
+      if (typeof value !== 'boolean') throw normalized({}, 'configuration');
+      copy[key] = value;
+    } else if (key === 'baseUrl' || key === 'userAgent' || key === 'trustedRootCertificates') {
       if (typeof value !== 'string') throw normalized({}, 'configuration');
       copy[key] = value;
     } else {

@@ -1751,12 +1751,8 @@ pub(crate) mod tests {
             .iter()
             .find(|diagnostic| diagnostic.code == "platform.runtime-config.unsafe-file")
             .expect("the ownership refusal is reported");
-        assert!(diagnostic
-            .message
-            .contains("owned by root or the runtime user"));
-        assert!(diagnostic
-            .suggested_action
-            .contains("remove group and other write permission"));
+        assert!(diagnostic.message.contains("is writable by its group"));
+        assert!(diagnostic.suggested_action.contains("chmod g-w "));
     }
 
     #[cfg(unix)]

@@ -376,3 +376,5 @@ mutation recovery and same-key retries are unchanged. Errors never include the
 signal's arbitrary reason. The native token is internal binding glue, not a
 shared client cancellation switch. Rust callers continue to cancel by dropping
 their read future; this Node option adds no Python or server API.
+
+The client accepts development-marked responses by default. Set `refuseDevelopmentPeer: true` when constructing the client to reject them.

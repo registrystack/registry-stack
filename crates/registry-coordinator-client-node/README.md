@@ -54,3 +54,5 @@ exact RFC 9457 `application/problem+json` document whose status, type and
 trace agree with the answer; its `family.reason` code stays a string because
 the Coordinator contract authors the vocabulary. Problem titles and details,
 credentials, request bodies, and transport chains are not copied into errors.
+
+The client accepts development-marked responses by default. Set `refuseDevelopmentPeer: true` when constructing the client to reject them.

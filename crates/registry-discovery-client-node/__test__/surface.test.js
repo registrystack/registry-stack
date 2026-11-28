@@ -131,7 +131,7 @@ function acceptsExpectedEvidence(candidate) {
     && resolution.mappingAuthorityId === expectedResolution.mappingAuthorityId;
 }
 
-test('search, resolve, and inert exact selection accept a development peer only with opt-in', async (t) => {
+test('search, resolve, and inert exact selection accept a development peer unless explicitly refused', async (t) => {
   const server = http.createServer((request, response) => {
     response.setHeader('registry-posture', 'development');
     response.setHeader('content-type', 'application/json');
@@ -164,14 +164,24 @@ test('search, resolve, and inert exact selection accept a development peer only 
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   t.after(() => new Promise((resolve) => server.close(resolve)));
   const baseUrl = `http://127.0.0.1:${server.address().port}/`;
-  for (const options of [baseUrl, { baseUrl }, { baseUrl, allowDevelopmentPeer: false }]) {
-    const safeClient = new DiscoveryClient(options);
-    await assert.rejects(
-      safeClient.searchEvidenceServices({ evidenceTypeId: 'urn:example:evidence-type' }),
-      (error) => error.kind === 'development-peer',
-    );
+  for (const [options, refuse] of [
+    [baseUrl, false], [{ baseUrl }, false],
+    [{ baseUrl, refuseDevelopmentPeer: false }, false],
+    [{ baseUrl, refuseDevelopmentPeer: true }, true],
+  ]) {
+    const client = new DiscoveryClient(options);
+    const response = client.searchEvidenceServices({ evidenceTypeId: 'urn:example:evidence-type' });
+    if (refuse) {
+      await assert.rejects(response, (error) => error.kind === 'development-peer');
+    } else {
+      assert.equal((await response).items.length, 1);
+    }
   }
-  const client = new DiscoveryClient({ baseUrl, allowDevelopmentPeer: true });
+  assert.throws(
+    () => new DiscoveryClient({ baseUrl, allowDevelopmentPeer: true }),
+    (error) => error.kind === 'configuration',
+  );
+  const client = new DiscoveryClient(baseUrl);
 
   const found = await client.searchEvidenceServices({
     evidenceTypeId: 'urn:example:evidence-type',

@@ -19,8 +19,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{
     DestinationTransport, DevelopmentClass, DevelopmentOnlyRefused, DevelopmentSetting,
-    DevelopmentWitness, Gated, PrivateRanges, SecretError, SecretProvider, SecretReference,
-    SecretResolver, Stated, MAX_SECRET_BYTES,
+    DevelopmentWitness, ExplicitClass, ExplicitProductionSetting, Gated, PrivateRanges,
+    SecretError, SecretProvider, SecretReference, SecretResolver, Stated, MAX_SECRET_BYTES,
 };
 
 /// The schema pattern of a field that must name an enabled secret provider.
@@ -539,16 +539,27 @@ pub fn check_database_hosts(
             checked: None,
         });
     }
+    let mismatch = DatabaseTransportError::HostMismatch(transport);
     let checked = hosts
         .iter()
         .map(|host| match host {
-            DatabaseHost::Unix => Some(CheckedHost::Unix),
-            DatabaseHost::Tcp(name) => {
-                plaintext_host_addresses(transport, name, resolve).map(CheckedHost::Tcp)
-            }
+            DatabaseHost::Unix => Ok(CheckedHost::Unix),
+            DatabaseHost::Tcp(name) => plaintext_host_addresses(transport, name, resolve)
+                .map(CheckedHost::Tcp)
+                .ok_or_else(|| {
+                    if transport == DatabaseTransport::LoopbackPlaintext {
+                        if let Some(address) = name
+                            .strip_prefix('[')
+                            .and_then(|name| name.strip_suffix(']'))
+                            .and_then(|name| name.parse().ok())
+                        {
+                            return DatabaseTransportError::BracketedHost(address);
+                        }
+                    }
+                    mismatch
+                }),
         })
-        .collect::<Option<Vec<_>>>()
-        .ok_or(DatabaseTransportError::HostMismatch(transport))?;
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(PermittedTransport {
         transport,
         checked: Some(checked),
@@ -626,6 +637,37 @@ fn private_address(address: IpAddr) -> bool {
     }
 }
 
+static ISSUER_LOOPBACK_PLAINTEXT: ExplicitProductionSetting = ExplicitProductionSetting {
+    code: "platform.posture.issuer-loopback-plaintext",
+    key: "issuer",
+    summary: "An issuer endpoint uses plain HTTP on loopback",
+};
+
+#[derive(Deserialize)]
+#[serde(transparent)]
+struct IssuerEndpoint(Url);
+
+impl ExplicitClass for IssuerEndpoint {
+    const SETTINGS: &'static [&'static ExplicitProductionSetting] = &[&ISSUER_LOOPBACK_PLAINTEXT];
+
+    fn explicit_setting(&self) -> Option<&'static ExplicitProductionSetting> {
+        let url = self.0.to_url();
+        (url.scheme() == "http"
+            && url
+                .host_str()
+                .and_then(registry_platform_loopback::loopback_host)
+                .is_some())
+        .then_some(&ISSUER_LOOPBACK_PLAINTEXT)
+    }
+}
+
+/// Read an issuer or key endpoint while recording an authored loopback HTTP URL.
+pub fn deserialize_issuer_endpoint<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Url, D::Error> {
+    Stated::<IssuerEndpoint>::deserialize(deserializer).map(|endpoint| endpoint.into_inner().0)
+}
+
 /// Where a runtime obtains the OIDC issuer's signing keys.
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
@@ -646,7 +688,10 @@ pub enum JwksSource {
     /// A plain `http` URI is accepted on loopback for supervised local
     /// development, and beyond loopback only when the issuer block sets
     /// `allowInsecureHttp`.
-    Uri { uri: Url },
+    Uri {
+        #[serde(deserialize_with = "deserialize_issuer_endpoint")]
+        uri: Url,
+    },
     /// Read the key set from a secret, for deployments without network access
     /// to the issuer.
     Static {
@@ -883,6 +928,7 @@ pub const MAX_OIDC_AUDIENCE_CHARACTERS: usize = 512;
 pub struct OidcIssuerConfig {
     /// Exact issuer accepted in access-token `iss` claims, an absolute
     /// `https` URL, or a plain `http` URL when `allowInsecureHttp` is set.
+    #[serde(deserialize_with = "deserialize_issuer_endpoint")]
     pub issuer: Url,
     /// The audience every accepted access token must carry in `aud`.
     #[cfg_attr(feature = "schema", schemars(length(min = 1, max = 512)))]

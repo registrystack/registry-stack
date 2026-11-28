@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- The Node and Python clients accept development peers by default and offer a configuration option to reject them.
+
+- `coordinatorctl serve` passes the resolved posture explicitly to the runtime.
+
 - BREAKING: Rust client configurations take a peer policy in `CoordinatorClientConfig::new`. Migration: pass `PeerPolicy::AcceptDevelopmentPeer` in application code and the runtime's policy in runtimes.
 
 - Coordinator accepts responses from development downstream product peers when the runtime declares development.
@@ -10,7 +14,7 @@
 - Under `database.transport: loopback-plaintext` or `private-network-plaintext`, a keyword connection string host written as an IP address in brackets, such as `host=[::1]` or `host=[127.0.0.1]`, is skipped when the transport otherwise permits it and the driver would dial it, as the driver itself fails that entry and tries the next. When no other host is left, the connection is refused when it is configured, with `platform.database.bracketed-host` naming the address. Write `host=::1`. When a keyword host has an authored `hostaddr`, the connection still uses that `hostaddr`. A bracketed IPv6 address in a URL, such as `postgresql://app@[::1]/registry`, still works.
 - The library's public `Store::open` runs the same `loopback-plaintext` check on a plaintext connection, after its local-host check, and dials only the loopback addresses it accepted. A `hostaddr` that is not loopback, `localhost` answering a non-loopback address, or a list whose dialled hosts are all bracketed keyword addresses is refused with the shared code.
 
-- Production event intake refuses signed development envelopes with `event.development-peer` at `/posture`. Development intake accepts these envelopes after signature verification. An invalid signature returns `event.unauthenticated` in either posture.
+- Signed deliveries have the same form in both postures.
 
 - Typed remote mutations require an unauthenticated doctor response with HTTP 401 or 200 and a valid posture header if present. Probe refusals point to `--url`, with `coordinator.command.probe-posture-invalid` for malformed or repeated headers.
 

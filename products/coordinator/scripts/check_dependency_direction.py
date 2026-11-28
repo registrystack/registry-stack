@@ -19,9 +19,17 @@ from __future__ import annotations
 
 import argparse
 import json
+import runpy
 import subprocess
 import sys
 from pathlib import Path
+
+# products/platform/scripts/check_dev_runner_reach.py owns the host permits.
+_dev_runner_gate = runpy.run_path(str(
+    Path(__file__).resolve().parents[2] / "platform/scripts/check_dev_runner_reach.py"
+))
+_DEV_RUNNER = _dev_runner_gate["DEV_RUNNER"]
+_DEV_RUNNER_HOSTS = _dev_runner_gate["ALLOWLIST"][_DEV_RUNNER]
 
 COORDINATOR_PREFIX = "registry-coordinator"
 
@@ -49,13 +57,10 @@ CLIENT_ONLY_SUPPORT = {
 # The combined Coordinator crate also publishes coordinatorctl. These helpers
 # supply product-neutral request and report handling and identity facts
 # authoring. Their forward dependencies are subject to the same boundary.
-# registry-rstack-dev is the development run host every product CLI links.
-# It reaches only shared platform crates and registry-cli-report, and no product.
 CLI_SUPPORT = frozenset(
     {
         "registry-cli-api",
         "registry-cli-report",
-        "registry-rstack-dev",
         "registry-thunderid-tooling",
     }
 )
@@ -130,7 +135,7 @@ def runtime_may_reach(name: str) -> bool:
         return True
     if name in CLIENT_ONLY_SUPPORT:
         return True
-    if name in CLI_SUPPORT:
+    if name in CLI_SUPPORT or (name == _DEV_RUNNER and COORDINATOR_RUNTIME in _DEV_RUNNER_HOSTS):
         return True
     if name.endswith("-core"):
         return True

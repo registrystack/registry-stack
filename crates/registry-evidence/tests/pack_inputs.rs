@@ -132,7 +132,8 @@ fn maintained_acceptance_bundles_compile_without_runtime_bindings_or_credentials
             Bundle::load_as_found(&path, &verified)
                 .unwrap_or_else(|error| panic!("{fixture}: {error}")),
         );
-        compile_sources(&bundle).unwrap_or_else(|error| panic!("{fixture}: {error}"));
+        compile_sources(&bundle, registry_evidence::config::Posture::Production)
+            .unwrap_or_else(|error| panic!("{fixture}: {error}"));
         OfflineKernel::compile(bundle).unwrap_or_else(|error| panic!("{fixture}: {error}"));
     }
 }
@@ -198,7 +199,11 @@ fn opencrvs_reference_uses_the_same_reviewed_pack_as_the_facade() {
     )
     .unwrap();
     let bundle = Bundle::load_as_found(&root, &verified).expect("current pack bindings");
-    registry_evidence::fixture_source::compile_sources(&bundle).expect("pure provider compile");
+    registry_evidence::fixture_source::compile_sources(
+        &bundle,
+        registry_evidence::config::Posture::Production,
+    )
+    .expect("pure provider compile");
     let maintained_pack =
         fs::read(repository.join("products/adapter/packs/opencrvs-events/pack.yaml")).unwrap();
     for (_, source) in bundle.config.sources.iter() {
@@ -249,7 +254,8 @@ async fn shared_opencrvs_provider_executes_sealed_oauth_and_data_exchanges() {
     )
     .unwrap();
     let bundle = Bundle::load_as_found(&root, &verified).unwrap();
-    let programs = compile_sources(&bundle).unwrap();
+    let programs =
+        compile_sources(&bundle, registry_evidence::config::Posture::Production).unwrap();
     for requirement in &bundle.config.requirements {
         let fixture_path = requirement.fixtures.as_ref().unwrap().as_str();
         let fixture = serde_json::to_value(&bundle.fixtures[fixture_path]).unwrap();

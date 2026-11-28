@@ -40,6 +40,18 @@ pub const POSTURE_CLAIM: &str = "registry_posture";
 /// development issuer.
 pub const DEVELOPMENT_ASSERTION_CODE: &str = "platform.task-grant.development-assertion";
 
+/// Whether the peer policy refuses the development mark on a verified token.
+#[must_use]
+pub fn refuses_development_assertion(token: &VerifiedToken, peer: PeerPolicy) -> bool {
+    peer == PeerPolicy::RefuseDevelopmentPeer
+        && token
+            .claims
+            .extra
+            .get(POSTURE_CLAIM)
+            .and_then(Value::as_str)
+            == Some(registry_platform_posture::DEVELOPMENT)
+}
+
 const REGISTERED_OR_AUTHENTICATION_CLAIMS: &[&str] = &[
     "iss",
     "sub",

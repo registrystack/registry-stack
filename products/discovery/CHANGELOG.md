@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- BREAKING (Node): Discovery accepts development peers by default. Replace `allowDevelopmentPeer` with `refuseDevelopmentPeer: true` to reject them. Python offers `refuse_development_peer=True`.
+
+- `discoveryctl serve` passes the resolved posture explicitly to the runtime.
+
 - BREAKING: Rust client configurations take a peer policy in `DiscoveryClientConfig::new`. Migration: pass `PeerPolicy::AcceptDevelopmentPeer` in application code and the runtime's policy in runtimes.
 
 - Offline check and startup report a package root lookup failure as `discovery.runtime.package-refused` at `/package/root`.

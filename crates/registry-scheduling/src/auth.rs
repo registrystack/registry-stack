@@ -39,9 +39,9 @@ use registry_platform_authcommon::{
     validate_compact_access_token, DeclaredScope, FailedCheck, RefusalRecorder,
 };
 use registry_platform_oidc::{
-    grant_claims, ClaimError, ClaimNames, DeclaredKinds, IssuerEntry, IssuerSet, IssuerSetError,
-    JwksFetcher, OidcError, TokenVerifier, TokenVerifierConfig, VerifiedCaller,
-    ASSERTION_ISSUER_CLAIM,
+    grant_claims, refuses_development_assertion, ClaimError, ClaimNames, DeclaredKinds,
+    IssuerEntry, IssuerSet, IssuerSetError, JwksFetcher, OidcError, TokenVerifier,
+    TokenVerifierConfig, VerifiedCaller, ASSERTION_ISSUER_CLAIM,
 };
 use serde_json::Value;
 use thiserror::Error;
@@ -413,6 +413,9 @@ impl SchedulingAuthenticator {
             failure.remedy = refusal.remedy;
             failure
         })?;
+        if refuses_development_assertion(&verified.token, self.peer_policy) {
+            return Err(AuthenticationError::DevelopmentAssertion.into());
+        }
         let settings = self
             .settings
             .get(&*verified.issuer_id)
@@ -520,6 +523,8 @@ pub enum AuthenticationError {
     Claims(FailedCheck),
     #[error("the caller's authentication profile is not authorized for this request")]
     Profile(FailedCheck),
+    #[error("production refuses task assertions issued in development")]
+    DevelopmentAssertion,
     /// The verifier could not reach a verdict at all.
     #[error("the credential could not be verified because this verifier cannot answer")]
     Unavailable,
@@ -1005,6 +1010,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn production_refuses_a_marked_token_without_grant_claims() {
+        let mut claims = merged("scheduling-read", json!({}));
+        let unmarked = token(claims.clone());
+        authenticator().authenticate_read(&unmarked).await.unwrap();
+        claims[registry_platform_oidc::POSTURE_CLAIM] = json!("development");
+        let marked = token(claims);
+        assert!(matches!(
+            authenticator().authenticate_read(&marked).await,
+            Err(AuthenticationFailure {
+                error: AuthenticationError::DevelopmentAssertion,
+                ..
+            })
+        ));
+    }
+
+    #[tokio::test]
     async fn a_complete_task_grant_is_extracted_and_bound_to_the_deployment() {
         let credential = token(merged("scheduling-read", grant_claims_value(AUDIENCE)));
         let caller = authenticator()
@@ -1034,7 +1055,7 @@ mod tests {
         assert!(matches!(
             authenticator().authenticate_mutate(&credential).await,
             Err(AuthenticationFailure {
-                error: AuthenticationError::Profile(FailedCheck::TaskGrantBinding),
+                error: AuthenticationError::DevelopmentAssertion,
                 ..
             })
         ));

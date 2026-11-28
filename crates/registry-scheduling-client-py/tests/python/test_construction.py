@@ -20,6 +20,17 @@ ADMISSION = {
 
 
 class ConstructionTests(unittest.TestCase):
+    def test_development_peer_refusal_is_an_explicit_option(self) -> None:
+        for refuse in (False, True):
+            with self.subTest(refuse=refuse):
+                self.assertIsInstance(
+                    SchedulingClient(
+                        "https://scheduling.example.invalid/",
+                        refuse_development_peer=refuse,
+                    ),
+                    SchedulingClient,
+                )
+
     def test_constructs_without_retaining_credentials(self) -> None:
         client = SchedulingClient("https://scheduling.example.invalid/tenant")
         self.assertIsInstance(client, SchedulingClient)

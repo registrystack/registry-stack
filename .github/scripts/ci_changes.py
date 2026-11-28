@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import json
+import runpy
 import re
 import tomllib
 from collections import defaultdict, deque
@@ -166,10 +167,11 @@ STACK_CLIENT_PACKAGES = frozenset(SHARDS["stack-client"])
 # The BReg harnesses and the Adapter GovStack journey start their services with
 # `rstack dev`, so a change to it runs them.
 RSTACK_DEV_HARNESS_PACKAGES = frozenset({"registry-rstack", "registry-rstack-dev"})
-# The product CLIs that link registry-rstack-dev and host `rstack dev`. The
-# registry-rstack dev_run tests drive the hosts built beside rstack, so a
-# change to either host runs them; the shard builds both before it tests.
-RSTACK_DEV_HOST_PACKAGES = frozenset({"registry-bregctl", "registry-caseworkctl"})
+# The shared dependency gate owns the list of development runner hosts.
+_dev_runner_gate = runpy.run_path(str(
+    Path(__file__).resolve().parents[2] / "products/platform/scripts/check_dev_runner_reach.py"
+))
+RSTACK_DEV_HOST_PACKAGES = frozenset(_dev_runner_gate["ALLOWLIST"][_dev_runner_gate["DEV_RUNNER"]])
 
 # The acceptance journeys start every runtime and `*ctl` tool in their product
 # column (products/platform/journeys/products.yaml; test_ci_changes.py checks
@@ -1398,8 +1400,6 @@ def classify(
         if force_all
         else workspace.affected_packages(seeds)
     )
-    if affected & RSTACK_DEV_HOST_PACKAGES:
-        affected.add("registry-rstack")
     complete = run_all or force_all
 
     # The heavy integration tier: PostgreSQL suites, the WebAssembly build and
@@ -1701,9 +1701,12 @@ def classify(
         or bool(affected & JOURNEY_PACKAGES)
     )
 
+    # Running dev_run for a host change does not make the harness itself
+    # an input change for tutorial and product contract jobs.
+    rust_packages = affected | ({"registry-rstack"} if affected & RSTACK_DEV_HOST_PACKAGES else set())
     matrix = []
     for shard_name, shard_packages in SHARDS.items():
-        selected = sorted(affected.intersection(shard_packages))
+        selected = sorted(rust_packages.intersection(shard_packages))
         if selected:
             matrix.append(
                 {
@@ -1753,7 +1756,7 @@ def classify(
         ),
         "rust": bool(affected),
         "rust_matrix": {"include": matrix},
-        "rust_packages": sorted(affected),
+        "rust_packages": sorted(rust_packages),
         "platform": platform,
         "platform_assurance": platform_assurance,
         "platform_coverage": platform_coverage,

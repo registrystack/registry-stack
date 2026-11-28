@@ -492,7 +492,7 @@ mod tests {
             &resolve,
         )
         .unwrap_err();
-        assert_eq!(error.code(), "platform.database.transport-host-mismatch");
+        assert_eq!(error.code(), "platform.database.bracketed-host");
     }
 
     #[test]

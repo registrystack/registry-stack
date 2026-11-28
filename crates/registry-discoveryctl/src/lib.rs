@@ -302,7 +302,7 @@ where
             )
         }
         Command::RstackDev(args) => registry_rstack_dev::run(args, stdout, stderr),
-        Command::Serve(args) => serve(args, stderr),
+        Command::Serve(args) => serve(args, posture.expect("serve resolves posture"), stderr),
         Command::Check {
             project,
             runtime_config,
@@ -571,7 +571,7 @@ fn run(
     }
 }
 
-fn serve(args: ServeArgs, stderr: &mut dyn io::Write) -> ExitCode {
+fn serve(args: ServeArgs, declared: DeclaredPosture, stderr: &mut dyn io::Write) -> ExitCode {
     let binary = match selected_binary::resolve_managed(
         selected_binary::DISCOVERY,
         args.discovery_bin.as_deref(),
@@ -590,9 +590,7 @@ fn serve(args: ServeArgs, stderr: &mut dyn io::Write) -> ExitCode {
     };
     let mut command = ProcessCommand::new(binary);
     command.arg("--runtime-config").arg(args.runtime_config);
-    if let Some(posture) = args.posture {
-        command.args(["--posture", &posture]);
-    }
+    command.args(["--posture", declared.posture.as_str()]);
     replace_with_service(command, "discovery", stderr)
 }
 

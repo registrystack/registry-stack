@@ -100,3 +100,5 @@ uncertain. `cancel` never undoes a product effect. Operator routes are not part
 of this binding; `coordinatorctl` owns them.
 
 This crate is private and does not publish a standalone Python distribution.
+
+The client accepts development-marked responses by default. Set `refuse_development_peer=True` when constructing the client to reject them.

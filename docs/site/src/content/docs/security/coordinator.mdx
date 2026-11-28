@@ -99,13 +99,14 @@ Use one posture across the deployment. Development responses carry
 behind a TLS proxy on the same host. Development responses omit HSTS on a
 loopback listener.
 
-A signed event carrying `"posture":"development"` can enter a development Coordinator.
-After verifying its signature, a production Coordinator refuses it with
-`event.development-peer` and pointer `/posture`. An invalid signature returns
-`event.unauthenticated` in either posture.
+The configured trigger key authenticates the sender in both postures.
+After verifying the signature, the Coordinator rejects an envelope with a
+`posture` member as `event.invalid`. An invalid signature returns
+`event.unauthenticated`.
 
 {/* Evidence: crates/registry-coordinator/src/event_trigger_tests.rs
-    signed_development_events_follow_posture_after_authentication. */}
+    an_event_signed_with_its_trigger_key_is_admitted,
+    signed_posture_members_are_refused_after_authentication. */}
 
 {/* Evidence: crates/registry-coordinator/src/http.rs hsts_is_omitted_only_in_development_on_loopback;
     crates/registry-coordinator/tests/cli_remote.rs typed_commands_refuse_a_development_peer_only_in_production;

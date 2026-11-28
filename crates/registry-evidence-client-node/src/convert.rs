@@ -985,6 +985,7 @@ pub fn config_from_json(value: &Value) -> Result<EvidenceClientConfig, ConfigErr
             "trustedRootCertificates",
             "maximumResponseBytes",
             "maxMetadataBytes",
+            "refuseDevelopmentPeer",
         ],
         "the client configuration",
     )
@@ -998,11 +999,23 @@ pub fn config_from_json(value: &Value) -> Result<EvidenceClientConfig, ConfigErr
             "trustedRootCertificates",
             "maximumResponseBytes",
             "maxMetadataBytes",
+            "refuseDevelopmentPeer",
         ],
         "client configuration",
     )
     .map_err(ConfigError::Shape)?;
 
+    let refuse_development_peer = object
+        .get("refuseDevelopmentPeer")
+        .map(|value| {
+            value.as_bool().ok_or_else(|| {
+                ConfigError::Shape(ConversionError::new(
+                    "`refuseDevelopmentPeer` must be a boolean",
+                ))
+            })
+        })
+        .transpose()?
+        .unwrap_or(false);
     let base_url = parse_url(
         &required_string(object, "baseUrl").map_err(ConfigError::Shape)?,
         "`baseUrl`",
@@ -1028,7 +1041,7 @@ pub fn config_from_json(value: &Value) -> Result<EvidenceClientConfig, ConfigErr
         token_provider,
         trusted_jwks,
         revoked_key_ids,
-        registry_evidence_client::PeerPolicy::AcceptDevelopmentPeer,
+        crate::peer_policy(refuse_development_peer),
     );
 
     if let Some(millis) =

@@ -1017,10 +1017,11 @@ mod files {
         let path = root.join("runtime.yaml");
         std::fs::write(&path, header()).unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        crate::require_trusted_runtime_path(&path).expect("the runtime user owns the file");
+        crate::require_trusted_runtime_path(&path, Posture::Production)
+            .expect("the runtime user owns the file");
 
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o660)).unwrap();
-        let result = crate::require_trusted_runtime_path(&path);
+        let result = crate::require_trusted_runtime_path(&path, Posture::Production);
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
         let error = result.expect_err("a group-writable runtime is refused");
         assert_eq!(error.file(), Some(path.as_path()));
@@ -1031,7 +1032,7 @@ mod files {
         assert!(error
             .deciding_diagnostic()
             .suggested_action
-            .contains("remove group and other write permission"));
+            .contains(&format!("chmod g-w {}", path.display())));
     }
 
     #[cfg(unix)]
@@ -1044,16 +1045,61 @@ mod files {
         std::fs::create_dir(&writable).unwrap();
         let path = writable.join("runtime.yaml");
         std::fs::write(&path, header()).unwrap();
-        std::fs::set_permissions(&writable, std::fs::Permissions::from_mode(0o770)).unwrap();
-        let result = crate::require_trusted_runtime_path(&path);
-        std::fs::set_permissions(&writable, std::fs::Permissions::from_mode(0o700)).unwrap();
+        for (mode, who, permission) in [(0o770, "its group", "g-w"), (0o707, "others", "o-w")] {
+            std::fs::set_permissions(&writable, std::fs::Permissions::from_mode(mode)).unwrap();
+            for posture in [Posture::Production, Posture::Development] {
+                let result = RuntimeConfigLoader::new(
+                    ENVELOPE,
+                    DeclaredPosture {
+                        posture,
+                        source: PostureSource::Default,
+                    },
+                )
+                .require_trusted_ownership()
+                .load_with::<Example>(&path, env(&[]));
+                if posture == Posture::Development && mode == 0o770 {
+                    result.expect("development allows a group-writable ancestor");
+                    continue;
+                }
+                let error = result.expect_err("the writable ancestor is refused");
+                assert_eq!(error.file(), Some(path.as_path()));
+                let diagnostic = error.deciding_diagnostic();
+                assert_eq!(diagnostic.code, "platform.runtime-config.unsafe-file");
+                assert!(diagnostic
+                    .message
+                    .contains(&format!("`{}` is writable by {who}", writable.display())));
+                assert!(diagnostic
+                    .suggested_action
+                    .contains(&format!("chmod {permission} {}", writable.display())));
+                assert_eq!(
+                    diagnostic
+                        .suggested_action
+                        .contains("--posture development"),
+                    mode == 0o770
+                );
+            }
+        }
+    }
 
-        let error = result.expect_err("a group-writable ancestor is refused");
-        assert_eq!(error.file(), Some(path.as_path()));
-        assert_eq!(
-            error.deciding_diagnostic().code,
-            "platform.runtime-config.unsafe-file"
-        );
+    #[cfg(unix)]
+    #[test]
+    fn trusted_ownership_refuses_a_foreign_owner_in_both_postures() {
+        let (_guard, root) = directory();
+        let path = root.join("foreign-owner");
+        std::fs::create_dir(&path).unwrap();
+        for posture in [Posture::Production, Posture::Development] {
+            let error = require_trusted_entry(&path, posture, 1000, 1001, 0o755, false, false)
+                .expect_err("a foreign owner is refused");
+            let diagnostic = error.deciding_diagnostic();
+            assert_eq!(diagnostic.code, "platform.runtime-config.unsafe-file");
+            assert_eq!(
+                diagnostic.message,
+                format!("`{}` is owned by another user", path.display())
+            );
+            assert!(diagnostic
+                .suggested_action
+                .contains(&format!("chown 1000 {}", path.display())));
+        }
     }
 
     #[cfg(unix)]
@@ -1084,7 +1130,7 @@ mod files {
                 "platform.runtime-config.unsafe-file",
             ),
         ] {
-            let error = crate::require_trusted_runtime_path(&path)
+            let error = crate::require_trusted_runtime_path(&path, Posture::Production)
                 .expect_err("an untrusted path is refused");
             assert_eq!(error.file(), Some(path.as_path()));
             assert_eq!(error.deciding_diagnostic().code, code, "{path:?}");

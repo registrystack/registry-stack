@@ -573,7 +573,7 @@ posture that differs from the failed apply's recorded posture.
 {/* Evidence: crates/registry-breg/tests/postgres_migration.rs, real_postgres_reconcile_refuses_a_different_posture. */}
 
 Status reads the posture from the database state and exits 1 with
-`breg.activation.posture-mismatch` if it differs from the declaration.
+`platform.activation.posture-mismatch` if it differs from the declaration.
 Databases activated before posture was recorded read as production.
 Use a fresh database and apply the package in the other posture if you
 need to switch.

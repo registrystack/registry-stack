@@ -91,6 +91,34 @@ fn the_committed_example_passes_in_both_formats() {
 }
 
 #[test]
+fn production_check_lists_the_loopback_offer_token_issuer() {
+    let text = example().replace(
+        "issuer: https://mint.example.org",
+        "issuer: http://127.0.0.1:8082",
+    );
+    let (_root, path) = write(&text);
+    let output = check(
+        &path,
+        &[
+            "--format",
+            "json",
+            "--posture",
+            "production",
+            "--deny-warnings",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(0));
+    let report = json(&output);
+    let settings = report["explicitProductionSettings"].as_array().unwrap();
+    assert_eq!(settings.len(), 1);
+    assert_eq!(
+        settings[0]["code"],
+        "platform.posture.issuer-loopback-plaintext"
+    );
+    assert_eq!(settings[0]["pointer"], "/offers/issuer");
+}
+
+#[test]
 fn supervised_validation_listing_does_not_fail_deny_warnings() {
     let text = example().replace(
         "credentialIssuer: https://wallet.example.org",

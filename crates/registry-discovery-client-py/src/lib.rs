@@ -490,6 +490,7 @@ impl DiscoveryClient {
         connect_timeout_seconds=None,
         maximum_response_bytes=None,
         trusted_root_certificates=None,
+        refuse_development_peer=false,
     ))]
     fn new(
         py: Python<'_>,
@@ -498,6 +499,7 @@ impl DiscoveryClient {
         connect_timeout_seconds: Option<&Bound<'_, PyAny>>,
         maximum_response_bytes: Option<&Bound<'_, PyAny>>,
         trusted_root_certificates: Option<&Bound<'_, PyAny>>,
+        refuse_development_peer: bool,
     ) -> PyResult<Self> {
         if !base_url.is_exact_instance_of::<PyString>() {
             return Err(configuration_error(py));
@@ -511,10 +513,12 @@ impl DiscoveryClient {
             return Err(configuration_error(py));
         }
         let base_url = url::Url::parse(base_url).map_err(|_| configuration_error(py))?;
-        let mut config = DiscoveryClientConfig::new(
-            base_url,
-            discovery_client_sdk::PeerPolicy::AcceptDevelopmentPeer,
-        );
+        let peer_policy = if refuse_development_peer {
+            discovery_client_sdk::PeerPolicy::RefuseDevelopmentPeer
+        } else {
+            discovery_client_sdk::PeerPolicy::AcceptDevelopmentPeer
+        };
+        let mut config = DiscoveryClientConfig::new(base_url, peer_policy);
         if let Some(timeout) = attempt_timeout_seconds {
             config = config.with_attempt_timeout(
                 positive_duration(timeout).map_err(|_| configuration_error(py))?,

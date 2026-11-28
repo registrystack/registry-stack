@@ -34,6 +34,8 @@ authority stay separate: tooling can edit, diff, and check configuration, and
 cannot hold the production migration credential. Registry Relay is retired;
 BReg does not inherit its publication contract or serve as a generic replacement.
 
+The build posture never enters the package. A development-only property of a package must be derivable from its content and refused by production load, as the placeholder identity is.
+
 ## Source neutrality
 
 `products/breg/scripts/check_source_neutrality.py` forbids fixture-specific

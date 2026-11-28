@@ -1,6 +1,12 @@
 # Registry Evidence changelog
 
 ## Unreleased
+- OID4VCI reports loopback HTTP offer token issuer and JWKS endpoints as explicit production settings.
+
+- The Node and Python clients accept development peers by default and offer a configuration option to reject them.
+
+- Offline fixture source replay follows the command's declared posture.
+- Production-only offline Evidence commands and `evidence-oid4vci openapi` reject invalid `REGISTRY_STACK_POSTURE` values.
 
 - BREAKING: Rust client configurations take a peer policy in `EvidenceClientConfig::new` and `EvidenceClientConfig::without_verification`. Migration: pass `PeerPolicy::AcceptDevelopmentPeer` in application code and the runtime's policy in runtimes.
 - `evidencectl client contracts fetch` accepts `--posture`.
