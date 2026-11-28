@@ -1,5 +1,5 @@
-// Source SHA-256 1d29c97d5be3d5b2f55583c9a9648d907f9bd99bb6a10c3c63d65574973e9e38
-import { Transport, type Answer, type CallOptions, type ClientOptions, type JsonValue, type Operation, type Page, type RequestValues, type ResponseVariant, type WireBytes, type WireText } from "../core.ts"
+// Source SHA-256 33e018870abd2f17ee835623bc5cfa3629386cdfe173dc00ee332c575844efa2
+import { type Transport, type Answer, type CallOptions, type JsonValue, type Operation, type Page, type RequestValues, type ResponseVariant, type WireBytes, type WireText } from "../core.ts"
 import { validator } from "../schema.ts"
 
 export type Schema_BucketValue = ({ "bucket": (string); "form": ("date-bucket" | "time-bucket") & (string); "scheme": (string) })
@@ -165,12 +165,12 @@ for (const [id, definition] of Object.entries(definitions)) {
   for (const [status, variants] of Object.entries(definition.responses)) {
     responses[Number(status)] = variants.map(variant => ({ ...variant, validate: variant.rule === undefined ? undefined : validator(rules, rules[variant.rule]) }))
   }
-  routes[id] = { ...definition, responses, problemValidators: Object.fromEntries(Object.entries(definition.problems ?? {}).map(([status, rule]) => [status, validator(rules, rules[rule])])) }
+  routes[id] = { ...definition, product: "evidence", responses, problemValidators: Object.fromEntries(Object.entries(definition.problems ?? {}).map(([status, rule]) => [status, validator(rules, rules[rule])])) }
 }
 
 export class Client {
   readonly #transport: Transport
-  constructor(options: ClientOptions) { this.#transport = new Transport(options) }
+  constructor(transport: Transport) { this.#transport = transport }
   async call<K extends keyof Operations>(operation: K, ...args: Operations[K]["required"] extends true ? [Operations[K]["input"]] : [Operations[K]["input"]?]): Promise<OperationAnswer<K>> {
     return this.#call(operation, args[0]) as Promise<OperationAnswer<K>>
   }
@@ -179,10 +179,4 @@ export class Client {
     if (!route) throw new TypeError("Unknown operation")
     return this.#transport.call(route, options)
   }
-}
-
-// Every generated module exports this one factory name. The client it returns is typed to this
-// registry's operations.
-export function createRegistryClient(options: ClientOptions): Client {
-  return new Client(options)
 }

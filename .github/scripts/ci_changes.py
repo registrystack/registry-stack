@@ -333,14 +333,18 @@ DISCOVERY_PROVIDER_IMPLEMENTATION_INPUTS = (
     "crates/registry-evidencectl/src/fixtures.rs",
     "crates/registry-evidencectl/tests/production_build.rs",
 )
-# The TypeScript clients generate from these OpenAPI documents and verify the
-# shared Standard Webhooks vectors.
+# The TypeScript clients generate from these OpenAPI documents, verify the
+# shared Standard Webhooks vectors, and check the documents against what the
+# clients assume.
 TYPESCRIPT_CLIENT_INPUTS = (
     "clients/typescript/**",
+    "products/platform/scripts/check-client-contract.py",
+    "products/platform/scripts/test_check_client_contract.py",
     "products/casework/generated/registry-casework.openapi.json",
     "products/coordinator/generated/openapi/coordinator.openapi.json",
     "products/documents/generated/registry-documents.openapi.json",
     "products/evidence/generated/registry-evidence.openapi.json",
+    "products/evidence/generated/registry-evidence-oid4vci.openapi.json",
     "products/messaging/generated/registry-messaging.openapi.json",
     "products/scheduling/generated/registry-scheduling.openapi.json",
     "products/breg/generated/minimal/generated/openapi.json",

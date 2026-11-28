@@ -1,6 +1,9 @@
 import test from 'node:test'
+import { make } from './helpers.ts'
 import assert from 'node:assert/strict'
-import { RegistryError, Transport, describeError, pages, type Operation } from '../core.ts'
+import {
+  RegistryError, Transport, clientFallbackSentence, clientSentences, describeError, pages, type Operation,
+} from '../core.ts'
 import { actionInputs, Client as FacilityClient } from '../generated/breg-facility.ts'
 import { readFileSync } from 'node:fs'
 
@@ -68,13 +71,44 @@ const writeThrough = (fetch: typeof globalThis.fetch) =>
 const problem = (status: number, body: object) => new Response(JSON.stringify({ status, title: 'Problem', ...body }),
   { status, headers: { 'Content-Type': 'application/problem+json' } })
 
-test('describeError never repeats the problem detail', () => {
+test('describeError never repeats product problem detail', () => {
   const email = 'alice@example.org'
   const error = failure({ status: 409, problem: { code: 'idempotency.key-reused', traceId: trace,
     detail: 'The key ' + email + ' is in use. Trace ' + trace + '.' } })
   const sentence = describeError(error)
   assert.match(sentence, /conflicts/u)
   for (const value of [email, trace, 'in use', 'Trace']) assert.ok(!sentence.includes(value))
+})
+
+test('describeError shows a fixed sentence for a code the client raised itself and never its detail', () => {
+  const detail = 'Served reason: ' + trace + ' for alice@example.org.'
+  const own = (code: string) => failure({ status: 409, raisedByClient: true, problem: { code, detail } })
+  for (const [code, sentence] of [
+    ['client.file-type', clientSentences['client.file-type']!],
+    ['client.command-unavailable', clientSentences['client.command-unavailable']!],
+    ['client.never-heard-of-it', clientFallbackSentence],
+  ] as const) {
+    const shown = describeError(own(code))
+    assert.equal(shown, sentence)
+    assert.match(shown, oneSentence)
+    for (const value of [trace, 'alice', 'Served']) assert.ok(!shown.includes(value))
+  }
+  // A programme replaces a sentence in the one table, and `detail` stays on the error.
+  assert.equal(describeError(own('client.file-type'), { clientSentences: { 'client.file-type': 'Choisissez un PDF.' } }),
+    'Choisissez un PDF.')
+  assert.equal(describeError(own('client.other'), { clientSentences: Object.create({ 'client.other': 'Inherited.' }) }),
+    clientFallbackSentence)
+  assert.equal(own('client.file-type').detail, detail)
+})
+
+test('a client. code that arrived on the wire is a product failure, never client text', async () => {
+  const wire = failure({ status: 409, problem: { code: 'client.file-type', detail: 'synthetic upstream copy' } })
+  assert.match(describeError(wire), /conflicts/u)
+  const throughTransport = await writeThrough(async () => problem(500, { code: 'client.file-type', detail: 'synthetic upstream copy' }))
+    .call(write, { body: {} }).catch((caught: unknown) => caught)
+  assert.ok(throughTransport instanceof RegistryError)
+  assert.match(describeError(throughTransport), /may or may not have been made/u)
+  assert.ok(!describeError(throughTransport).includes('synthetic'))
 })
 
 test('describeError uses only the caller-supplied label for a refused guard', () => {
@@ -151,6 +185,9 @@ test('describeError has one fixed sentence per failure class', () => {
     [failure({ kind: 'unexpected', reason: 'too-large', status: 200 }), /could not be read/u],
     [failure({ kind: 'unexpected', reason: 'input' }), /could not be built/u],
     [failure({ kind: 'unexpected', reason: 'status', status: 418 }), /unexpected answer/u],
+    [failure({ kind: 'unexpected', reason: 'too-large', status: 401, product: 'casework' }), /could not be read/u],
+    [failure({ kind: 'refused', reason: 'configuration', status: 401, product: 'casework' }), /not available from this page/u],
+    [failure({ kind: 'refused', reason: 'sign-in-expired', status: 401 }), /sign-in has ended/u],
   ]
   for (const [error, pattern] of cases) {
     const sentence = describeError(error)
@@ -209,7 +246,7 @@ test('pages still works with for await', async () => {
 
 test('Action availability is a typed generated call', async () => {
   const body = { availability: { available: false, observedRevision: 3, reason: 'guard-not-satisfied', recovery: 'none', guardReason: 'case-closed', guardLabel: 'The case is closed.' } }
-  const client = new FacilityClient({ baseUrl: 'https://registry.example.org', token: () => 't', fetch: async (url, init) => {
+  const client = make(FacilityClient, { baseUrl: 'https://registry.example.org', token: () => 't', fetch: async (url, init) => {
     assert.equal(new URL(String(url)).pathname, '/v1/actions/register-facility/availability')
     assert.equal(init?.method, 'POST')
     assert.equal(new Headers(init?.headers).has('idempotency-key'), false)

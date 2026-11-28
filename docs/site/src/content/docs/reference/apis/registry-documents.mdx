@@ -5,7 +5,7 @@ status: draft
 owner: registry-docs
 source_repos:
   - registry-stack
-last_reviewed: unreviewed
+last_reviewed: 2026-11-27
 doc_type: reference
 locale: en
 standards_referenced:
@@ -54,6 +54,12 @@ limits on size, media types, and grant expiry.
 `POST /v1/documents` reserves one document and its single immutable version.
 Send the policy ID, custodian subject, exact byte length, media type, and expected SHA-256 digest
 (`sha256:` followed by 64 lowercase hexadecimal characters), with an `Idempotency-Key`.
+A service must name the custodian subject: a body without one is `422 request.unprocessable`.
+A person may leave `custodian` out, and the document is held in that person's own custody, as if
+the body had named the caller's own subject. A person naming any other subject is
+`403 custody.not-permitted`.
+A retry is matched on the body as sent, so an omitted `custodian` and an explicit own subject are
+different bodies under one `Idempotency-Key`.
 A successful `201` response carries the document, `uploadPath`, and `uploadExpiresAt`.
 Keep the document ID and version ID separately: a grant and a download name the exact version.
 
@@ -70,7 +76,9 @@ An expired reservation returns `410 upload.expired` and requires a new reservati
 {/* Evidence: crates/registry-documents-core/src/wire.rs, ReserveDocumentRequest, ReservationView;
     crates/registry-documents/src/http.rs, upload;
     crates/registry-documents/src/service.rs, reserve, reservation, accept_content;
+    crates/registry-documents-core/src/access.rs, place_custody;
     crates/registry-documents/tests/postgres_documents.rs,
+    a_person_omitting_the_custodian_holds_the_document_and_a_service_may_not_omit_it,
     an_expired_or_unknown_upload_is_refused. */}
 
 Upload success records the bytes and schedules content verification; it does not authorise a

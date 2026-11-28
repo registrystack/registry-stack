@@ -128,7 +128,9 @@ class CheckNoCrossOrigin(unittest.TestCase):
         "    router.layer(public_check_cors())\n"
         "}\n"
         "fn public_check_cors() -> CorsLayer {\n"
-        "    CorsLayer::new().allow_origin(Any)\n"
+        "    CorsLayer::new()\n"
+        "        .allow_origin(Any)\n"
+        "        .allow_headers([CONTENT_TYPE, HeaderName::from_static(\"registry-client\")])\n"
         "}\n"
     )
 
@@ -136,6 +138,95 @@ class CheckNoCrossOrigin(unittest.TestCase):
         self.write(self.EVIDENCE_SERVER, self.PUBLIC_CHECK_CORS)
         result = run(self.root)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_a_third_allowed_header_on_the_public_check_fails(self) -> None:
+        pair = 'CONTENT_TYPE, HeaderName::from_static("registry-client")'
+        for list_ in (
+            pair + ", AUTHORIZATION",
+            pair + ', HeaderName::from_static("x-other")',
+            "CONTENT_TYPE",
+        ):
+            self.write(
+                self.EVIDENCE_SERVER,
+                self.PUBLIC_CHECK_CORS.replace(pair, list_),
+            )
+            result = run(self.root)
+            self.assertEqual(result.returncode, 1, list_ + result.stdout + result.stderr)
+            self.assertIn("exactly Content-Type and Registry-Client", result.stdout)
+
+    def test_the_exact_pair_passes_however_it_is_formatted(self) -> None:
+        self.write(
+            self.EVIDENCE_SERVER,
+            self.PUBLIC_CHECK_CORS.replace(
+                '[CONTENT_TYPE, HeaderName::from_static("registry-client")]',
+                '[\n            CONTENT_TYPE,\n            HeaderName::from_static("registry-client"),\n        ]',
+            ),
+        )
+        result = run(self.root)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_a_public_check_without_an_allowed_header_list_fails(self) -> None:
+        self.write(
+            self.EVIDENCE_SERVER,
+            "fn public_check_cors() -> CorsLayer {\n    CorsLayer::new().allow_origin(Any)\n}\n",
+        )
+        self.assert_refused(self.EVIDENCE_SERVER)
+
+    def test_widening_the_layer_at_its_call_site_fails(self) -> None:
+        mount = "    router.layer(public_check_cors())\n"
+        for call in (
+            ".allow_headers(Any)",
+            ".allow_origin(AllowOrigin::mirror_request()).expose_headers(Any)",
+            ".allow_methods(Any)",
+            ".allow_private_network(true)",
+        ):
+            with self.subTest(call=call):
+                self.write(
+                    self.EVIDENCE_SERVER,
+                    self.PUBLIC_CHECK_CORS.replace(
+                        mount, mount.replace("())", "()" + call + ")")
+                    ),
+                )
+                result = run(self.root)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(":3:", result.stdout)
+
+    def test_a_second_cfg_gated_public_check_function_fails(self) -> None:
+        self.write(
+            self.EVIDENCE_SERVER,
+            self.PUBLIC_CHECK_CORS
+            + "#[cfg(feature = \"wide\")]\n"
+            + "fn public_check_cors() -> CorsLayer {\n"
+            + "    CorsLayer::new().allow_headers(Any)\n}\n",
+        )
+        result = run(self.root)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("exactly one fn public_check_cors", result.stdout)
+
+    def test_a_very_permissive_layer_fails_even_with_the_pinned_headers(self) -> None:
+        for constructor in ("very_permissive", "permissive"):
+            with self.subTest(constructor=constructor):
+                self.write(
+                    self.EVIDENCE_SERVER,
+                    self.PUBLIC_CHECK_CORS.replace(
+                        "CorsLayer::new()", f"CorsLayer::{constructor}()"
+                    ),
+                )
+                result = run(self.root)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertIn(":6:", result.stdout)
+
+    def test_a_second_allowed_header_call_fails_when_the_last_is_the_pair(self) -> None:
+        self.write(
+            self.EVIDENCE_SERVER,
+            self.PUBLIC_CHECK_CORS.replace(
+                "        .allow_headers(",
+                "        .allow_headers(Any)\n        .allow_headers(",
+            ),
+        )
+        result = run(self.root)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertIn("exactly Content-Type and Registry-Client", result.stdout)
 
     def test_a_second_cors_layer_in_the_same_file_fails(self) -> None:
         self.write(
@@ -145,8 +236,8 @@ class CheckNoCrossOrigin(unittest.TestCase):
         )
         result = run(self.root)
         self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-        self.assertIn(":9:", result.stdout)
-        self.assertNotIn(":6:", result.stdout)
+        self.assertIn(":10:", result.stdout)
+        self.assertNotIn(":7:", result.stdout)
 
     def test_a_cors_layer_after_the_allowed_function_outside_any_function_fails(
         self,
@@ -214,8 +305,8 @@ class CheckNoCrossOrigin(unittest.TestCase):
         self.write(
             self.EVIDENCE_SERVER,
             self.PUBLIC_CHECK_CORS.replace(
-                "CorsLayer::new().allow_origin(Any)",
-                "CorsLayer::new().allow_credentials(true)",
+                "CorsLayer::new()\n",
+                "CorsLayer::new().allow_credentials(true)\n",
             ),
         )
         self.assert_refused(self.EVIDENCE_SERVER)

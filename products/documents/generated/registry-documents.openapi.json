@@ -541,7 +541,7 @@
         "properties": {
           "custodian": {
             "$ref": "#/components/schemas/CustodianRef",
-            "description": "Who holds the document in custody."
+            "description": "Who holds the document in custody. A person may omit it and holds the\ndocument itself; a service must name the subject it places the\ndocument for."
           },
           "expectedDigest": {
             "$ref": "#/components/schemas/Digest",
@@ -572,7 +572,6 @@
         },
         "required": [
           "policyId",
-          "custodian",
           "expectedDigest",
           "length",
           "mediaType"

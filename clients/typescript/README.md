@@ -7,26 +7,101 @@ dependencies. The package and source generator require Node 24 or later. The bro
 
 ## Call a product
 
-```ts
-import { createRegistryClient } from './generated/breg-minimal.ts'
+One generated file per service holds the two entry points. A service is one Base
+Registry Engine (BReg) register and the products installed beside it. The
+examples in `generated/services/` are a facility register with Documents,
+Casework and Evidence, and one with every product.
 
-const client = createRegistryClient({
+In a page, call `createRegistryClient`. It takes no token. The page's session
+part signs each call:
+
+```ts
+import { createRegistryClient } from './generated/services/breg-facility-documents-casework-evidence.ts'
+
+const registry = createRegistryClient({ baseUrl: '/registry' })
+
+const answer = await registry.list('facility', { accessProfile: 'facility-reader', top: 25 })
+console.log(answer.items)
+await registry.casework.call('describeCasework')
+```
+
+In a function, a script or a back end, call `createRegistryServerClient`. It
+requires a token:
+
+```ts
+import { createRegistryServerClient } from './generated/services/breg-facility-documents-casework-evidence.ts'
+
+const registry = createRegistryServerClient({
   baseUrl: 'https://registry.example.org',
   token: () => session.currentAccessToken(),
   timeoutMs: 10_000,
 })
-
-const answer = await client.call('records.contact.list', {
-  query: { accessProfile: 'directory-editor', $top: 25 },
-})
-console.log(answer.data.items)
 ```
 
-Every generated module exports `createRegistryClient`, and the client it returns
-is typed to that module's operation IDs, request and response types, and
-required path, query, and header values. The module's `Client` names that type.
-Code that talks to two registries renames one import, for example
-`import { createRegistryClient as createFacilityClient } from './generated/breg-facility.ts'`.
+The object has the register's methods at the top level and each installed
+product's typed operation client at `registry.<product>`, such as
+`registry.casework.call(...)`. Every module of one service shares one transport,
+so they share one base URL, one token call per request, and the same deadlines.
+A product module exports its `Client` class and types, and no factory. A
+`Client` is built from a `Transport`.
+
+Both entry points accept `profile` as a default for routes with an
+`accessProfile` query parameter. An explicit `accessProfile` on a call takes
+precedence. Routes without that parameter receive no default. A route whose
+`accessProfile` parameter is required, whether called with `call()`, `invoke`,
+`targetConditions`, `list` or `read`, refuses with a `TypeError` before anything
+is sent when neither the call nor the client names a profile. See
+[the service tests](tests/service.test.ts).
+
+The server entry refuses to construct where `globalThis.document` exists, with a
+`TypeError`. The page entry refuses a `token` member with a `TypeError`, and
+keeps Coordinator, Messaging and OID4VCI server-only, in the type and at run time.
+
+`createRegistryClient` and `createRegistryServerClient` have no audience
+parameter yet.
+
+Task helpers attach at one marked place, the `withTaskHelpers` function in the
+generated file. They are `proposalCommands` and `documentCommands`, and the
+comment there shows the two lines that attach them. The service description
+takes an optional `authorProfile` for the proposals helper. Until they exist `registry.documents` is the Document Store's
+typed operation client, and `registry.proposals` is absent.
+
+## Create a credential offer
+
+Install `evidence-oid4vci` in your service description to get `registry.oid4vci`
+in the server entry. The example with every product includes it.
+Configure the server token function with a bearer credential authorized to
+create offers.
+
+```ts
+import { createRegistryServerClient } from './generated/services/breg-facility-all-products.ts'
+
+const registry = createRegistryServerClient({
+  baseUrl: 'https://registry.example.org',
+  token: () => offerBearer(),
+})
+const { data } = await registry.oid4vci.call('createCredentialOffer', {
+  body: { credentialConfigurationId: 'licence', subjects: [{ role: 'holder' }] },
+})
+const offerUri = data.credentialOfferUri
+```
+
+The module also types `createDraft13CredentialOffer`, `health` and `readiness`.
+Wallet exchanges and discovery metadata use the OID4VCI protocol directly.
+
+## Generate a service
+
+```sh
+node generate-service.ts --register breg-facility --products documents,casework,evidence \
+  generated/services/my-service.ts
+```
+
+The register is a BReg module in `generated/`. The products are any subset of
+`casework`, `coordinator`, `documents`, `evidence`, `evidence-oid4vci`, `messaging` and `scheduling`.
+Pass `--check` to compare the output with the file on disk. `npm run generate`
+rewrites every committed example, and `npm run check:generated` fails when one
+drifts.
+
 Successful calls return an object
 with `data`, HTTP `status` and `headers`, and the request's `idempotencyKey`
 when applicable. Supported representations are typed through `accept` where
@@ -53,9 +128,8 @@ Supply a base without credentials, query, fragment, or `.` and `..` segments
 can be a path such as `/registry`. It resolves against
 `globalThis.location.origin` and then follows the same rule. Where there is no
 page origin, a path is refused. A refused base throws
-`TypeError('Invalid registry base URL')`. The token provider runs on each call. It may return a promise or
-`undefined` for a call without a bearer credential. With a token provider,
-Fetch omits ambient credentials. Every call handles redirects manually. Every
+`TypeError('Invalid registry base URL')`. The server entry's token function runs on each call. It may return a
+string or a promise of one. Fetch omits ambient credentials. Every call handles redirects manually. Every
 call, including page methods, Actions and byte transfers, accepts an
 `AbortSignal` in `signal`. For a JSON or text call, the 10-second default
 deadline covers the exchange including token acquisition and reading the
@@ -73,50 +147,94 @@ such as a download, is one too.
 - `timeoutMs` is an idle deadline. It restarts when the answer's headers arrive
   and each time a chunk of the body arrives. A slow download that keeps moving
   finishes, and one that stops fails with reason `timeout`.
-- Fetch cannot report upload progress. While a body is sent, the wait for the
-  answer is `timeoutMs` plus one second for each 16 KiB of body. That allows an
-  upload rate as low as 128 kbit/s.
-- The client's `maxResponseBytes` does not apply. A transfer reads the whole
-  answer unless the call sets its own cap, for example
-  `{ maxResponseBytes: 50 * 1024 * 1024 }`. A larger answer fails with reason
-  `too-large`.
+- While an upload is sent, the deadline is `timeoutMs` plus one second for
+  each 16 KiB of body. That allows an upload rate as low as 128 kbit/s.
+- Pass `onProgress(loaded, total)` to track bytes. In page mode, an upload
+  with this callback uses `XMLHttpRequest` when available. It reports upload
+  events and uses `timeoutMs` again once the upload finishes. This path uses
+  `XMLHttpRequest`, not a `fetch` you supply in the client's options. Fetch
+  uploads report the full size once response headers arrive.
+- Fetch uses manual redirects. `XMLHttpRequest` can follow redirects, so the
+  client refuses an answer whose final URL differs from the request URL. A
+  redirected write has an unknown outcome. On a 307 or 308 from the page's own
+  origin, the body, `Registry-Client` and `Idempotency-Key` may already have
+  reached the redirect target before the client can refuse. Cookies do not. Keep
+  the page's own origin from redirecting a registry route.
+- Downloads report bytes as they arrive. The total comes from a plausible
+  `Content-Length` when available and is otherwise `undefined`.
+- Progress callbacks must not throw. The client logs a fixed message once
+  per call if a callback throws, and the transfer continues.
+- Set a per-call `maxResponseBytes` to bound a transfer answer, for example
+  `{ maxResponseBytes: 50 * 1024 * 1024 }`. Larger answers fail with
+  `too-large`. Page-mode 401 and 503 answers are read up to the client's cap, or
+  the call's cap if that is larger.
+
+See [the transfer tests](tests/transfer.test.ts) for the transport behaviour.
 
 ## Page mode
 
-A page whose session part signs its calls leaves `token` out:
+A page whose session part signs its calls uses `createRegistryClient`, which takes no token:
 
 ```ts
-const client = createRegistryClient({ baseUrl: '/registry' })
+const registry = createRegistryClient({ baseUrl: '/registry' })
 ```
 
 Page mode works only on the page's own origin. The page calls its own origin's
 session part, which forwards the call to the registry with the bearer token. No
-registry answers a cross-origin page call, and the browser refuses one.
+registry answers a cross-origin page call, and the browser refuses one. A page
+client whose base is an absolute URL on another origin refuses the call with a
+`TypeError` before anything is sent. The page's own origin must not redirect a
+registry route to another place. A redirect would carry the request, its body and
+its `Idempotency-Key` along with it. The client refuses a redirected answer, and a
+request's idempotency key makes a replay to the same URL harmless.
 
 - The client sends no `Authorization` header.
 - Fetch sends cookies with `credentials: 'same-origin'`, so they go to the
-  page's own origin only. With a token provider, it sends `'omit'`.
-- The client sends `Registry-Client: page` on every call, in both modes. The
-  session part requires it on every route. The exported `registryClientHeader`
-  constant holds the name and value, and a header of that name in a call's
-  options is replaced.
-- In page mode any 401 has `reason: 'sign-in-expired'` and
-  `outcomeUnknown: false`, whatever its body, because the session part passes
-  nothing on. Keep the person's unsent values and offer to sign in again.
-- In both modes a 412 has `reason: 'stale'`. Reload and try again. The Base
+  page's own origin only. The server entry sends `'omit'`.
+- The page client sends `Registry-Client: page` on every call. The session part
+  requires it on every route. The exported `registryClientHeader` constant holds
+  the name and value, and a header of that name in a call's options is
+  replaced. The server entry does not send it.
+- A 401 is the session service's own answer when it carries all three of the
+  header `Registry-Session-Answer: 1`, an `application/problem+json` body with
+  `code: 'session.expired'` and `status: 401`, and the body's `type`
+  `https://id.registrystack.org/problems/registry-platform/session/expired`.
+  It reports `sign-in-expired`. Keep the person's unsent values and offer to
+  sign in again. The gateway removes the header from every product answer, so a
+  product answer that carries the code alone is a product answer.
+- Other 401 answers report `configuration` or a body size error. Keep the
+  person's unsent values and route a configuration refusal to the service
+  operator using the module named in `error.message` and `error.product`. The
+  sentence a person reads names no module.
+- A 503 is the session service's own answer when it carries the same header, an
+  `application/problem+json` body with `code: 'session.unavailable'` and
+  `status: 503`, and the `type`
+  `https://id.registrystack.org/problems/registry-platform/session/unavailable`.
+  It reports `unreachable`. The session part forwarded nothing, so you can offer
+  a retry. Any other 503 is a product failure, and a write it answers has an
+  unknown outcome.
+- A page 401 or 503 is read up to the client's `maxResponseBytes` even when a
+  call sets a smaller cap, so a small cap does not hide an expiry.
+- These session and configuration failures have `outcomeUnknown: false`.
+  A bare 403 still means the person is not allowed.
+
+- In a page and on a server a 412 has `reason: 'stale'`. Reload and try again. The Base
   Registry Engine (BReg) also answers a refused guard with 412, so it is
   `stale` too, and `describeError` still shows that guard's label.
 
-Both reasons sit on the existing error kinds, so code that catches a refusal
-keeps working. Operations authenticated by a signature never send cookies.
+Operations authenticated by a signature never send cookies. See
+[the page-mode tests](tests/page.test.ts) for these answers.
 
 ## Errors and writes
 
-`describeError(error)` returns one fixed, readable sentence chosen by the
-failure's reason and status. It never repeats text from the answer, so it holds
-no request value, token, header, or trace id. When `outcomeUnknown` is true, the
-sentence says the change may or may not have been made and to check before
-trying again. For a refused BReg guard, pass the labels your project declares
+`describeError(error)` always shows a fixed sentence and never repeats the
+response detail. An error the client raised itself with a `client.` code shows
+that code's sentence from `clientSentences`, the one table a programme replaces
+through `describeError(error, { clientSentences })`, or a generic sentence for
+a code the table lacks. Its `detail` stays on the error for developers. A
+`client.` code that arrived in an answer is a product failure and gets the
+usual sentence. When `outcomeUnknown` is true, the sentence asks you to check whether
+the change was made before trying again. For a refused BReg guard, pass the labels your project declares
 for its guards, keyed by `guardReason`, as
 `describeError(error, { guardLabels })`. The sentence is then that label, and
 otherwise a fixed sentence. The OpenAPI document does not carry guard labels.
@@ -201,19 +319,20 @@ const walk = pages(cursor => client.records_contact_listPage({}, cursor))
 const first = await walk.next()
 ```
 
-A BReg list operation that publishes query profiles, in
-`x-registry-queryProfiles` or `x-registry-queryProfile`, also has a typed
-`list` method:
+Use `list(recordType, options)` for the register's top-level list of a record
+type. The query profiles published for the route determine the options.
 
 ```ts
-const page = await client.list('records.licence.list', {
+const page = await client.list('licence', {
   accessProfile: 'licence-officer',
   where: { status: ['active', 'suspended'], holderName: { startsWith: 'Dep' } },
   orderBy: 'expiresOn',
   top: 20,
   count: true,
 })
-const next = await client.list('records.licence.list', { accessProfile: 'licence-officer' }, page.nextCursor ?? undefined)
+if (page.nextCursor !== null) {
+  const next = await client.list('licence', { accessProfile: 'licence-officer', after: page.nextCursor })
+}
 ```
 
 - `where` keys are the profile's filterable properties. A value is an
@@ -223,15 +342,40 @@ const next = await client.list('records.licence.list', { accessProfile: 'licence
 - `orderBy` is one sortable property, or `'property desc'` where allowed.
   `select` lists selectable properties. `count` is allowed only with
   `allowCount`. `top` runs from 1 to the profile's `maximumPageSize`.
-- `accessProfile` is required when the operation has more than one profile.
+- A list with several query profiles or a route that requires a profile needs
+  either the service default or an explicit `accessProfile`. The explicit
+  profile takes precedence. The client checks filters against the resolved profile.
 - A profile with `requiredFilters` lists only when `where` holds an equality
   filter on every property of one alternative. An `in` list does not count.
 - The types enforce these rules, and the client checks them again before it
   sends anything. A refusal is a `TypeError` naming the property and profile,
   never a filter value.
 - The answer is `{ items, nextCursor }`, plus `count` when the answer carries
-  it. A call with a cursor sends only the access profile and the cursor.
-- Only profiles of kind `list` are covered. Other queries use `call`.
+  it. A null cursor ends the list. With `after`, keep the same access profile.
+  If the first page used the default, omit `accessProfile` again. If it named
+  a profile, repeat that profile.
+  The client refuses `where`, `orderBy`, `select` and `count` alongside `after`.
+  The continuation sends only the access profile and the cursor.
+- Sub-collection lists use `call` by operation ID or their generated page method.
+
+Each item is `{ id, revision, data }`. The fields come from the record's
+`recordIdentifier`, `revisionIdentifier` and `domainData`. Pass the row ID to
+`read` to load the detail page in the same shape.
+
+```ts
+const row = await registry.read('facility', id, { accessProfile: 'facility-reader' })
+console.log(row.data.name)
+```
+
+The type of `data` describes the record's declared fields. A profile or
+selection can return only a subset. A read that takes a profile uses the
+service default unless the call names its own. If the route requires a profile
+and neither is set, the client refuses before sending. A valid 404 problem
+remains a refusal.
+
+`invoke` takes Actions that apply at once. Use `call` with the start operation
+ID to start a reviewed Action. If an untyped caller passes a reviewed Action
+to `invoke`, it gets a fixed message pointing to proposals before dispatch.
 
 ```ts
 const input = { contactId, email: 'alice@example.org' }

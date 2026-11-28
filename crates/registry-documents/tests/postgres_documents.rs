@@ -1562,6 +1562,117 @@ async fn custody_is_placed_only_by_a_custody_profile_and_a_human_only_into_its_o
     assert_eq!(reserved, 1);
 }
 
+/// A person that omits the custodian member holds the document itself,
+/// exactly as if it had named its own subject. A service must still say
+/// whom it places a document for, and a body that names a custodian is
+/// judged as ever.
+#[tokio::test]
+async fn a_person_omitting_the_custodian_holds_the_document_and_a_service_may_not_omit_it() {
+    let deployment = deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (_prepared, api) = start(&deployment, &verifier).await;
+    let content = pdf(512, 44);
+    let named = reservation_body("named-share", CITIZEN.subject, &sha256(&content), 512, PDF);
+    let mut omitted = named.clone();
+    omitted.as_object_mut().unwrap().remove("custodian");
+
+    let by_name = api.reserve_body(CITIZEN, "named", &named).await;
+    assert_eq!(
+        by_name.status,
+        201,
+        "{}",
+        String::from_utf8_lossy(&by_name.body)
+    );
+    let by_default = api.reserve_body(CITIZEN, "omitted", &omitted).await;
+    assert_eq!(
+        by_default.status,
+        201,
+        "{}",
+        String::from_utf8_lossy(&by_default.body)
+    );
+    let (named_document, _, _) = reservation(&by_name);
+    let (default_document, _, _) = reservation(&by_default);
+    assert_eq!(
+        api.read(CITIZEN, &default_document).await.json()["custodian"],
+        api.read(CITIZEN, &named_document).await.json()["custodian"]
+    );
+    let (documents, custodies): (i64, i64) = (
+        deployment
+            .scalar("SELECT count(*) FROM documents_documents")
+            .await,
+        deployment
+            .scalar(
+                "SELECT count(DISTINCT (custodian_issuer, custodian_kind, custodian_subject,
+                                        represented_principal_subject))
+                   FROM documents_documents",
+            )
+            .await,
+    );
+    assert_eq!((documents, custodies), (2, 1));
+
+    // The replay of the omitted-member body answers the first reservation.
+    let again = api.reserve_body(CITIZEN, "omitted", &omitted).await;
+    assert_eq!(again.status, 201);
+    assert_eq!(again.json()["document"]["id"], default_document.as_str());
+
+    // A person naming another subject is refused as before.
+    let mut other = named.clone();
+    other["custodian"] = json!({"subject": OTHER_CITIZEN.subject});
+    api.reserve_body(CITIZEN, "other", &other)
+        .await
+        .assert_problem(ProblemCode::CustodyNotPermitted);
+
+    // A service naming a subject is unchanged under citizen-delivery, the only
+    // policy these steps use.
+    let service_named = reservation_body(
+        "citizen-delivery",
+        CITIZEN.subject,
+        &sha256(&content),
+        512,
+        PDF,
+    );
+    assert_eq!(
+        api.reserve_body(APP, "service-named", &service_named)
+            .await
+            .status,
+        201
+    );
+    // A service omitting it is refused under citizen-delivery.
+    let mut service_omitted = service_named;
+    service_omitted.as_object_mut().unwrap().remove("custodian");
+    api.reserve_body(APP, "service-omitted", &service_omitted)
+        .await
+        .assert_problem(ProblemCode::RequestUnprocessable);
+
+    let reserved: i64 = deployment
+        .scalar("SELECT count(*) FROM documents_documents")
+        .await;
+    assert_eq!(reserved, 3);
+}
+
+/// A released download is never sniffed into another type: it carries
+/// `X-Content-Type-Options: nosniff` and is an attachment.
+#[tokio::test]
+async fn a_released_download_is_an_attachment_that_browsers_may_not_sniff() {
+    let deployment = access_deployment().await;
+    let verifier = FakeVerifier::new("binding-a", APPROVE);
+    let (prepared, api) = start(&deployment, &verifier).await;
+    let content = pdf(600, 45);
+    let (document, version) = ready_under(
+        &prepared,
+        &api,
+        "citizen-delivery",
+        CITIZEN.subject,
+        &content,
+    )
+    .await;
+    let released = api.download(CITIZEN, &document, &version).await;
+    assert_eq!(released.status, 200);
+    assert_eq!(released.body, content);
+    assert_eq!(released.headers["x-content-type-options"], "nosniff");
+    assert_eq!(released.headers["content-disposition"], "attachment");
+}
+
 /// A deployment of [`access_project`], migrated.
 async fn access_deployment() -> Deployment {
     let deployment =

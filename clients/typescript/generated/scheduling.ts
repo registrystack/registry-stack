@@ -1,6 +1,6 @@
 // Source SHA-256 e6d8c54e6fdeec4ba3dec3eb9c8c8e21e568c983a8eec8d004c8c9aae6133976
 // Unconstrained JSON /components/schemas/AppointmentHistoryEntryDocument/properties/detail
-import { Transport, type Answer, type CallOptions, type ClientOptions, type JsonValue, type Operation, type Page, type RequestValues, type ResponseVariant, type WireBytes, type WireText } from "../core.ts"
+import { type Transport, type Answer, type CallOptions, type JsonValue, type Operation, type Page, type RequestValues, type ResponseVariant, type WireBytes, type WireText } from "../core.ts"
 import { validator } from "../schema.ts"
 
 export type Schema_AdditionalAllocationRequest = ({ "offering": (string); "resource"?: (string); "units"?: (number) })
@@ -449,12 +449,12 @@ for (const [id, definition] of Object.entries(definitions)) {
   for (const [status, variants] of Object.entries(definition.responses)) {
     responses[Number(status)] = variants.map(variant => ({ ...variant, validate: variant.rule === undefined ? undefined : validator(rules, rules[variant.rule]) }))
   }
-  routes[id] = { ...definition, responses, problemValidators: Object.fromEntries(Object.entries(definition.problems ?? {}).map(([status, rule]) => [status, validator(rules, rules[rule])])) }
+  routes[id] = { ...definition, product: "scheduling", responses, problemValidators: Object.fromEntries(Object.entries(definition.problems ?? {}).map(([status, rule]) => [status, validator(rules, rules[rule])])) }
 }
 
 export class Client {
   readonly #transport: Transport
-  constructor(options: ClientOptions) { this.#transport = new Transport(options) }
+  constructor(transport: Transport) { this.#transport = transport }
   async call<K extends keyof Operations>(operation: K, ...args: Operations[K]["required"] extends true ? [Operations[K]["input"]] : [Operations[K]["input"]?]): Promise<Answer<Operations[K]["output"]>> {
     return this.#call(operation, args[0])
   }
@@ -495,10 +495,4 @@ export class Client {
     const { data } = await this.call("listServices", { ...options, query: cursor === undefined ? options.query : { ...options.query, cursor } })
     return { items: data.items, nextCursor: data.nextCursor ?? null }
   }
-}
-
-// Every generated module exports this one factory name. The client it returns is typed to this
-// registry's operations.
-export function createRegistryClient(options: ClientOptions): Client {
-  return new Client(options)
 }

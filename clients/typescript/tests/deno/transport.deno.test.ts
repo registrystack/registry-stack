@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { make } from '../helpers.ts'
 import { RegistryError, describeError } from '../../core.ts'
 import { Client as MinimalClient } from '../../generated/breg-minimal.ts'
 import { Client as DocumentsClient } from '../../generated/documents.ts'
@@ -7,7 +8,7 @@ const meta = { datasetIdentifier: 'directory', recordTypeIdentifier: 'contact', 
 
 Deno.test('a generated client calls through Fetch and walks a page', async () => {
   const seen: string[] = []
-  const client = new MinimalClient({ baseUrl: 'https://registry.example.org', token: () => 'fixture',
+  const client = make(MinimalClient, { baseUrl: 'https://registry.example.org', token: () => 'fixture',
     fetch: async (url, init) => {
       seen.push(String(url))
       assert.equal(new Headers(init?.headers).get('authorization'), 'Bearer fixture')
@@ -22,8 +23,8 @@ Deno.test('a path base resolves against the page origin and dot segments are ref
   const before = Object.getOwnPropertyDescriptor(globalThis, 'location')
   Object.defineProperty(globalThis, 'location', { value: { origin: 'https://app.example.org' }, configurable: true })
   try {
-    new MinimalClient({ baseUrl: '/registry', token: () => undefined })
-    assert.throws(() => new MinimalClient({ baseUrl: '/registry/../other', token: () => undefined }),
+    make(MinimalClient, { baseUrl: '/registry', token: () => undefined })
+    assert.throws(() => make(MinimalClient, { baseUrl: '/registry/../other', token: () => undefined }),
       /Invalid registry base URL/u)
   } finally {
     if (before) Object.defineProperty(globalThis, 'location', before)
@@ -31,17 +32,19 @@ Deno.test('a path base resolves against the page origin and dot segments are ref
 })
 
 Deno.test('plain http to a public host is refused even with allowInsecureHttp', () => {
-  assert.throws(() => new MinimalClient({ baseUrl: 'http://registry.example.org', token: () => 'fixture',
+  assert.throws(() => make(MinimalClient, { baseUrl: 'http://registry.example.org', token: () => 'fixture',
     allowInsecureHttp: true }), /Invalid registry base URL/u)
-  new MinimalClient({ baseUrl: 'http://breg:8080', token: () => 'fixture', allowInsecureHttp: true })
+  make(MinimalClient, { baseUrl: 'http://breg:8080', token: () => 'fixture', allowInsecureHttp: true })
 })
 
 Deno.test('page mode sends the page header and same-origin cookies, and reads a 401 as sign-in-expired', async () => {
   let seen: { credentials: unknown; page: string | null; authorization: string | null } | undefined
-  const client = new MinimalClient({ baseUrl: 'https://registry.example.org', fetch: async (_url, init) => {
+  const client = make(MinimalClient, { baseUrl: 'https://registry.example.org', fetch: async (_url, init) => {
     const headers = new Headers(init?.headers)
     seen = { credentials: init?.credentials, page: headers.get('Registry-Client'), authorization: headers.get('authorization') }
-    return new Response('Unauthorized', { status: 401 })
+    return new Response(JSON.stringify({ status: 401, code: 'session.expired',
+      type: 'https://id.registrystack.org/problems/registry-platform/session/expired' }),
+    { status: 401, headers: { 'content-type': 'application/problem+json', 'registry-session-answer': '1' } })
   } })
   const error = await client.records_contact_listPage().catch((caught: unknown) => caught)
   assert.deepEqual(seen, { credentials: 'same-origin', page: 'page', authorization: null })
@@ -58,7 +61,7 @@ Deno.test('a moving download outlasts the deadline and an upload sends a File as
     controller.enqueue(new Uint8Array(512))
   } })
   const bodies: unknown[] = []
-  const documents = new DocumentsClient({ baseUrl: 'https://registry.example.org', token: () => 'fixture', timeoutMs: 100,
+  const documents = make(DocumentsClient, { baseUrl: 'https://registry.example.org', token: () => 'fixture', timeoutMs: 100,
     fetch: async (_url, init) => {
       if (init?.method === 'PUT') { bodies.push(init.body); return new Response(null, { status: 503 }) }
       return new Response(slow, { headers: { 'Content-Type': 'application/pdf' } })
@@ -72,7 +75,7 @@ Deno.test('a moving download outlasts the deadline and an upload sends a File as
 })
 
 Deno.test('a 5xx answer to a write gives the outcome-unknown sentence', async () => {
-  const client = new MinimalClient({ baseUrl: 'https://registry.example.org', token: () => 'fixture',
+  const client = make(MinimalClient, { baseUrl: 'https://registry.example.org', token: () => 'fixture',
     fetch: async () => new Response(null, { status: 503 }) })
   const error = await client.invoke('update-contact-email', { contactId: '00000000-0000-4000-8000-000000000001',
     email: 'alice@example.org' }, { preconditions: { contactId: { ifMatch: '"1"' } } }).catch((caught: unknown) => caught)

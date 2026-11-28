@@ -1,13 +1,15 @@
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
 /**
- * The fixed header the client sends on every call, in both modes. The session part in front
- * of a page requires it on every route. Its name and value live only here.
+ * The fixed header a page client sends on every call. The session part in front of a page
+ * requires it on every route. A client with a token provider, which runs on a server, does
+ * not send it. Its name and value live only here.
  */
 export const registryClientHeader = { name: 'Registry-Client', value: 'page' } as const
 
 export interface ClientOptions {
   baseUrl: string | URL
+  profile?: string
   /**
    * Runs on each call for a bearer credential. Leave it out in a page whose session part
    * signs calls: the client then sends no `Authorization` and sends cookies to its own
@@ -23,9 +25,11 @@ export interface ClientOptions {
 export interface CallOptions {
   signal?: AbortSignal
   idempotencyKey?: string
+  onProgress?: (loaded: number, total: number | undefined) => void
   /**
    * Largest answer body this call reads. A JSON or text call reads up to the client's
-   * `maxResponseBytes` without it. A byte transfer has no cap without it.
+   * `maxResponseBytes` without it. A byte transfer has no default cap. A page 401 or 503 is read up to
+   * the larger of this and the client's `maxResponseBytes`.
    */
   maxResponseBytes?: number
 }
@@ -48,6 +52,9 @@ export interface ResponseVariant {
 export interface Operation {
   method: string
   path: string
+  product?: string
+  accessProfileParameter?: boolean
+  accessProfileRequired?: boolean
   keyed?: boolean
   mutating?: boolean
   messaging?: boolean
@@ -72,9 +79,12 @@ export interface WireText<Media extends string = string> { text: string; mediaTy
 
 export type ErrorKind = 'refused' | 'unreachable' | 'unexpected'
 export type ErrorReason = 'token' | 'input' | 'network' | 'timeout' | 'aborted'
-  | 'too-large' | 'media' | 'schema' | 'unsafe-integer' | 'status' | 'stale' | 'sign-in-expired'
+  | 'too-large' | 'media' | 'schema' | 'unsafe-integer' | 'status' | 'stale' | 'sign-in-expired' | 'configuration'
 
 interface ErrorInfo {
+  product?: string
+  /** Set by code that raises an error itself, never by an answer that arrived on the wire. */
+  raisedByClient?: boolean
   reason: ErrorReason
   kind: ErrorKind
   status?: number
@@ -85,7 +95,15 @@ interface ErrorInfo {
   retryAfterSeconds?: number
 }
 
+// For developers, in `message` and `product`. The sentence a person reads names no module.
+function configurationMessage(product = 'registry'): string {
+  return `The ${product} service refused this page's session. Check the service configuration.`
+}
+
 export class RegistryError extends Error implements ErrorInfo {
+  readonly product?: string
+  /** True for an error the client raised itself, whose `client.` code and `detail` are its own words. */
+  readonly raisedByClient: boolean
   readonly kind: ErrorKind
   readonly reason: ErrorReason
   readonly status?: number
@@ -100,8 +118,10 @@ export class RegistryError extends Error implements ErrorInfo {
   readonly traceId?: string
 
   constructor(info: ErrorInfo) {
-    super('Registry request ' + info.kind)
+    super(info.reason === 'configuration' ? configurationMessage(info.product) : 'Registry request ' + info.kind)
     this.name = 'RegistryError'
+    this.product = info.product
+    this.raisedByClient = info.raisedByClient === true
     this.kind = info.kind
     this.reason = info.reason
     this.status = info.status
@@ -171,7 +191,7 @@ function baseAddress(value: string | URL, allowInsecureHttp: boolean): string {
 
 class InputError extends TypeError {}
 
-function endpoint(base: string, operation: Operation, values: RequestValues): URL {
+function endpoint(base: string, operation: Operation, values: RequestValues, profile: string | undefined): URL {
   const template = operation.path
   if (!/^\/(?!\/)[a-zA-Z0-9_./{}:-]+$/u.test(template) || template.split('/').some(part => part === '.' || part === '..')) {
     throw new InputError('Invalid operation path')
@@ -187,6 +207,10 @@ function endpoint(base: string, operation: Operation, values: RequestValues): UR
     for (const entry of entries) {
       if (entry !== undefined) url.searchParams.append(key, String(entry))
     }
+  }
+  if (operation.accessProfileParameter && !url.searchParams.has('accessProfile')) {
+    if (profile !== undefined) url.searchParams.set('accessProfile', profile)
+    else if (operation.accessProfileRequired) throw new InputError('This list needs an access profile')
   }
   return url
 }
@@ -252,6 +276,147 @@ function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
 }
 
 class AnswerTooLarge extends Error {}
+class RedirectedAnswer extends Error {}
+
+type ResponseHead = Pick<Response, 'headers' | 'status'>
+type Progress = NonNullable<CallOptions['onProgress']>
+
+function progressReporter(callback: Progress): Progress {
+  let reported = false
+  return (loaded, total) => {
+    try {
+      callback(loaded, total)
+    } catch {
+      if (!reported) {
+        reported = true
+        console.error('Registry progress callback failed.')
+      }
+    }
+  }
+}
+
+function responseLength(headers: Headers): number | undefined {
+  const length = headers.get('content-length')
+  const encoding = headers.get('content-encoding')
+  if (!length || !/^[0-9]+$/u.test(length) || encoding && encoding.toLowerCase() !== 'identity') return undefined
+  const total = Number(length)
+  return Number.isSafeInteger(total) ? total : undefined
+}
+
+// The members of XMLHttpRequest the upload path uses. The code reads it through this type
+// so it type-checks without a DOM library.
+interface ProgressEventLike { loaded: number; total: number; lengthComputable: boolean }
+interface XhrTarget {
+  addEventListener(type: 'progress', listener: (event: ProgressEventLike) => void): void
+  addEventListener(type: 'load' | 'readystatechange' | 'error' | 'abort', listener: () => void): void
+}
+interface XhrRequest extends XhrTarget {
+  readonly upload: XhrTarget
+  readonly readyState: number
+  readonly status: number
+  readonly response: unknown
+  readonly responseURL: string
+  responseType: string
+  withCredentials: boolean
+  open(method: string, url: string): void
+  setRequestHeader(name: string, value: string): void
+  getAllResponseHeaders(): string
+  send(body?: RequestBody): void
+  abort(): void
+}
+const xhrConstructor = (): (new () => XhrRequest) | undefined => {
+  const found = (globalThis as { XMLHttpRequest?: unknown }).XMLHttpRequest
+  return typeof found === 'function' ? found as new () => XhrRequest : undefined
+}
+
+function xhrBytes(Request: new () => XhrRequest, url: URL, method: string, headers: Headers, body: RequestBody,
+    signal: AbortSignal, answerLimit: (head: ResponseHead) => number, progress: Progress,
+    receive: (head: ResponseHead) => void, moved: () => void, download: boolean): Promise<Uint8Array> {
+  let abort: (() => void) | undefined
+  return new Promise<Uint8Array>((resolve, reject) => {
+    const request = new Request()
+    request.open(method, url.href)
+    request.withCredentials = false
+    request.responseType = 'arraybuffer'
+    headers.forEach((value, name) => request.setRequestHeader(name, value))
+    const size = bodySize(body)
+    let sent = false
+    let lastUploaded = -1
+    let limit = Infinity
+    let head: ResponseHead | undefined
+    let lastDownloaded = 0
+
+    const stop = (error: unknown) => {
+      reject(error)
+      request.abort()
+    }
+    abort = () => stop(signal.reason)
+    const finishUpload = () => {
+      if (sent) return
+      sent = true
+      moved()
+      if (lastUploaded !== size) progress(size, size)
+    }
+    const receiveHead = () => {
+      if (request.responseURL && request.responseURL !== url.href) throw new RedirectedAnswer()
+      if (head || request.status === 0) return
+      const receivedHeaders = new Headers()
+      for (const line of request.getAllResponseHeaders().split('\r\n')) {
+        const separator = line.indexOf(':')
+        if (separator > 0) receivedHeaders.append(line.slice(0, separator), line.slice(separator + 1).trim())
+      }
+      head = { status: request.status, headers: receivedHeaders }
+      receive(head)
+      limit = answerLimit(head)
+      moved()
+    }
+    const reportDownload = (loaded: number) => {
+      if (!download || !head || head.status < 200 || head.status >= 300 || loaded <= lastDownloaded) return
+      lastDownloaded = loaded
+      const total = responseLength(head.headers)
+      progress(loaded, total !== undefined && total >= loaded ? total : undefined)
+    }
+    request.upload.addEventListener('progress', event => {
+      if (sent) return
+      lastUploaded = event.loaded
+      progress(event.loaded, event.lengthComputable ? event.total : event.loaded === size ? size : undefined)
+    })
+    request.upload.addEventListener('load', finishUpload)
+    request.addEventListener('readystatechange', () => {
+      if (request.readyState !== 2) return
+      try { receiveHead() } catch (error) { stop(error) }
+    })
+    request.addEventListener('progress', event => {
+      if (event.loaded > limit) stop(new AnswerTooLarge())
+      else {
+        moved()
+        reportDownload(event.loaded)
+      }
+    })
+    request.addEventListener('load', () => {
+      try {
+        receiveHead()
+        if (!head) throw new Error('Registry request failed')
+        const bytes = new Uint8Array(request.response as ArrayBuffer)
+        if (bytes.length > limit) throw new AnswerTooLarge()
+        finishUpload()
+        reportDownload(bytes.length)
+        resolve(bytes)
+      } catch (error) {
+        stop(error)
+      }
+    })
+    request.addEventListener('error', () => reject(new Error('Registry request failed')))
+    request.addEventListener('abort', () => reject(signal.reason))
+    signal.throwIfAborted()
+    signal.addEventListener('abort', abort, { once: true })
+    try {
+      request.send(body)
+    } catch (error) {
+      reject(error)
+    }
+  }).finally(() => { if (abort) signal.removeEventListener('abort', abort) })
+}
 
 /**
  * A byte transfer sends or answers with bytes rather than JSON: a request body that is not
@@ -269,27 +434,31 @@ export function isTransfer(operation: Operation): boolean {
 const uploadAllowanceMs = (bytes: number) => Math.ceil(bytes / 16_384) * 1000
 const longestTimer = 2_147_483_647
 
-function bodySize(body: BodyInit | undefined): number {
+type RequestBody = string | Blob | Uint8Array<ArrayBuffer>
+
+function bodySize(body: RequestBody | undefined): number {
   if (body === undefined) return 0
   if (typeof body === 'string') return new TextEncoder().encode(body).length
   if (body instanceof Blob) return body.size
-  if (body instanceof Uint8Array) return body.length
-  return 0
+  return body.length
 }
 
 async function readBytes(response: Response, maxBytes: number, signal: AbortSignal,
-    progress?: () => void): Promise<Uint8Array> {
+    moved?: () => void, progress?: Progress): Promise<Uint8Array> {
   if (!response.body) return new Uint8Array()
   const reader = response.body.getReader()
   const chunks: Uint8Array[] = []
   let size = 0
+  let total = progress ? responseLength(response.headers) : undefined
   try {
     while (true) {
       const chunk = await abortable(reader.read(), signal)
       if (chunk.done) break
-      progress?.()
+      moved?.()
       size += chunk.value.length
       if (size > maxBytes) throw new AnswerTooLarge()
+      if (total !== undefined && size > total) total = undefined
+      progress?.(size, total)
       chunks.push(chunk.value)
     }
   } catch (error) {
@@ -325,6 +494,28 @@ function parseProblem(raw: Uint8Array, media: string): Record<string, unknown> |
   }
 }
 
+// The session service sets this header on its own answers, and the gateway removes it from every
+// forwarded reply, so a product cannot produce it.
+const sessionAnswerHeader = 'registry-session-answer'
+const sessionProblemBase = 'https://id.registrystack.org/problems/registry-platform/session/'
+
+/**
+ * The session service's own answer: the status, the marker header, and a problem whose code,
+ * status and type all name the same session answer. A product answer with the code alone is not.
+ */
+function isSessionProblem(raw: Uint8Array, media: string, headers: Headers, answer: 'expired' | 'unavailable'): boolean {
+  if (media !== 'application/problem+json' || headers.get(sessionAnswerHeader) !== '1') return false
+  try {
+    const value = JSON.parse(decoder.decode(raw)) as unknown
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+    const problem = value as Record<string, unknown>
+    return problem.code === 'session.' + answer && problem.status === (answer === 'expired' ? 401 : 503)
+      && problem.type === sessionProblemBase + answer
+  } catch {
+    return false
+  }
+}
+
 export class Transport {
   readonly #base: string
   readonly #options: ClientOptions
@@ -340,6 +531,8 @@ export class Transport {
     this.#options = { ...options }
   }
 
+  get profile(): string | undefined { return this.#options.profile }
+
   async call<T>(operation: Operation, values: RequestValues = {}): Promise<Answer<T>> {
     const deadline = new AbortController()
     // A JSON call has one deadline for the whole exchange. A byte transfer restarts it
@@ -351,7 +544,7 @@ export class Transport {
       timer = setTimeout(() => deadline.abort(), Math.min(ms, longestTimer))
     }
     wait(this.#timeout)
-    let response: Response | undefined
+    let response: ResponseHead | undefined
     let raw: Uint8Array | undefined
     let problem: Record<string, unknown> | undefined
     let idempotencyKey: string | undefined
@@ -360,14 +553,18 @@ export class Transport {
     let stage: ErrorReason = 'input'
     let callerSignal: AbortSignal | undefined
     let ownError: RegistryError | undefined
-    const failure = (kind: ErrorKind, reason: ErrorReason) => {
+    const pageMode = this.#options.token === undefined && !operation.signed
+    const failure = (kind: ErrorKind, reason: ErrorReason, notForwarded = false) => {
       const status = response?.status
-      const outcomeUnknown = operation.mutating === true && dispatched && (
+      const outcomeUnknown = !notForwarded && operation.mutating === true && dispatched && (
         status === undefined || status === 0 || status >= 500 || status >= 200 && status < 300 ||
         (reason === 'timeout' || reason === 'aborted') && (status < 400 || status >= 500)
       )
       ownError = new RegistryError({
         kind, reason, status: status === 0 ? undefined : status, raw, problem,
+        // Only the two failures a developer must route to a service name it.
+        product: pageMode && status === 401 && (reason === 'configuration' || reason === 'too-large')
+          ? operation.product ?? 'registry' : undefined,
         idempotencyKey: token && idempotencyKey?.includes(token) ? undefined : idempotencyKey,
         retryAfterSeconds: operation.messaging && status === 429 && problem
           ? retryAfter(response?.headers.get('retry-after') ?? null) : undefined,
@@ -388,16 +585,22 @@ export class Transport {
         }
         idempotencyKey ??= crypto.randomUUID()
       }
-      const url = endpoint(this.#base, operation, values)
+      const url = endpoint(this.#base, operation, values, this.#options.profile)
+      // The session part forwards a page's calls, so a page client stays on the page's own origin.
+      const pageOrigin = (globalThis as { location?: { origin?: unknown } }).location?.origin
+      if (pageMode && typeof pageOrigin === 'string' && url.origin !== pageOrigin) {
+        throw new InputError('A page client calls only its own origin')
+      }
       const headers = new Headers()
       for (const [key, value] of Object.entries(values.headers ?? {})) {
         if (['authorization', 'cookie', 'idempotency-key'].includes(key.toLowerCase())) continue
         if (value !== undefined) headers.set(key, String(value))
       }
-      headers.set(registryClientHeader.name, registryClientHeader.value)
+      // Only a page client, which has no token, names itself. A server client does not send it.
+      if (this.#options.token === undefined) headers.set(registryClientHeader.name, registryClientHeader.value)
       if (idempotencyKey !== undefined) headers.set('idempotency-key', idempotencyKey)
       if (values.accept) headers.set('accept', values.accept)
-      let body: BodyInit | undefined
+      let body: RequestBody | undefined
       if (values.body !== undefined) {
         const declared = operation.requestMediaTypes ?? [operation.requestMediaType]
         const content = values.contentType ?? operation.requestMediaType
@@ -429,29 +632,54 @@ export class Transport {
       dispatched = true
       // Page mode sends cookies to the page's own origin only. A token or a signature
       // authenticates every other call, so it sends none.
-      const pageMode = this.#options.token === undefined && !operation.signed
-      if (transfer) wait(this.#timeout + uploadAllowanceMs(bodySize(body)))
-      response = await abortable(fetcher(url, {
-        method: operation.method, headers, body, redirect: 'manual', credentials: pageMode ? 'same-origin' : 'omit', signal,
-      }), signal)
-      const moved = transfer ? () => wait(this.#timeout) : undefined
-      moved?.()
-      raw = await readBytes(response, limit, signal, moved)
+      const progress = (transfer || operation.signed) && values.onProgress ? progressReporter(values.onProgress) : undefined
+      const downloads = progress && Object.values(operation.responses).some(variants => variants.some(variant => variant.mode === 'binary'))
+      const size = bodySize(body)
+      if (transfer) wait(this.#timeout + uploadAllowanceMs(size))
+      const moved = () => { if (transfer) wait(this.#timeout) }
+      // A session answer is small, so a page 401 or 503 is read up to the client default even when
+      // a call's own cap is smaller, and never past it on a byte transfer.
+      const answerLimit = (head: ResponseHead) => pageMode && (head.status === 401 || head.status === 503)
+        ? Math.max(cap ?? 0, this.#limit) : limit
+      const Xhr = xhrConstructor()
+      if (pageMode && progress && body !== undefined && Xhr !== undefined) {
+        raw = await xhrBytes(Xhr, url, operation.method, headers, body, signal, answerLimit, progress,
+          head => { response = head }, moved, downloads === true)
+      } else {
+        const fetched = await abortable(fetcher(url, {
+          method: operation.method, headers, body, redirect: 'manual', credentials: pageMode ? 'same-origin' : 'omit', signal,
+        }), signal)
+        response = fetched
+        moved()
+        if (body !== undefined) progress?.(size, size)
+        raw = await readBytes(fetched, answerLimit(fetched), signal, moved,
+          downloads && fetched.ok ? progress : undefined)
+      }
+      if (!response) throw new Error('Registry request failed')
       signal.throwIfAborted()
       const media = mediaType(response.headers.get('content-type'))
+      if (pageMode && response.status === 401 && isSessionProblem(raw, media, response.headers, 'expired')) {
+        throw failure('refused', 'sign-in-expired', true)
+      }
+      if (pageMode && response.status === 503 && isSessionProblem(raw, media, response.headers, 'unavailable')) {
+        throw failure('unreachable', 'status', true)
+      }
       const variants = operation.responses[response.status]
       if (!variants) {
         stage = 'schema'
         const validate = operation.problemValidators?.[response.status] ?? operation.problemValidators?.default
         if (validate && (!operation.messaging || response.headers.get('content-type') === 'application/problem+json')) {
-          const candidate = parseProblem(raw, media)
+          let candidate: Record<string, unknown> | undefined
+          try {
+            candidate = parseProblem(raw, media)
+          } catch (error) {
+            if (!pageMode || response.status !== 401 || !(error instanceof UnsafeInteger)) throw error
+          }
           if (candidate && candidate.status === response.status && validate(candidate)
               && (!operation.messaging || matchesMessagingProblem(response.headers, candidate))
               && (!token || !containsCredential(candidate, token))) problem = candidate
         }
-        // In page mode the session part answers 401 when the sign-in has ended, and passes
-        // nothing on, so the outcome is known whatever the body says.
-        if (response.status === 401 && pageMode) throw failure('refused', 'sign-in-expired')
+        if (response.status === 401 && pageMode) throw failure('refused', 'configuration')
         const kind = response.status >= 500 || response.status === 0 ? 'unreachable'
           : response.status >= 400 && problem ? 'refused' : 'unexpected'
         throw failure(kind, response.status === 412 ? 'stale' : 'status')
@@ -482,6 +710,10 @@ export class Transport {
     } catch (error) {
       if (ownError && error === ownError) throw ownError
       if (stage === 'input' && error instanceof InputError) throw new TypeError(error.message)
+      if (error instanceof RedirectedAnswer) {
+        response = undefined
+        throw failure('unreachable', 'status')
+      }
       const reason = deadline.signal.aborted ? 'timeout' : callerSignal?.aborted ? 'aborted'
         : error instanceof AnswerTooLarge ? 'too-large' : error instanceof UnsafeInteger ? 'unsafe-integer' : stage
       const unreachable = ['network', 'timeout', 'aborted', 'token'].includes(reason) || (response?.status ?? 0) >= 500
@@ -524,7 +756,12 @@ export interface ListProfileRules {
   sortable: Record<string, Array<'asc' | 'desc'>>
   requiredFilters?: string[][]
 }
-export interface ListRules { accessProfileParameter: boolean; profiles: Record<string, ListProfileRules> }
+export interface ListRules {
+  accessProfileParameter: boolean
+  requiresAccessProfile?: boolean
+  profiles: Record<string, ListProfileRules>
+  recordProperties?: readonly string[]
+}
 export interface ListRequest extends CallOptions {
   accessProfile?: string
   where?: object
@@ -572,24 +809,27 @@ function predicate(property: string, value: unknown): [FilterOperator, string[]]
 /**
  * Builds a BReg list query from typed options and the operation's query profiles, and
  * refuses what the profile does not allow before anything is sent. A message names a
- * property or profile only when the profile declares it, never a filter value. With a
+ * property or profile only when the contract declares it, never a filter value. With a
  * cursor, the query is the access profile and the cursor, because the cursor carries the
  * rest.
  */
-export function listQuery(rules: ListRules, options: ListRequest, cursor?: string): Record<string, string | number | boolean> {
-  const chosen = options.accessProfile
+export function listQuery(rules: ListRules, options: ListRequest, cursor?: string, defaultProfile?: string): Record<string, string | number | boolean> {
+  const chosen = rules.accessProfileParameter && options.accessProfile === undefined
+    ? defaultProfile : options.accessProfile
   const names = Object.keys(rules.profiles)
   if (chosen !== undefined && !rules.accessProfileParameter) throw new TypeError('This list takes no access profile')
-  if (chosen === undefined && names.length !== 1) throw new TypeError('This list needs an access profile')
+  if (chosen === undefined && (rules.requiresAccessProfile || names.length !== 1)) throw new TypeError('This list needs an access profile')
   const name = chosen ?? names[0]!
   if (typeof name !== 'string' || !Object.hasOwn(rules.profiles, name)) throw new TypeError('Unknown access profile')
   const profile = rules.profiles[name]!
   const under = ' under profile `' + name + '`'
   const known = (property: unknown) => typeof property === 'string' && (Object.hasOwn(profile.filterable, property)
-    || Object.hasOwn(profile.sortable, property) || profile.selectable.includes(property))
+    || Object.hasOwn(profile.sortable, property) || profile.selectable.includes(property)
+    || rules.recordProperties?.includes(property))
   const label = (property: unknown) => known(property) ? '`' + String(property) + '`' : 'A property'
   const query: Record<string, string | number | boolean> = {}
   if (chosen !== undefined) query.accessProfile = chosen
+  if (cursor !== undefined) return { ...query, $skiptoken: cursor }
 
   const where = options.where ?? {}
   if (typeof where !== 'object' || where === null || Array.isArray(where)) throw new TypeError('`where` must be an object')
@@ -642,8 +882,7 @@ export function listQuery(rules: ListRules, options: ListRequest, cursor?: strin
     if (options.count && !profile.allowCount) throw new TypeError('Profile `' + name + '` does not allow count')
     query.$count = options.count
   }
-  if (cursor === undefined) return query
-  return chosen === undefined ? { $skiptoken: cursor } : { accessProfile: chosen, $skiptoken: cursor }
+  return query
 }
 
 export function listPage<T>(data: { items: T[]; pageInfo: { nextCursor?: string | null }; count?: number }): ListPage<T> {
@@ -717,19 +956,38 @@ export interface DescribeOptions {
    * Only these constants are shown for a refused guard.
    */
   guardLabels?: Readonly<Record<string, string>>
+  /** Replaces the sentence for a `client.` code the client raised itself, keyed by that code. */
+  clientSentences?: Readonly<Record<string, string>>
 }
+
+/**
+ * The sentence a person reads for each `client.` code the client raises itself. This is the one
+ * table a programme replaces with its own language, through `DescribeOptions.clientSentences`.
+ */
+export const clientSentences: Readonly<Record<string, string>> = {
+  'client.file-type': 'This kind of file is not accepted, so choose another file.',
+  'client.command-unavailable': 'This action is not available right now.',
+}
+export const clientFallbackSentence = 'The request could not be completed from this page.'
 
 const unreadable = 'The registry sent an answer that could not be read.'
 const notBuilt = 'The request could not be built from the given values.'
 
 /**
- * One fixed sentence a person can read, chosen by the failure's reason and status. It
- * never repeats text from the answer. For a refused guard it shows the label the caller
- * supplies for that guard's reason.
+ * One fixed sentence a person can read, chosen by the failure's reason and status, or by
+ * the `client.` code of an error the client raised itself. It never repeats text from an
+ * answer or from an error's `detail`, which stays on the error for developers. For a refused
+ * guard it shows the label the caller supplies for that guard's reason.
  */
 export function describeError(error: unknown, options: DescribeOptions = {}): string {
   if (!(error instanceof RegistryError)) {
     return error instanceof TypeError ? notBuilt : 'Something went wrong.'
+  }
+  if (error.raisedByClient && error.code?.startsWith('client.')) {
+    const replaced = options.clientSentences
+    const own = replaced && Object.hasOwn(replaced, error.code) ? replaced[error.code] : undefined
+    return typeof own === 'string' && own !== '' ? own
+      : Object.hasOwn(clientSentences, error.code) ? clientSentences[error.code]! : clientFallbackSentence
   }
   if (error.outcomeUnknown) return 'The change may or may not have been made, so check before trying again.'
   if (error.kind === 'refused' && error.code === 'action.guard_failed') {
@@ -739,6 +997,7 @@ export function describeError(error: unknown, options: DescribeOptions = {}): st
     return typeof label === 'string' && label !== '' ? label : 'The action is not possible in the current state.'
   }
   switch (error.reason) {
+    case 'configuration': return 'This service is not available from this page right now, so try again later.'
     case 'sign-in-expired': return 'Your sign-in has ended, so sign in again.'
     case 'stale': return 'The item changed since it was loaded, so reload it and try again.'
     case 'token': return 'Your credentials could not be obtained, so sign in again.'
@@ -748,6 +1007,7 @@ export function describeError(error: unknown, options: DescribeOptions = {}): st
     case 'network': return 'The registry did not answer, so check the connection and try again.'
   }
   const status = error.status
+  if (status === 401 && error.reason === 'too-large' && error.product) return unreadable
   if (status === undefined || status >= 200 && status < 300) return unreadable
   if (status >= 500) return 'The registry failed to complete the request, so try again later.'
   if (status === 401) return 'The registry refused your credentials, so sign in again.'

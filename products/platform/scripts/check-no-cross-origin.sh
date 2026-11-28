@@ -17,9 +17,19 @@ set -euo pipefail
 #     the header to mark a response cross-origin.
 #   * the `cors` feature in the Evidence manifest.
 #
+# The check route's allowed request headers are pinned to exactly
+# `Content-Type` and `Registry-Client`: `public_check_cors` must call
+# `allow_headers` once with that list, so a third header fails the check.
+#
+# The builder calls `allow_headers(`, `allow_origin(`, `allow_methods(`,
+# `expose_headers(` and `allow_private_network(` count as CORS tokens, so they
+# are allowed only inside `public_check_cors`, never at its call site. The
+# Evidence server must define exactly one `fn public_check_cors`.
+#
 # `Access-Control-Allow-Credentials`, in any letter case or as a header
 # constant or `allow_credentials` call, is refused everywhere, the allowed
-# sites included.
+# sites included. So are `permissive(` and `very_permissive(`, which turn
+# credentials or wildcard headers on without naming them.
 #
 # Test code is exempt: a file under a `tests` directory or named `tests.rs`
 # or `*_tests.rs`, and the remainder of a file after its first
@@ -77,9 +87,9 @@ source_scan='
     scope = current
     if ($0 ~ /^(pub(\([a-z]+\))?[[:space:]]+)?use[[:space:]]/) { scope = "use" }
     lower = tolower($0)
-    if (lower ~ /access-control-allow-credentials|access_control_allow_credentials|allow_credentials/) {
+    if (lower ~ /access-control-allow-credentials|access_control_allow_credentials|allow_credentials|permissive[[:space:]]*\(/) {
       print FILENAME ":" FNR ": " $0
-    } else if (lower ~ /corslayer|corspolicy|tower_http::cors|access-control-allow-origin|access_control_allow_origin/ && !allowed(scope)) {
+    } else if (lower ~ /corslayer|corspolicy|tower_http::cors|access-control-allow-origin|access_control_allow_origin|allow_headers[[:space:]]*\(|allow_origin[[:space:]]*\(|allow_methods[[:space:]]*\(|expose_headers[[:space:]]*\(|allow_private_network[[:space:]]*\(/ && !allowed(scope)) {
       print FILENAME ":" FNR ": " $0
     }
   }
@@ -125,6 +135,35 @@ done < <(
     [[ -f "$root/Cargo.toml" ]] && printf '%s\0' "$root/Cargo.toml"
   } | sort -z
 )
+
+# The exact allowed request headers of the public check route.
+evidence_server="$root/crates/registry-evidence/src/server.rs"
+expected_headers='CONTENT_TYPE,HeaderName::from_static("registry-client")'
+if [[ -f "$evidence_server" ]]; then
+  cors_body=$(awk '
+    /^[[:space:]]*(pub(\([a-z]+\))?[[:space:]]+)?fn[[:space:]]+public_check_cors[^A-Za-z0-9_]/ { inside = 1 }
+    inside { print }
+    inside && /^}/ { exit }
+  ' "$evidence_server" | tr -d '[:space:]')
+  allowed_headers=$(
+    printf '%s' "$cors_body" |
+      sed -n 's/.*\.allow_headers(\[\([^]]*\)\]).*/\1/p' |
+      sed 's/,$//'
+  )
+  header_calls=$(printf '%s' "${cors_body//allow_headers(/$'\n'}" | wc -l)
+  function_count=$(
+    grep -Ec '^[[:space:]]*(pub(\([a-z]+\))?[[:space:]]+)?(async[[:space:]]+)?(unsafe[[:space:]]+)?fn[[:space:]]+public_check_cors[^A-Za-z0-9_]' "$evidence_server" || true
+  )
+  if [[ "${function_count:-0}" != "1" ]]; then
+    printf '%s: must define exactly one fn public_check_cors\n' "$evidence_server"
+    findings=$((findings + 1))
+  fi
+  if [[ "${header_calls//[[:space:]]/}" != "1" ||
+    "$allowed_headers" != "$expected_headers" ]]; then
+    printf '%s: public_check_cors must allow exactly Content-Type and Registry-Client\n' "$evidence_server"
+    findings=$((findings + 1))
+  fi
+fi
 
 if [[ "$findings" -gt 0 ]]; then
   printf 'check-no-cross-origin: %d file(s) could answer a cross-origin request\n' "$findings" >&2

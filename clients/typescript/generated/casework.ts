@@ -10,7 +10,7 @@
 // Unconstrained JSON /components/schemas/ReviewTaskDraftInput/properties/body
 // Unconstrained JSON /components/schemas/RoutingPredicate/oneOf/0/properties/equals
 // Unconstrained JSON /components/schemas/RoutingPredicate/oneOf/1/properties/oneOf/items
-import { Transport, type Answer, type CallOptions, type ClientOptions, type JsonValue, type Operation, type Page, type RequestValues, type ResponseVariant, type WireBytes, type WireText } from "../core.ts"
+import { type Transport, type Answer, type CallOptions, type JsonValue, type Operation, type Page, type RequestValues, type ResponseVariant, type WireBytes, type WireText } from "../core.ts"
 import { validator } from "../schema.ts"
 
 export type Schema_AbsenceInput = ({ "cover": Schema_InputIssuerPrincipal; "from": (string); "person": Schema_InputIssuerPrincipal; "until": (string) })
@@ -1184,12 +1184,12 @@ for (const [id, definition] of Object.entries(definitions)) {
   for (const [status, variants] of Object.entries(definition.responses)) {
     responses[Number(status)] = variants.map(variant => ({ ...variant, validate: variant.rule === undefined ? undefined : validator(rules, rules[variant.rule]) }))
   }
-  routes[id] = { ...definition, responses, problemValidators: Object.fromEntries(Object.entries(definition.problems ?? {}).map(([status, rule]) => [status, validator(rules, rules[rule])])) }
+  routes[id] = { ...definition, product: "casework", responses, problemValidators: Object.fromEntries(Object.entries(definition.problems ?? {}).map(([status, rule]) => [status, validator(rules, rules[rule])])) }
 }
 
 export class Client {
   readonly #transport: Transport
-  constructor(options: ClientOptions) { this.#transport = new Transport(options) }
+  constructor(transport: Transport) { this.#transport = transport }
   async call<K extends keyof Operations>(operation: K, ...args: Operations[K]["required"] extends true ? [Operations[K]["input"]] : [Operations[K]["input"]?]): Promise<Answer<Operations[K]["output"]>> {
     return this.#call(operation, args[0])
   }
@@ -1234,10 +1234,4 @@ export class Client {
     const { data } = await this.call("listSupervisoryReviewTasks", { ...options, query: cursor === undefined ? options.query : { ...options.query, cursor } })
     return { items: data.items, nextCursor: data.nextCursor ?? null }
   }
-}
-
-// Every generated module exports this one factory name. The client it returns is typed to this
-// registry's operations.
-export function createRegistryClient(options: ClientOptions): Client {
-  return new Client(options)
 }

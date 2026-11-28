@@ -4,6 +4,11 @@
 
 - Start a local development run from the starter with `rstack dev start`.
 
+- A reservation may omit `custodian` when the caller is a person: the document is
+  held in that person's own custody, as if the body had named their own subject.
+  A service must still name the custodian and is refused `request.unprocessable`
+  without one. The OpenAPI `ReserveDocumentRequest` no longer requires
+  `custodian`.
 - BREAKING: Document Store hook deliveries use Standard Webhooks. Each POST
   carries `accept`, `content-type`, `webhook-id`, `webhook-timestamp` and
   `webhook-signature`. The signature covers `webhook-id`, the attempt

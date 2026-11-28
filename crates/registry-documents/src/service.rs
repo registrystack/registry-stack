@@ -1027,7 +1027,10 @@ impl DocumentService {
             admitted.policy,
             caller,
             CustodyAsk {
-                subject: request.custodian.subject.as_str(),
+                subject: request
+                    .custodian
+                    .as_ref()
+                    .map(|custodian| custodian.subject.as_str()),
                 issuing_institution: request.issuing_institution.as_ref().map(ExternalId::as_str),
             },
         )
